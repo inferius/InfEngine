@@ -12,11 +12,10 @@ use crate::world_save::players::{
 
 /// Build a `PlayerSave` from the live host pose + inventory.
 pub(in crate::world_save::runtime) fn build_player_save(voxel: &Voxel) -> PlayerSave {
-    let inventory: Vec<Option<(u16, u8)>> = voxel
-        .inventory
-        .iter()
-        .map(|s| s.map(|(b, c)| (b.0, c)))
-        .collect();
+    // W466: inventory slots persist as full `ItemStack`s (id +
+    // count + components) - a straight clone, no tuple projection.
+    let inventory: Vec<Option<crate::item::ItemStack>> =
+        voxel.inventory.to_vec();
     // The runtime craft grid is 2x2 (4 slots) but the save schema
     // budgets a 3x3 grid (9 slots) so Phase D's larger grid lands
     // without bumping the format. Pad the unused slots with `None`.
@@ -73,7 +72,9 @@ pub(in crate::world_save::runtime) fn apply_player_save(voxel: &mut Voxel, save:
         if i >= voxel.inventory.len() {
             break;
         }
-        voxel.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+        // W466: slots round-trip as full `ItemStack`s - damage +
+        // future components survive the save/load hop.
+        voxel.inventory[i] = slot.clone();
     }
     // Craft grid is 2x2 in the runtime, 3x3 in the save - only the
     // first 4 slots round-trip.

@@ -17,6 +17,8 @@
 
 use tempfile::TempDir;
 
+use crate::item::ItemStack;
+
 use super::players::{
     AIR_MAX_DEFAULT, CRAFT_GRID_SLOTS_DEFAULT, INVENTORY_SLOTS_DEFAULT, PLAYER_FORMAT_VERSION,
     PLAYER_MAGIC, fresh_player, list_players_in_dir, player_path_in_dir, read_player_in_dir,
@@ -64,11 +66,11 @@ fn player_roundtrip_populated_inventory() {
     save.last_dimension = "nether".to_string();
     // Stone in hotbar slot 0, dirt in 1, log in 2, plus two storage
     // stacks in row 1.
-    save.inventory[0] = Some((1, 64));
-    save.inventory[1] = Some((3, 32));
-    save.inventory[2] = Some((17, 64));
-    save.inventory[9] = Some((4, 12));
-    save.inventory[10] = Some((5, 7));
+    save.inventory[0] = Some(ItemStack::new(1, 64));
+    save.inventory[1] = Some(ItemStack::new(3, 32));
+    save.inventory[2] = Some(ItemStack::new(17, 64));
+    save.inventory[9] = Some(ItemStack::new(4, 12));
+    save.inventory[10] = Some(ItemStack::new(5, 7));
     // Craft grid: two cells filled (corner + centre).
     save.craft_grid[0] = Some((1, 1));
     save.craft_grid[4] = Some((3, 1));
@@ -79,9 +81,9 @@ fn player_roundtrip_populated_inventory() {
         .unwrap();
     assert_eq!(loaded, save);
     // Spot-check the inventory slots survived in order.
-    assert_eq!(loaded.inventory[0], Some((1, 64)));
-    assert_eq!(loaded.inventory[2], Some((17, 64)));
-    assert_eq!(loaded.inventory[9], Some((4, 12)));
+    assert_eq!(loaded.inventory[0], Some(ItemStack::new(1, 64)));
+    assert_eq!(loaded.inventory[2], Some(ItemStack::new(17, 64)));
+    assert_eq!(loaded.inventory[9], Some(ItemStack::new(4, 12)));
     assert_eq!(loaded.craft_grid[4], Some((3, 1)));
 }
 
@@ -196,7 +198,7 @@ fn player_compression_smaller_payload() {
     // Fill every slot with the same stack so the payload is highly
     // repetitive - guaranteed zstd win.
     for slot in save.inventory.iter_mut() {
-        *slot = Some((1, 64));
+        *slot = Some(ItemStack::new(1, 64));
     }
     for slot in save.craft_grid.iter_mut() {
         *slot = Some((1, 1));
@@ -291,8 +293,8 @@ fn write_player_is_atomic_no_tmp_left_behind() {
 
 #[test]
 fn player_format_version_matches_design_doc() {
-    // Lock the published schema number. Bumped to v4 in W416
-    // with the hunger pair (food + saturation) + a v3 -> v4
-    // migration arrow.
-    assert_eq!(PLAYER_FORMAT_VERSION, 4);
+    // Lock the published schema number. Bumped to v5 in W466
+    // with the ItemStack inventory slots (id + count + components)
+    // + a v4 -> v5 migration arrow.
+    assert_eq!(PLAYER_FORMAT_VERSION, 5);
 }

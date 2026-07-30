@@ -82,10 +82,9 @@ pub(crate) const OBSIDIAN_ID: u16 = 46;
 #[allow(dead_code)] // wired up in F.5+
 pub(crate) const PORTAL_ID: u16 = 47;
 /// Flint and steel: ignites a valid obsidian portal frame on
-/// RMB. Phase F. W5.2b adds 64-use durability tracked in
-/// `Voxel::item_durability` (parallel map keyed by inventory slot
-/// index; chosen over extending `Slot` so the save format stays
-/// unchanged - migrate-into-Slot is a deferred follow-up).
+/// RMB. Phase F. W5.2b added 64-use durability; W466 folded it
+/// into the inventory slot's `ItemStack.components.damage`
+/// (counting up from 0, break at `FLINT_AND_STEEL_MAX_USES`).
 pub(crate) const FLINT_AND_STEEL_ID: u16 = 48;
 /// W5.2b: max uses of a fresh flint+steel. Matches MC's 64-use
 /// budget; every ignition (portal frame OR fire block) decrements.

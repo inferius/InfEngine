@@ -145,7 +145,7 @@ pub(crate) fn apply_bucket_use(
             let coords = Voxel::affected_chunks(voxel);
             vx.rebuild_chunks(&coords);
             if !vx.abilities.instabuild {
-                vx.inventory[vx.selected_slot] = Some((BlockId(filled), 1));
+                vx.inventory[vx.selected_slot] = Some(crate::item::ItemStack::new(filled, 1));
             }
             let edit = EditMsg {
                 x: voxel[0],
@@ -193,7 +193,7 @@ pub(crate) fn apply_bucket_use(
             vx.rebuild_chunks(&coords);
             if !vx.abilities.instabuild {
                 vx.inventory[vx.selected_slot] =
-                    Some((BlockId(BUCKET_EMPTY_ID), 1));
+                    Some(crate::item::ItemStack::new(BUCKET_EMPTY_ID, 1));
             }
             let edit = EditMsg {
                 x: target_voxel[0],

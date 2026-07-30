@@ -40,9 +40,8 @@ pub(crate) fn apply_combat(
         let held = vx
             .inventory
             .get(vx.selected_slot)
-            .copied()
-            .unwrap_or(None)
-            .map(|(b, _)| b)
+            .and_then(|s| s.as_ref())
+            .map(|st| BlockId(st.id))
             .unwrap_or(BlockId::AIR);
         let mult = weapon_damage_mult(held);
         match &vx.net {
@@ -88,9 +87,8 @@ pub(crate) fn apply_combat(
             let held = vx
                 .inventory
                 .get(vx.selected_slot)
-                .copied()
-                .unwrap_or(None)
-                .map(|(b, _)| b)
+                .and_then(|s| s.as_ref())
+                .map(|st| BlockId(st.id))
                 .unwrap_or(BlockId::AIR);
             let mult = weapon_damage_mult(held);
             vx.damage_mob_scaled(mob_id, Some(0), mult);

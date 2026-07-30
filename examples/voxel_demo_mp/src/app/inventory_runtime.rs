@@ -5,53 +5,50 @@ use crate::lighting::HaloLighting;
 
 impl Voxel {
 
-    /// W5.2b: decrement the currently-held flint+steel's durability
-    /// after a successful ignition (portal frame OR fire block).
-    /// When the counter hits 0, empty the slot + drop the parallel
-    /// map entry so the next interaction sees no held tool.
+    /// W5.2b/W466: register one use of the currently-held
+    /// flint+steel after a successful ignition (portal frame OR
+    /// fire block). Damage counts UP on the stack's components;
+    /// when it reaches `FLINT_AND_STEEL_MAX_USES` the tool burns
+    /// out and the slot empties (same 64-use budget as before the
+    /// ItemStack fold - a fresh tool has damage 0).
     ///
     /// Idempotent across non-flint+steel held items - a Cobble in
     /// hand never triggered ignition in the first place, so the
-    /// fn only fires when the caller already verified `held.0 ==
+    /// fn only fires when the caller already verified `held.id ==
     /// FLINT_AND_STEEL_ID`.
     pub(crate) fn consume_flint_and_steel_use(&mut self) {
         let slot_idx = self.selected_slot;
-        let remaining = self
-            .item_durability
-            .get(&slot_idx)
-            .copied()
-            .unwrap_or(block::FLINT_AND_STEEL_MAX_USES);
-        let new = remaining.saturating_sub(1);
-        if new == 0 {
-            // Burn out: clear both slot + durability tracker.
+        let Some(stack) = self.inventory[slot_idx].as_mut() else {
+            return;
+        };
+        let damage = stack.components.damage.saturating_add(1);
+        if damage >= block::FLINT_AND_STEEL_MAX_USES {
+            // Burn out: clear the slot.
             self.inventory[slot_idx] = None;
-            self.item_durability.remove(&slot_idx);
         } else {
-            self.item_durability.insert(slot_idx, new);
+            stack.components.damage = damage;
         }
     }
 
-    /// W175: decrement the held tool's durability after a use (a
-    /// block mined / a mob hit). Inits to the tool's max on first use;
-    /// at 0 the tool breaks - the slot clears + the parallel tracker
-    /// entry drops. No-op when the held item isn't a tool (or is
-    /// unbreakable). Generalises `consume_flint_and_steel_use` to the
-    /// whole tool/weapon set via `item::tool_max_durability`.
+    /// W175/W466: register one use of the held tool (a block mined /
+    /// a mob hit). Damage counts UP from 0 on the stack's
+    /// components; at the tool's max the tool breaks and the slot
+    /// clears. No-op when the held item isn't a tool (or is
+    /// unbreakable). Generalises `consume_flint_and_steel_use` to
+    /// the whole tool/weapon set via `item::tool_max_durability`.
     pub(crate) fn consume_tool_durability(&mut self) {
         let slot_idx = self.selected_slot;
-        let Some((held, _)) = self.inventory[slot_idx] else {
+        let Some(stack) = self.inventory[slot_idx].as_mut() else {
             return;
         };
-        let Some(max) = crate::item::tool_max_durability(held.0) else {
+        let Some(max) = crate::item::tool_max_durability(stack.id) else {
             return;
         };
-        let remaining = self.item_durability.get(&slot_idx).copied().unwrap_or(max);
-        let new = remaining.saturating_sub(1);
-        if new == 0 {
+        let damage = stack.components.damage.saturating_add(1);
+        if damage >= max {
             self.inventory[slot_idx] = None;
-            self.item_durability.remove(&slot_idx);
         } else {
-            self.item_durability.insert(slot_idx, new);
+            stack.components.damage = damage;
         }
     }
 
@@ -90,21 +87,35 @@ impl Voxel {
         }
     }
 
-    /// Read the (BlockId, count) currently sitting in `kind`. The
-    /// crafting output is virtual: it's whatever recipe matches the
-    /// current 2x2 grid (or `None` if no match).
-    pub(crate) fn slot_read(&self, kind: SlotKind) -> Option<(BlockId, u8)> {
+    /// Read the stack currently sitting in `kind`. The crafting
+    /// output is virtual: it's whatever recipe matches the current
+    /// 2x2 grid (or `None` if no match).
+    ///
+    /// W466: inventory cells carry full `ItemStack`s; craft cells
+    /// are still `(BlockId, count)` tuples and lift with empty
+    /// components at this boundary.
+    pub(crate) fn slot_read(&self, kind: SlotKind) -> Option<crate::item::ItemStack> {
         match kind {
-            SlotKind::Inv(i) => self.inventory.get(i).copied().flatten(),
-            SlotKind::Craft(i) => self.craft_grid.get(i).copied().flatten(),
-            SlotKind::CraftOut => match_recipe(&self.craft_grid),
+            SlotKind::Inv(i) => self.inventory.get(i).cloned().flatten(),
+            SlotKind::Craft(i) => self
+                .craft_grid
+                .get(i)
+                .copied()
+                .flatten()
+                .map(|(b, c)| crate::item::ItemStack::new(b.0, c)),
+            SlotKind::CraftOut => match_recipe(&self.craft_grid)
+                .map(|(b, c)| crate::item::ItemStack::new(b.0, c)),
         }
     }
 
     /// Write `value` into `kind`. Never writes to `CraftOut`
     /// (that's a virtual cell - taking from it goes through
     /// `consume_craft` instead).
-    pub(crate) fn slot_write(&mut self, kind: SlotKind, value: Option<(BlockId, u8)>) {
+    ///
+    /// W466: craft cells stay tuples - components drop at that
+    /// boundary (matches the old parallel durability map, which
+    /// never tracked craft cells either).
+    pub(crate) fn slot_write(&mut self, kind: SlotKind, value: Option<crate::item::ItemStack>) {
         match kind {
             SlotKind::Inv(i) => {
                 if i < self.inventory.len() {
@@ -113,7 +124,7 @@ impl Voxel {
             }
             SlotKind::Craft(i) => {
                 if i < self.craft_grid.len() {
-                    self.craft_grid[i] = value;
+                    self.craft_grid[i] = value.map(|s| (BlockId(s.id), s.count));
                 }
             }
             SlotKind::CraftOut => {}
@@ -158,23 +169,11 @@ impl Voxel {
                 if matches!(to, SlotKind::Inv(0)) {
                     return;
                 }
-                // W5.2b: snapshot the durability values BEFORE the
-                // mutation so we can move them with the stacks.
-                // Drag is the only place a flint+steel slot can
-                // travel; record the from/to slot durabilities,
-                // then patch them after the mutation finishes.
-                let from_idx_dura = match from {
-                    SlotKind::Inv(i) => Some(i),
-                    _ => None,
-                };
-                let to_idx_dura = match to {
-                    SlotKind::Inv(i) => Some(i),
-                    _ => None,
-                };
-                let from_dura =
-                    from_idx_dura.and_then(|i| self.item_durability.get(&i).copied());
-                let to_dura =
-                    to_idx_dura.and_then(|i| self.item_durability.get(&i).copied());
+                // W466: stacks carry their components (damage,
+                // ...) with them, so a drag needs no parallel
+                // bookkeeping - moves, swaps and splits below all
+                // clone the source components; merges only fire
+                // when `same_stackable` says the components match.
                 let Some(from_stack) = self.slot_read(from) else {
                     return;
                 };
@@ -190,12 +189,15 @@ impl Voxel {
                             self.consume_craft();
                             self.slot_write(to, Some(from_stack));
                         }
-                        Some((tb, tc))
-                            if tb == from_stack.0
-                                && (tc as u16 + from_stack.1 as u16) <= STACK_MAX as u16 =>
+                        Some(ts)
+                            if ts.same_stackable(&from_stack)
+                                && (ts.count as u16 + from_stack.count as u16)
+                                    <= STACK_MAX as u16 =>
                         {
                             self.consume_craft();
-                            self.slot_write(to, Some((tb, tc + from_stack.1)));
+                            let mut merged = ts;
+                            merged.count += from_stack.count;
+                            self.slot_write(to, Some(merged));
                         }
                         _ => {}
                     }
@@ -205,129 +207,81 @@ impl Voxel {
                 // `All` falls through to the whole-stack swap path.
                 let take = match split {
                     SplitMode::All => 0u8,
-                    SplitMode::Half => (from_stack.1 as u16).div_ceil(2) as u8,
+                    SplitMode::Half => (from_stack.count as u16).div_ceil(2) as u8,
                     SplitMode::One => 1u8,
                 };
                 if take > 0 {
-                    let take = take.max(1).min(from_stack.1);
-                    let rem = from_stack.1 - take;
+                    let take = take.max(1).min(from_stack.count);
+                    let rem = from_stack.count - take;
                     match to_stack {
-                        Some((tb, tc)) if tb == from_stack.0 => {
-                            let merge = (STACK_MAX - tc).min(take);
-                            let new_to = tc + merge;
+                        Some(ts) if ts.same_stackable(&from_stack) => {
+                            let merge = (STACK_MAX - ts.count).min(take);
                             let leftover = take - merge;
-                            self.slot_write(to, Some((tb, new_to)));
+                            let mut merged = ts;
+                            merged.count += merge;
+                            self.slot_write(to, Some(merged));
                             // Any leftover from the take goes back
                             // into the source slot.
                             let back = rem + leftover;
                             self.slot_write(
                                 from,
-                                if back == 0 {
-                                    None
-                                } else {
-                                    Some((from_stack.0, back))
-                                },
+                                (back > 0).then(|| {
+                                    let mut s = from_stack.clone();
+                                    s.count = back;
+                                    s
+                                }),
                             );
                         }
                         None => {
-                            self.slot_write(to, Some((from_stack.0, take)));
+                            let mut moved = from_stack.clone();
+                            moved.count = take;
+                            self.slot_write(to, Some(moved));
                             self.slot_write(
                                 from,
-                                if rem == 0 {
-                                    None
-                                } else {
-                                    Some((from_stack.0, rem))
-                                },
+                                (rem > 0).then(|| {
+                                    let mut s = from_stack.clone();
+                                    s.count = rem;
+                                    s
+                                }),
                             );
                         }
                         Some(_) => {
-                            // Target occupied by a different block:
-                            // a split into an unrelated slot would
-                            // either swap (loses semantics) or
-                            // refuse. We refuse.
+                            // Target occupied by a different block
+                            // (or same id with different
+                            // components): a split into an
+                            // unrelated slot would either swap
+                            // (loses semantics) or refuse. We
+                            // refuse.
                         }
                     }
                     return;
                 }
                 // Standard whole-stack drag between two real slots.
                 match to_stack {
-                    Some((tb, tc)) if tb == from_stack.0 => {
-                        // Same block -> merge.
-                        let take = (STACK_MAX - tc).min(from_stack.1);
-                        let new_to = tc + take;
-                        let rem = from_stack.1 - take;
-                        self.slot_write(to, Some((tb, new_to)));
+                    Some(ts) if ts.same_stackable(&from_stack) => {
+                        // Same stack (id + components) -> merge.
+                        let take = (STACK_MAX - ts.count).min(from_stack.count);
+                        let rem = from_stack.count - take;
+                        let mut merged = ts;
+                        merged.count += take;
+                        self.slot_write(to, Some(merged));
                         self.slot_write(
                             from,
-                            if rem == 0 { None } else { Some((from_stack.0, rem)) },
+                            (rem > 0).then(|| {
+                                let mut s = from_stack.clone();
+                                s.count = rem;
+                                s
+                            }),
                         );
                     }
                     _ => {
-                        // Different blocks (or empty target) -> swap.
+                        // Different stacks (or empty target) ->
+                        // swap. Components travel with each stack.
                         self.slot_write(to, Some(from_stack));
                         self.slot_write(from, to_stack);
                     }
                 }
-                // W5.2b: post-mutation durability fixup. The slot
-                // contents above already moved; sync the parallel
-                // map so flint+steel keeps its remaining-uses count
-                // when the player drags it to a new slot.
-                self.reconcile_slot_durabilities(
-                    from_idx_dura,
-                    to_idx_dura,
-                    from_dura,
-                    to_dura,
-                );
             }
-        }
-    }
-
-    /// W5.2b: after a Drag mutation, walk the from/to slot pair and
-    /// re-anchor the durability map entries. The drag mutates the
-    /// slot contents but the parallel map needs a manual swap /
-    /// move to follow the stacks. This fn looks at the live
-    /// inventory state to decide which side now holds the
-    /// flint+steel and writes the captured durability back into
-    /// the correct slot.
-    pub(crate) fn reconcile_slot_durabilities(
-        &mut self,
-        from_idx: Option<usize>,
-        to_idx: Option<usize>,
-        from_dura: Option<u16>,
-        to_dura: Option<u16>,
-    ) {
-        // Drop both old entries; we'll restore from the captured
-        // values into whichever slot ended up holding the stack.
-        if let Some(i) = from_idx {
-            self.item_durability.remove(&i);
-        }
-        if let Some(i) = to_idx {
-            self.item_durability.remove(&i);
-        }
-        // Look at the new state. A flint+steel in `from_idx` after
-        // the drag means the previously-from stack stayed (or a
-        // swap brought another flint+steel back); use whichever
-        // captured durability matches the direction the data
-        // travelled.
-        if let Some(i) = from_idx
-            && let Some((bid, _)) = self.inventory[i]
-            && bid.0 == block::FLINT_AND_STEEL_ID
-        {
-            // After a swap the to_dura is now in the from slot.
-            // After a leftover-back-write the from_dura stayed.
-            // Pick the "to side carried back" value first when
-            // present (swap path); otherwise keep the from value.
-            let dura = to_dura.or(from_dura).unwrap_or(block::FLINT_AND_STEEL_MAX_USES);
-            self.item_durability.insert(i, dura);
-        }
-        if let Some(i) = to_idx
-            && let Some((bid, _)) = self.inventory[i]
-            && bid.0 == block::FLINT_AND_STEEL_ID
-        {
-            // The from stack just moved here; use the from_dura
-            // value.
-            let dura = from_dura.or(to_dura).unwrap_or(block::FLINT_AND_STEEL_MAX_USES);
-            self.item_durability.insert(i, dura);
         }
     }
 }

@@ -431,23 +431,19 @@ pub(crate) struct Voxel {
     /// row (visible at the bottom of the screen, scrollable via
     /// mouse wheel); indices `HOTBAR_SLOTS..INVENTORY_SLOTS` are
     /// the extra rows shown when the player opens the inventory
-    /// via `E`. Each slot holds an optional `(BlockId, count)` -
-    /// `count` saturates at `STACK_MAX`.
-    pub(crate) inventory: [Option<(BlockId, u8)>; INVENTORY_SLOTS],
-    /// W5.2b: per-slot durability map. Currently only flint+steel
-    /// (id 48) ever lands here; other items have infinite uses.
-    /// Keyed by inventory slot index. When a slot moves (drag&drop
-    /// in the UI), the inventory module's mutation path updates
-    /// the map via `move_durability_on_drag` so the value follows
-    /// the stack. Slots that empty clear their entry; fresh
-    /// pickups of flint+steel mint `FLINT_AND_STEEL_MAX_USES`.
+    /// via `E`. Each slot holds an optional `ItemStack` (id +
+    /// count + per-stack components); `count` saturates at
+    /// `STACK_MAX`.
     ///
-    /// Chosen over extending the slot's tuple to `(BlockId, u8,
-    /// Option<u16>)` to keep the on-disk player save format
-    /// unchanged for Wave 5; a later commit can fold this into
-    /// the slot tuple once the durability concept stabilises and
-    /// applies to more items (axes, swords, etc).
-    pub(crate) item_durability: HashMap<usize, u16>,
+    /// W466: the former W5.2b parallel `item_durability` map is
+    /// folded into `ItemStack.components.damage` (counting UP
+    /// from 0), so wear travels with the stack through drags and
+    /// the player save with no side bookkeeping. Everything
+    /// outside this inventory core (containers, drops, net
+    /// messages) still moves `(u16, u8)` tuples until W467/W468 -
+    /// components drop at those boundaries exactly like the old
+    /// map did.
+    pub(crate) inventory: [Option<crate::item::ItemStack>; INVENTORY_SLOTS],
     pub(crate) selected_slot: usize,
     /// True when the inventory overlay is up. Pauses player input
     /// + shows the cursor.

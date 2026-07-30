@@ -72,7 +72,7 @@ impl Voxel {
         self.world_set_tracked(scoop_voxel, BlockId::AIR);
         let coords = Self::affected_chunks(scoop_voxel);
         self.rebuild_chunks(&coords);
-        self.inventory[self.selected_slot] = Some((BlockId(filled), 1));
+        self.inventory[self.selected_slot] = Some(crate::item::ItemStack::new(filled, 1));
         let edit = EditMsg {
             x: scoop_voxel[0],
             y: scoop_voxel[1],
@@ -117,27 +117,27 @@ impl Voxel {
         if block == BlockId::AIR {
             return;
         }
-        // First pass: top up an existing stack.
+        // First pass: top up an existing stack. W466: only plain
+        // (default-component) stacks accept the merge - a fresh
+        // pickup must not inherit a worn tool's damage.
         for slot in self.inventory.iter_mut() {
-            if let Some((b, count)) = slot.as_mut()
-                && *b == block
-                && *count < STACK_MAX
+            if let Some(st) = slot.as_mut()
+                && st.id == block.0
+                && st.components.is_empty()
+                && st.count < STACK_MAX
             {
-                *count += 1;
+                st.count += 1;
                 self.note_pickup(block);
                 return;
             }
         }
         // Second pass: claim an empty slot. Prefer hotbar first so
         // freshly mined blocks become hot-keyable immediately.
-        for (idx, slot) in self.inventory.iter_mut().enumerate() {
+        // W466: a fresh stack has damage 0 = full durability, so
+        // the old MAX_USES durability mint is implicit now.
+        for slot in self.inventory.iter_mut() {
             if slot.is_none() {
-                *slot = Some((block, 1));
-                // W5.2b: fresh flint+steel gets MAX_USES durability.
-                if block.0 == block::FLINT_AND_STEEL_ID {
-                    self.item_durability
-                        .insert(idx, block::FLINT_AND_STEEL_MAX_USES);
-                }
+                *slot = Some(crate::item::ItemStack::new(block.0, 1));
                 self.note_pickup(block);
                 return;
             }

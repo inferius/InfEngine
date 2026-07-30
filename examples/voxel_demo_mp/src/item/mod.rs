@@ -27,6 +27,13 @@
 pub(crate) mod icons;
 pub(crate) mod stack;
 
+// W466: the ItemStack model - re-exported so callers can say
+// `crate::item::ItemStack` without spelling the submodule.
+// `ItemComponents` only has test-side consumers until the W467
+// container hop, hence the targeted allow.
+#[allow(unused_imports)]
+pub(crate) use stack::{ItemComponents, ItemStack};
+
 #[cfg(test)]
 mod item_tests;
 

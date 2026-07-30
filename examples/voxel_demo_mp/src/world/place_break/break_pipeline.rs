@@ -280,9 +280,8 @@ pub(crate) fn apply_block_break(
         let held = vx
             .inventory
             .get(vx.selected_slot)
-            .copied()
-            .unwrap_or(None)
-            .map(|(b, _)| b)
+            .and_then(|s| s.as_ref())
+            .map(|st| BlockId(st.id))
             .unwrap_or(BlockId::AIR);
         let tier = tool_tier(held);
         let needed = block_required_tier(broken);
@@ -540,10 +539,10 @@ pub(crate) fn apply_bonemeal(vx: &mut crate::Voxel, voxel: [i32; 3]) {
         return;
     }
     if !vx.abilities.instabuild
-        && let Some((_, count)) = vx.inventory[vx.selected_slot].as_mut()
+        && let Some(st) = vx.inventory[vx.selected_slot].as_mut()
     {
-        *count = count.saturating_sub(1);
-        if *count == 0 {
+        st.count = st.count.saturating_sub(1);
+        if st.count == 0 {
             vx.inventory[vx.selected_slot] = None;
         }
     }

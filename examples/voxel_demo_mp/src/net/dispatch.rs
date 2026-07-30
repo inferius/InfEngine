@@ -682,12 +682,18 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
             // do. Counts blocks by id; any positive delta becomes
             // a `+N` toast.
             let mut pre: HashMap<u16, u32> = HashMap::new();
-            for (b, c) in vx.inventory.iter().flatten() {
-                *pre.entry(b.0).or_insert(0) += *c as u32;
+            for st in vx.inventory.iter().flatten() {
+                *pre.entry(st.id).or_insert(0) += st.count as u32;
             }
             for (i, s) in snap.inventory.iter().enumerate() {
                 if i < vx.inventory.len() {
-                    vx.inventory[i] = s.map(|(b, c)| (BlockId(b), c));
+                    // W466: the wire snapshot is tuple-shaped; a
+                    // same-id write keeps the local stack's
+                    // components (damage) intact.
+                    crate::item::stack::write_tuple_preserving(
+                        &mut vx.inventory[i],
+                        *s,
+                    );
                 }
             }
             for (i, s) in snap.craft.iter().enumerate() {
@@ -696,8 +702,8 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                 }
             }
             let mut post: HashMap<u16, u32> = HashMap::new();
-            for (b, c) in vx.inventory.iter().flatten() {
-                *post.entry(b.0).or_insert(0) += *c as u32;
+            for st in vx.inventory.iter().flatten() {
+                *post.entry(st.id).or_insert(0) += st.count as u32;
             }
             for (id, after) in post {
                 let before = pre.get(&id).copied().unwrap_or(0);

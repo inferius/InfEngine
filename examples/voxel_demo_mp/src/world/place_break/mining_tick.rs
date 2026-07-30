@@ -42,9 +42,8 @@ pub(crate) fn tick_mining(vx: &mut crate::Voxel, lmb_active: bool, dt: f32) -> O
                     let held = vx
                         .inventory
                         .get(vx.selected_slot)
-                        .copied()
-                        .unwrap_or(None)
-                        .map(|(b, _)| b)
+                        .and_then(|s| s.as_ref())
+                        .map(|st| BlockId(st.id))
                         .unwrap_or(BlockId::AIR);
                     let (mut mult, _drop_ok) = tool_effectiveness(held, block);
                     if let Some(l) = submerged_liquid_eye(&vx.world, vx.player_pos) {

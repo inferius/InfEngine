@@ -134,8 +134,8 @@ impl Voxel {
                 // 1..8 hold the four wood tools + four basic block
                 // bundles so the player can immediately mine across
                 // every category without crafting first.
-                let mut inv: [Option<(BlockId, u8)>; INVENTORY_SLOTS] =
-                    [None; INVENTORY_SLOTS];
+                let mut inv: [Option<crate::item::ItemStack>; INVENTORY_SLOTS] =
+                    std::array::from_fn(|_| None);
                 let seed: &[(u16, u8)] = &[
                     (16, 1), // wood pickaxe
                     (23, 1), // wood sword
@@ -149,14 +149,11 @@ impl Voxel {
                 for (i, (bid, count)) in seed.iter().enumerate() {
                     let slot = i + 1;
                     if slot < HOTBAR_SLOTS {
-                        inv[slot] = Some((BlockId(*bid), *count));
+                        inv[slot] = Some(crate::item::ItemStack::new(*bid, *count));
                     }
                 }
                 inv
             },
-            // W5.2b: starter inventory has no flint+steel; map
-            // stays empty until the first pickup / give of id 48.
-            item_durability: HashMap::new(),
             selected_slot: 0,
             inventory_open: false,
             mp_menu_open: false,

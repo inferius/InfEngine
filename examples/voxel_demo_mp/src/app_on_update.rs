@@ -355,16 +355,20 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && !vx.inventory_open
             && !egui_kb
             && vx.selected_slot < HOTBAR_SLOTS
-            && let Some((b, c)) = vx.inventory[vx.selected_slot]
+            && let Some(held) = vx.inventory[vx.selected_slot].clone()
         {
+            let b = BlockId(held.id);
             // Ctrl held = drop the entire stack at once.
             let drop_all = ctx.input.is_pressed(Key::ControlLeft)
                 || ctx.input.is_pressed(Key::ControlRight);
-            let new_count = if drop_all { 0 } else { c.saturating_sub(1) };
+            let new_count =
+                if drop_all { 0 } else { held.count.saturating_sub(1) };
             vx.inventory[vx.selected_slot] = if new_count == 0 {
                 None
             } else {
-                Some((b, new_count))
+                let mut kept = held;
+                kept.count = new_count;
+                Some(kept)
             };
             // Small puff at the player's feet so the drop is
             // visible; mirrors the break-particle texture so
@@ -562,9 +566,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // f = t; f = (f^2 + 2f) / 3, capped at 1; full charge flies
         // at 60 m/s (3 blocks/tick).
         let held_bow = vx.inventory[vx.selected_slot]
-            .is_some_and(|(b, _)| b.0 == crate::item::BOW_ID);
+            .as_ref()
+            .is_some_and(|st| st.id == crate::item::BOW_ID);
         let has_arrow = vx.inventory.iter().any(
-            |s| matches!(s, Some((b, _)) if b.0 == crate::item::ARROW_ID),
+            |s| matches!(s, Some(st) if st.id == crate::item::ARROW_ID),
         );
         let bow_ctx_ok = matches!(vx.state, AppState::Playing)
             && !vx.inventory_open
@@ -582,11 +587,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             let f = ((t * t + 2.0 * t) / 3.0).min(1.0);
             if held_bow && bow_ctx_ok && f >= 0.1 && has_arrow {
                 for slot in vx.inventory.iter_mut() {
-                    if let Some((b, c)) = slot.as_mut()
-                        && b.0 == crate::item::ARROW_ID
+                    if let Some(st) = slot.as_mut()
+                        && st.id == crate::item::ARROW_ID
                     {
-                        *c = c.saturating_sub(1);
-                        if *c == 0 {
+                        st.count = st.count.saturating_sub(1);
+                        if st.count == 0 {
                             *slot = None;
                         }
                         break;
@@ -613,7 +618,8 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // W415: eat the HELD item when it's food (MC use-item), and
         // only while hungry - the golden apple is canAlwaysEat.
         let held_food = vx.inventory[vx.selected_slot]
-            .map(|(b, _)| b.0)
+            .as_ref()
+            .map(|st| st.id)
             .filter(|id| crate::item::food_props(*id).is_some());
         if f_just
             && eat_ctx_ok
@@ -641,11 +647,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                     // mid-chew (drop, MP take) - then nothing happens.
                     let mut ate = false;
                     for slot in vx.inventory.iter_mut() {
-                        if let Some((b, c)) = slot.as_mut()
-                            && *b == BlockId(food)
+                        if let Some(st) = slot.as_mut()
+                            && st.id == food
                         {
-                            *c = c.saturating_sub(1);
-                            if *c == 0 {
+                            st.count = st.count.saturating_sub(1);
+                            if st.count == 0 {
                                 *slot = None;
                             }
                             ate = true;
@@ -865,13 +871,13 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // which also serves as the take-it-off path until the
         // inventory-panel armor slots land.
         if vx.rmb_pending
-            && let Some((b, c)) = vx.inventory[vx.selected_slot]
-            && let Some((slot, _, _)) = crate::item::armor_props(b.0)
+            && let Some(held) = vx.inventory[vx.selected_slot].clone()
+            && let Some((slot, _, _)) = crate::item::armor_props(held.id)
         {
             let prev = vx.armor_slots[slot].take();
-            vx.armor_slots[slot] = Some((b.0, c));
+            vx.armor_slots[slot] = Some((held.id, held.count));
             vx.inventory[vx.selected_slot] =
-                prev.map(|(id, n)| (BlockId(id), n));
+                prev.map(|(id, n)| crate::item::ItemStack::new(id, n));
             vx.rmb_pending = false;
             let p = [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z];
             vx.sfx_at("armor/equip", p, |_, _| {});
@@ -886,7 +892,9 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // true again (idempotent).
         // The currently-held block: contents of the selected hotbar
         // slot. `None` = empty hand (or 0-count remnant).
-        let selected_block = vx.inventory[vx.selected_slot].map(|(b, _)| b);
+        let selected_block = vx.inventory[vx.selected_slot]
+            .as_ref()
+            .map(|st| BlockId(st.id));
         // Net mode flag: clients defer block edits to the server +
         // wait for the server echo before applying. Offline + server
         // apply locally as before.
@@ -1038,11 +1046,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             fed = crate::mob::breed::try_feed(vx, mob_id, held);
             if fed {
                 if !vx.abilities.instabuild
-                    && let Some((_, count)) =
+                    && let Some(st) =
                         vx.inventory[vx.selected_slot].as_mut()
                 {
-                    *count = count.saturating_sub(1);
-                    if *count == 0 {
+                    st.count = st.count.saturating_sub(1);
+                    if st.count == 0 {
                         vx.inventory[vx.selected_slot] = None;
                     }
                 }
@@ -1315,11 +1323,11 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                     ];
                     crate::mob::spawn::spawn_from_egg(vx, kind, p);
                     if !vx.abilities.instabuild
-                        && let Some((_, count)) =
+                        && let Some(st) =
                             vx.inventory[vx.selected_slot].as_mut()
                     {
-                        *count = count.saturating_sub(1);
-                        if *count == 0 {
+                        st.count = st.count.saturating_sub(1);
+                        if st.count == 0 {
                             vx.inventory[vx.selected_slot] = None;
                         }
                     }
@@ -2460,7 +2468,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // camera modes), then draw the item only in first-person view
         // (MC hides the hand in third person). Reads the live camera so
         // the item rides with pitch + head-bob.
-        if let Some((held, _)) = vx.inventory[vx.selected_slot] {
+        if let Some(held) = vx.inventory[vx.selected_slot]
+            .as_ref()
+            .map(|st| BlockId(st.id))
+        {
             // W176: don't swing the hand when a UI panel is open - a
             // click in the inventory / chest / crafting grid is not an
             // attack. (The mouse buttons are still "held" while the

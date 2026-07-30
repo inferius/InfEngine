@@ -1,16 +1,124 @@
-//! Stack-arithmetic helpers typed against `(item_id, count)`.
+//! Stack types + stack-arithmetic helpers.
 //!
-//! These are the per-item-aware equivalents of the existing
-//! `inventory::inv_pickup` / `inv_consume` helpers, which assume a
-//! flat `STACK_MAX = 64` and ignore item-specific limits. The new
-//! module respects each item's `max_stack` so tools (max_stack=1)
-//! can't accidentally merge into a 64-deep pile.
+//! W466 adds the MC-style `ItemStack` model: `id + count +
+//! components` where `components` carries per-stack state (damage,
+//! future enchants / custom names). The player inventory holds
+//! `Option<ItemStack>` slots; everything outside the inventory core
+//! (containers, drops, net messages, trades) still moves plain
+//! `(u16, u8)` tuples in W466 and converts at the boundary via
+//! `from_tuple` / `as_tuple` - the W467/W468 waves push the stack
+//! type outward.
 //!
-//! C.2 / C.3 will migrate `inventory.rs` + the chest UI onto these.
-//! For now they live alongside the legacy helpers without replacing
-//! them: nothing in the existing code path calls in here yet.
+//! The tuple-typed arithmetic helpers below (`merge_into`,
+//! `split_half`, `take_n`, `drop_into_first_free`) predate the
+//! stack type and still serve the container/chest code, which is
+//! tuple-shaped until W467.
+
+use serde::{Deserialize, Serialize};
 
 use super::item_max_stack;
+
+/// Per-stack component data - the MC `DataComponents` subset this
+/// engine tracks. A default (all-empty) value means "plain stack";
+/// stacks merge only when their components match exactly.
+///
+/// Serialized inside `ItemStack` in the player save (bincode,
+/// positional - new fields need a format bump + migration arrow).
+/// The `#[serde(default)]` attributes only help JSON-shaped
+/// consumers; they do NOT make bincode forward-compatible.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub(crate) struct ItemComponents {
+    /// Wear counter, counting UP from 0 (MC `damage` component).
+    /// The item breaks when damage reaches the item's max uses
+    /// (`FLINT_AND_STEEL_MAX_USES` / `tool_max_durability`).
+    #[serde(default)]
+    pub damage: u16,
+    /// `(enchant_id, level)` pairs (MC `enchantments`). Unused
+    /// until the enchanting wave lands; part of the schema now so
+    /// the player-save format doesn't need another bump for it.
+    #[serde(default)]
+    pub enchants: Vec<(u8, u8)>,
+    /// Custom display name (MC `custom_name`). Unused until an
+    /// anvil-style rename lands.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+impl ItemComponents {
+    /// True when every component is at its default - the stack
+    /// behaves like a plain `(id, count)` tuple.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.damage == 0 && self.enchants.is_empty() && self.name.is_none()
+    }
+}
+
+/// One inventory stack: item id + count + per-stack components.
+/// The W466 replacement for the `(BlockId, u8)` slot tuple.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub(crate) struct ItemStack {
+    /// Item id (the shared block/item id space; `BlockId.0`).
+    pub id: u16,
+    /// Stack count. Saturates at the item's max stack.
+    pub count: u8,
+    /// Per-stack component data (damage, enchants, name).
+    pub components: ItemComponents,
+}
+
+impl ItemStack {
+    /// Fresh stack with default (empty) components.
+    pub(crate) fn new(id: u16, count: u8) -> Self {
+        Self {
+            id,
+            count,
+            components: ItemComponents::default(),
+        }
+    }
+
+    /// Lift a plain `(id, count)` tuple into a stack with empty
+    /// components. The W466 boundary conversion for containers /
+    /// drops / net messages that still move tuples.
+    pub(crate) fn from_tuple((id, count): (u16, u8)) -> Self {
+        Self::new(id, count)
+    }
+
+    /// Project the stack down to a plain `(id, count)` tuple -
+    /// drops the components. The other half of the W466 boundary.
+    pub(crate) fn as_tuple(&self) -> (u16, u8) {
+        (self.id, self.count)
+    }
+
+    /// True when `other` can merge into this stack: equal id AND
+    /// equal components. MC stacks only combine when their
+    /// component data matches exactly - a worn tool never merges
+    /// into a fresh one.
+    pub(crate) fn same_stackable(&self, other: &ItemStack) -> bool {
+        self.id == other.id && self.components == other.components
+    }
+}
+
+/// Write a plain `(id, count)` tuple back into a stack slot,
+/// PRESERVING the slot's existing components when the id is
+/// unchanged. The W466 snapshot write-back rule: UI panels + net
+/// snapshots move tuples, so a count-only change (take 3 cobble)
+/// must not strip the damage off an untouched tool sitting in the
+/// same slot. When the id changed or the slot emptied, the tuple
+/// wins wholesale (fresh components).
+pub(crate) fn write_tuple_preserving(
+    slot: &mut Option<ItemStack>,
+    tuple: Option<(u16, u8)>,
+) {
+    match (slot.as_mut(), tuple) {
+        (Some(st), Some((id, count))) if st.id == id => {
+            st.count = count;
+        }
+        (_, Some((id, count))) => {
+            *slot = Some(ItemStack::new(id, count));
+        }
+        (_, None) => {
+            *slot = None;
+        }
+    }
+}
 
 /// Merge `incoming` into `slot` up to the destination item's
 /// `max_stack`. Returns the leftover count that couldn't fit (0 when
@@ -148,6 +256,76 @@ pub(crate) fn drop_into_first_free(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn components_default_is_empty() {
+        let c = ItemComponents::default();
+        assert!(c.is_empty());
+        let worn = ItemComponents {
+            damage: 3,
+            ..Default::default()
+        };
+        assert!(!worn.is_empty());
+        let named = ItemComponents {
+            name: Some("Excalibur".to_string()),
+            ..Default::default()
+        };
+        assert!(!named.is_empty());
+    }
+
+    #[test]
+    fn from_tuple_as_tuple_round_trip() {
+        let st = ItemStack::from_tuple((48, 3));
+        assert_eq!(st.id, 48);
+        assert_eq!(st.count, 3);
+        assert!(st.components.is_empty());
+        assert_eq!(st.as_tuple(), (48, 3));
+        // `new` and `from_tuple` agree.
+        assert_eq!(st, ItemStack::new(48, 3));
+    }
+
+    #[test]
+    fn same_stackable_requires_equal_components() {
+        let plain_a = ItemStack::new(7, 10);
+        let plain_b = ItemStack::new(7, 32);
+        // Same id + both default components -> mergeable
+        // regardless of count.
+        assert!(plain_a.same_stackable(&plain_b));
+        // Different id -> never.
+        assert!(!plain_a.same_stackable(&ItemStack::new(8, 10)));
+        // Same id, one worn -> not mergeable.
+        let mut worn = ItemStack::new(7, 1);
+        worn.components.damage = 5;
+        assert!(!plain_a.same_stackable(&worn));
+        // Two stacks worn by the SAME amount -> mergeable.
+        let mut worn_b = ItemStack::new(7, 1);
+        worn_b.components.damage = 5;
+        assert!(worn.same_stackable(&worn_b));
+    }
+
+    #[test]
+    fn write_tuple_preserving_keeps_components_on_same_id() {
+        let mut slot = Some(ItemStack {
+            id: 48,
+            count: 1,
+            components: ItemComponents {
+                damage: 20,
+                ..Default::default()
+            },
+        });
+        // Count-only change keeps the damage.
+        write_tuple_preserving(&mut slot, Some((48, 1)));
+        assert_eq!(slot.as_ref().unwrap().components.damage, 20);
+        // Id change replaces wholesale (fresh components).
+        write_tuple_preserving(&mut slot, Some((7, 12)));
+        assert_eq!(slot, Some(ItemStack::new(7, 12)));
+        // None clears.
+        write_tuple_preserving(&mut slot, None);
+        assert!(slot.is_none());
+        // Writing into an empty slot mints a fresh stack.
+        write_tuple_preserving(&mut slot, Some((3, 4)));
+        assert_eq!(slot, Some(ItemStack::new(3, 4)));
+    }
 
     #[test]
     fn merge_into_zero_incoming_is_noop() {

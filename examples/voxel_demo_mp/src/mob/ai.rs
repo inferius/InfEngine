@@ -445,8 +445,8 @@ fn step_one(
                 m.strolling = true;
                 m.retarget_at = (day_time + 1.0).rem_euclid(DAY_LENGTH_S);
             }
-        } else if let Some((b, _)) = voxel.inventory[voxel.selected_slot]
-            && super::breed::is_food_for(m.kind, b.0)
+        } else if let Some(held) = voxel.inventory[voxel.selected_slot].as_ref()
+            && super::breed::is_food_for(m.kind, held.id)
         {
             // TemptGoal: follow the player holding this species'
             // food within 10 blocks, stopping at 2.5 (MC

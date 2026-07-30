@@ -38,7 +38,7 @@ pub(crate) fn cmd_resetinventory(
         let slot = i + 1;
         if slot < HOTBAR_SLOTS {
             voxel.inventory[slot] =
-                Some((BlockId(*bid), *count));
+                Some(crate::item::ItemStack::new(*bid, *count));
         }
     }
     for s in voxel.craft_grid.iter_mut() {
@@ -163,13 +163,13 @@ pub(crate) fn cmd_give(
             let before = voxel
                 .inventory
                 .iter()
-                .filter_map(|s| s.map(|(_, c)| c as u32))
+                .filter_map(|s| s.as_ref().map(|st| st.count as u32))
                 .sum::<u32>();
             voxel.pickup(bid);
             let after = voxel
                 .inventory
                 .iter()
-                .filter_map(|s| s.map(|(_, c)| c as u32))
+                .filter_map(|s| s.as_ref().map(|st| st.count as u32))
                 .sum::<u32>();
             if after <= before {
                 // Inventory was

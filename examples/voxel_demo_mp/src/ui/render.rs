@@ -51,9 +51,8 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let held_tool_label: Option<&'static str> = vx
             .inventory
             .get(vx.selected_slot)
-            .copied()
-            .unwrap_or(None)
-            .and_then(|(b, _)| tool_label(b));
+            .and_then(|s| s.as_ref())
+            .and_then(|st| tool_label(BlockId(st.id)));
         let weather_label: Option<&'static str> = match vx.weather {
             1 => Some("Rain"),
             2 => Some("Snow"),
@@ -143,9 +142,8 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let held_for_label = vx
             .inventory
             .get(vx.selected_slot)
-            .copied()
-            .unwrap_or(None)
-            .map(|(b, _)| b)
+            .and_then(|s| s.as_ref())
+            .map(|st| BlockId(st.id))
             .unwrap_or(BlockId::AIR);
         let targeted_block_info: Option<(String, Option<u8>)> =
             vx.target.and_then(|hit| {
@@ -561,19 +559,34 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let hotbar_snapshot: Vec<Option<SlotIcon>> = vx.inventory
             [..HOTBAR_SLOTS]
             .iter()
-            .map(|s| icon(*s))
+            .map(|s| icon(s.as_ref().map(|st| (BlockId(st.id), st.count))))
             .collect();
-        // W5.2b: per-slot durability snapshot for the slot widgets.
-        // Cloned out of `item_durability` so the egui closure can
-        // borrow it alongside the mutable `&mut vx.inventory`
-        // capture without colliding.
-        let item_durability_snapshot: HashMap<usize, u16> =
-            vx.item_durability.clone();
+        // W5.2b/W466: per-slot durability snapshot for the slot
+        // widgets, computed from each stack's components.damage
+        // (damage counts UP; the widget wants remaining/max).
+        // Snapshotted so the egui closure can borrow it alongside
+        // the mutable `&mut vx.inventory` capture without
+        // colliding. Slots with damage 0 report None - the bar
+        // stays hidden for untouched tools, as before.
+        let item_durability_snapshot: Vec<Option<(u16, u16)>> = vx
+            .inventory
+            .iter()
+            .map(|s| {
+                s.as_ref().and_then(|st| {
+                    if st.components.damage == 0 {
+                        return None;
+                    }
+                    let max = if st.id == block::FLINT_AND_STEEL_ID {
+                        block::FLINT_AND_STEEL_MAX_USES
+                    } else {
+                        crate::item::tool_max_durability(st.id)?
+                    };
+                    Some((max.saturating_sub(st.components.damage), max))
+                })
+            })
+            .collect();
         let durability_for_slot = |idx: usize| -> Option<(u16, u16)> {
-            item_durability_snapshot
-                .get(&idx)
-                .copied()
-                .map(|cur| (cur, block::FLINT_AND_STEEL_MAX_USES))
+            item_durability_snapshot.get(idx).copied().flatten()
         };
         let inventory_open = vx.inventory_open;
         let mut inv_open_local = vx.inventory_open;
@@ -734,7 +747,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let mut inv_plain_snapshot: Vec<Option<(u16, u8)>> = vx
             .inventory
             .iter()
-            .map(|s| s.map(|(b, c)| (b.0, c)))
+            .map(|s| s.as_ref().map(|st| st.as_tuple()))
             .collect();
         let mp_role_label: Option<&'static str> = match &vx.net {
             NetRole::Offline => None,
@@ -744,7 +757,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let inventory_snapshot: Vec<Option<SlotIcon>> = if inventory_open {
             vx.inventory[HOTBAR_SLOTS..]
                 .iter()
-                .map(|s| icon(*s))
+                .map(|s| icon(s.as_ref().map(|st| (BlockId(st.id), st.count))))
                 .collect()
         } else {
             Vec::new()
@@ -3518,8 +3531,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             // Slice off the first 9 inventory entries as the
             // hotbar view + run the deposit policy on it.
             let mut hotbar_view: [Option<(BlockId, u8)>; HOTBAR_SLOTS] =
-                [None; HOTBAR_SLOTS];
-            hotbar_view.copy_from_slice(&vx.inventory[..HOTBAR_SLOTS]);
+                std::array::from_fn(|i| {
+                    vx.inventory[i]
+                        .as_ref()
+                        .map(|st| (BlockId(st.id), st.count))
+                });
             let sel = vx.selected_slot.min(HOTBAR_SLOTS - 1);
             for pick in creative_picks {
                 let (block, max_stack) = pick;
@@ -3539,8 +3555,13 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     hotbar_view[sel] = Some((block, max_stack));
                 }
             }
-            vx.inventory[..HOTBAR_SLOTS]
-                .copy_from_slice(&hotbar_view[..HOTBAR_SLOTS]);
+            for (i, slot) in hotbar_view.iter().enumerate() {
+                // W466: same-id writes keep the slot's components.
+                crate::item::stack::write_tuple_preserving(
+                    &mut vx.inventory[i],
+                    slot.map(|(b, c)| (b.0, c)),
+                );
+            }
         }
         // Chest UI close-button reflected back. If the egui window
         // was closed via its X handle, drop the chest_open + held
@@ -3612,7 +3633,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 if i >= vx.inventory.len() {
                     break;
                 }
-                vx.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                crate::item::stack::write_tuple_preserving(
+                    &mut vx.inventory[i],
+                    *slot,
+                );
             }
             // 4. Close-via-X: route through close_crafting_table_ui
             //    so the grid + held stack get returned to the inv
@@ -3657,7 +3681,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         if si >= vx.inventory.len() {
                             break;
                         }
-                        vx.inventory[si] = slot.map(|(b, c)| (BlockId(b), c));
+                        crate::item::stack::write_tuple_preserving(
+                            &mut vx.inventory[si],
+                            *slot,
+                        );
                     }
                     // W458/W459: villager XP per completed trade
                     // drives the Novice..Master tier unlocks (MC
@@ -3705,7 +3732,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 if i >= vx.inventory.len() {
                     break;
                 }
-                vx.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                crate::item::stack::write_tuple_preserving(
+                    &mut vx.inventory[i],
+                    *slot,
+                );
             }
             if !stonecutter_open_local {
                 vx.stonecutter_open = None;
@@ -3749,7 +3779,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 if i >= vx.inventory.len() {
                     break;
                 }
-                vx.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                crate::item::stack::write_tuple_preserving(
+                    &mut vx.inventory[i],
+                    *slot,
+                );
             }
             if !smithing_open_local {
                 vx.smithing_open = None;
@@ -3766,7 +3799,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 let mut inv_u16: Vec<Option<(u16, u8)>> = vx
                     .inventory
                     .iter()
-                    .map(|s| s.map(|(b, c)| (b.0, c)))
+                    .map(|s| s.as_ref().map(|st| st.as_tuple()))
                     .collect();
                 for (player_side, action) in brewing_grid_actions {
                     if player_side {
@@ -3791,7 +3824,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     if i >= vx.inventory.len() {
                         break;
                     }
-                    vx.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                    crate::item::stack::write_tuple_preserving(
+                    &mut vx.inventory[i],
+                    *slot,
+                );
                 }
             }
             vx.brewing_held = brewing_held_local;
@@ -3829,7 +3865,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 let mut inv_u16: Vec<Option<(u16, u8)>> = vx
                     .inventory
                     .iter()
-                    .map(|s| s.map(|(b, c)| (b.0, c)))
+                    .map(|s| s.as_ref().map(|st| st.as_tuple()))
                     .collect();
                 for (player_side, action) in chest_grid_actions {
                     if player_side {
@@ -3854,7 +3890,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     if i >= vx.inventory.len() {
                         break;
                     }
-                    vx.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                    crate::item::stack::write_tuple_preserving(
+                    &mut vx.inventory[i],
+                    *slot,
+                );
                 }
             }
             vx.chest_held = chest_held_local;
@@ -3873,7 +3912,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 let mut inv_u16: Vec<Option<(u16, u8)>> = vx
                     .inventory
                     .iter()
-                    .map(|s| s.map(|(b, c)| (b.0, c)))
+                    .map(|s| s.as_ref().map(|st| st.as_tuple()))
                     .collect();
                 for action in chest_partner_actions {
                     block::chest::apply_chest_action(
@@ -3887,7 +3926,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     if i >= vx.inventory.len() {
                         break;
                     }
-                    vx.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                    crate::item::stack::write_tuple_preserving(
+                    &mut vx.inventory[i],
+                    *slot,
+                );
                 }
         }
         // Apply queued furnace-UI actions. Mirrors the chest path
@@ -3917,7 +3959,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 let mut inv_u16: Vec<Option<(u16, u8)>> = vx
                     .inventory
                     .iter()
-                    .map(|s| s.map(|(b, c)| (b.0, c)))
+                    .map(|s| s.as_ref().map(|st| st.as_tuple()))
                     .collect();
                 for (player_side, action) in furnace_grid_actions {
                     if player_side {
@@ -3940,7 +3982,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     if i >= vx.inventory.len() {
                         break;
                     }
-                    vx.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                    crate::item::stack::write_tuple_preserving(
+                    &mut vx.inventory[i],
+                    *slot,
+                );
                 }
             }
             vx.furnace_held = furnace_held_local;
@@ -3975,7 +4020,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         {
             // Inventory of (slot_idx, original_stack) we may
             // have to refund on failure.
-            let mut taken: Vec<(usize, (BlockId, u8))> = Vec::new();
+            let mut taken: Vec<(usize, crate::item::ItemStack)> = Vec::new();
             let mut placed: [Option<(BlockId, u8)>; 4] = [None; 4];
             let mut ok = true;
             for (i, (bid, n)) in recipe.inputs.iter().enumerate() {
@@ -3987,9 +4032,9 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 // Look for a slot that has the needed block.
                 let mut found_slot: Option<usize> = None;
                 for (si, slot) in vx.inventory.iter().enumerate() {
-                    if let Some((b, c)) = slot
-                        && *b == target
-                        && *c >= need
+                    if let Some(st) = slot
+                        && st.id == target.0
+                        && st.count >= need
                     {
                         found_slot = Some(si);
                         break;
@@ -3997,15 +4042,18 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 }
                 match found_slot {
                     Some(si) => {
-                        let original =
-                            vx.inventory[si].expect("verified above");
-                        taken.push((si, original));
+                        let original = vx.inventory[si]
+                            .clone()
+                            .expect("verified above");
+                        taken.push((si, original.clone()));
                         let remaining =
-                            original.1.saturating_sub(need);
+                            original.count.saturating_sub(need);
                         vx.inventory[si] = if remaining == 0 {
                             None
                         } else {
-                            Some((original.0, remaining))
+                            let mut kept = original;
+                            kept.count = remaining;
+                            Some(kept)
                         };
                         placed[i] = Some((target, need));
                     }

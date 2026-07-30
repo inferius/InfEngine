@@ -346,10 +346,10 @@ pub(crate) fn place_cart_from_click(vx: &mut crate::Voxel, cell: [i32; 3]) {
     snap_to_rail(&vx.world, &vx.rail_shapes, &mut cart);
     vx.carts.push(cart);
     if !vx.abilities.instabuild
-        && let Some((_, count)) = vx.inventory[vx.selected_slot].as_mut()
+        && let Some(st) = vx.inventory[vx.selected_slot].as_mut()
     {
-        *count = count.saturating_sub(1);
-        if *count == 0 {
+        st.count = st.count.saturating_sub(1);
+        if st.count == 0 {
             vx.inventory[vx.selected_slot] = None;
         }
     }

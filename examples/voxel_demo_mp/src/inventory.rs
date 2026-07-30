@@ -122,37 +122,44 @@ pub(crate) fn inv_pickup(
     false
 }
 
-/// Pop `count` of `block` into the inventory. Tops up partial
-/// stacks first, then claims empty slots. Returns `true` if the
-/// full count fit; `false` (and some items already merged) when
-/// the inventory ran out of room before `count` was exhausted.
+/// Pop `count` of `block` into the player's `ItemStack`-typed
+/// inventory. Tops up partial stacks first, then claims empty
+/// slots. Returns `true` if the full count fit; `false` (and some
+/// items already merged) when the inventory ran out of room before
+/// `count` was exhausted.
 ///
 /// W50.3: used by the crafting-table close handler to dump the
 /// 3x3 grid contents back into the player inv when the panel is
 /// closed via the X button.
-pub(crate) fn inv_pickup_n(
-    inv: &mut [Option<(BlockId, u8)>; INVENTORY_SLOTS],
+///
+/// W466: replaces the tuple-typed `inv_pickup_n` (the player
+/// inventory holds stacks now). One components rule: merges only
+/// land in PLAIN (default-component) stacks so a returned
+/// craft-grid stack never piles onto a worn tool. Freshly claimed
+/// slots mint stacks with empty components.
+pub(crate) fn inv_pickup_n_stacks(
+    inv: &mut [Option<crate::item::ItemStack>; INVENTORY_SLOTS],
     block: BlockId,
     count: u8,
 ) -> bool {
     if block == BlockId::AIR || count == 0 {
         return true;
     }
-    // W53.3: per-item max stack honours tools/buckets/etc.
     let cap = crate::item::item_max_stack(block.0);
     let mut remaining = count;
-    // Pass 1: top up matching partial stacks.
+    // Pass 1: top up matching plain partial stacks.
     for slot in inv.iter_mut() {
         if remaining == 0 {
             return true;
         }
-        if let Some((b, c)) = slot.as_mut()
-            && *b == block
-            && *c < cap
+        if let Some(st) = slot.as_mut()
+            && st.id == block.0
+            && st.components.is_empty()
+            && st.count < cap
         {
-            let room = cap - *c;
+            let room = cap - st.count;
             let take = room.min(remaining);
-            *c += take;
+            st.count += take;
             remaining -= take;
         }
     }
@@ -163,7 +170,7 @@ pub(crate) fn inv_pickup_n(
         }
         if slot.is_none() {
             let take = cap.min(remaining);
-            *slot = Some((block, take));
+            *slot = Some(crate::item::ItemStack::new(block.0, take));
             remaining -= take;
         }
     }

@@ -53,7 +53,13 @@ pub(crate) const PLAYER_MAGIC: &[u8; 4] = b"INFP";
 /// - v3: W8.2 - adds `game_mode: u8` (Survival / Creative; Hardcore
 ///   deferred). Old v2 saves migrate by appending a single `0`
 ///   byte (= `GameMode::Survival`).
-pub(crate) const PLAYER_FORMAT_VERSION: u32 = 4;
+/// - v4: W416/W418/W419 - adds `food`/`saturation` (hunger), `xp`,
+///   `armor`. Old v3 saves migrate to the MC spawn state.
+/// - v5: W466 - inventory slots become full `ItemStack`s (id +
+///   count + components with damage/enchants/name) instead of
+///   `(u16, u8)` tuples. Old v4 saves lift every slot with empty
+///   components in `player_v4_to_v5`.
+pub(crate) const PLAYER_FORMAT_VERSION: u32 = 5;
 
 /// Default zstd compression level. Matches `chunks.rs` - level 3 is
 /// the documented "balanced" setting from the design doc.
@@ -103,9 +109,10 @@ pub(crate) struct PlayerSave {
     /// Camera pitch (rotation around X), radians.
     pub pitch: f32,
     /// Main inventory: `INVENTORY_SLOTS` slots, each holding an
-    /// `Option<(block_id_u16, count_u8)>`. Indexing matches the
+    /// `Option<ItemStack>` (W466: full stacks with components -
+    /// damage travels with the save). Indexing matches the
     /// runtime: 0..HOTBAR_SLOTS = hotbar row.
-    pub inventory: Vec<Option<(u16, u8)>>,
+    pub inventory: Vec<Option<crate::item::ItemStack>>,
     /// 3x3 crafting grid contents. Empty / partially filled grid
     /// preserves item placement across save/load.
     pub craft_grid: Vec<Option<(u16, u8)>>,
@@ -547,6 +554,35 @@ struct PlayerSaveV3 {
     game_mode: u8,
 }
 
+/// W466: FROZEN v4 payload shape - tuple-typed inventory, pre-
+/// ItemStack. The v3 -> v4 arrow encodes THIS (the live struct is
+/// v5 now - encoding it would have silently produced v5-shaped
+/// bytes labelled v4, the W459 entities lesson); the v4 -> v5
+/// arrow decodes it.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct PlayerSaveV4 {
+    format_version: u32,
+    pos: [f32; 3],
+    yaw: f32,
+    pitch: f32,
+    inventory: Vec<Option<(u16, u8)>>,
+    craft_grid: Vec<Option<(u16, u8)>>,
+    selected_slot: u8,
+    air: f32,
+    health: f32,
+    home_pos: Option<[f32; 3]>,
+    spawn_pos: Option<[f32; 3]>,
+    permission_level: u8,
+    play_time_seconds: u64,
+    last_dimension: String,
+    highlight_mode: u8,
+    game_mode: u8,
+    food: f32,
+    saturation: f32,
+    xp: u32,
+    armor: Vec<Option<(u16, u8)>>,
+}
+
 /// V1 -> V2 envelope migration. Decodes the v1 payload (no
 /// `highlight_mode` field), re-encodes it as a v2 payload with
 /// `highlight_mode = HighlightMode::Auto`. Matches the
@@ -750,7 +786,8 @@ pub(crate) fn player_v3_to_v4(bytes: &[u8]) -> io::Result<Vec<u8>> {
     let (v3, _read) = bincode::serde::decode_from_slice::<PlayerSaveV3, _>(&raw_v3, cfg)
         .map_err(|err| invalid(format!("v3 payload decode failed: {err}")))?;
 
-    let v4 = PlayerSave {
+    // W466: emit the FROZEN v4 shape (the live struct is v5 now).
+    let v4 = PlayerSaveV4 {
         format_version: 4,
         pos: v3.pos,
         yaw: v3.yaw,
@@ -786,6 +823,95 @@ pub(crate) fn player_v3_to_v4(bytes: &[u8]) -> io::Result<Vec<u8>> {
     out.push(kind_v4);
     out.extend_from_slice(&uncompressed_len_v4.to_le_bytes());
     out.extend_from_slice(&body_v4);
+    Ok(out)
+}
+
+/// W466: V4 -> V5 envelope migration. Decodes the FROZEN v4
+/// payload (tuple inventory), re-encodes it as a v5 payload whose
+/// inventory slots are `ItemStack`s lifted with empty components.
+/// The old per-slot durability map was runtime-only (never
+/// persisted), so there is nothing to fold into `damage` here -
+/// lifted tools load fresh, exactly like every pre-W466 reload
+/// did. Mirrors the v3 -> v4 step.
+pub(crate) fn player_v4_to_v5(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < 17 {
+        return Err(invalid("player v4 envelope truncated"));
+    }
+    if &bytes[..4] != PLAYER_MAGIC {
+        return Err(invalid("player v4 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 4 {
+        return Err(invalid(format!(
+            "player_v4_to_v5 expected v4, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+
+    let raw_v4: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("v4 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown v4 compression kind {other} during migration"
+            )));
+        }
+    };
+
+    let cfg = bincode::config::standard();
+    let (v4, _read) = bincode::serde::decode_from_slice::<PlayerSaveV4, _>(&raw_v4, cfg)
+        .map_err(|err| invalid(format!("v4 payload decode failed: {err}")))?;
+
+    let v5 = PlayerSave {
+        format_version: 5,
+        pos: v4.pos,
+        yaw: v4.yaw,
+        pitch: v4.pitch,
+        inventory: v4
+            .inventory
+            .into_iter()
+            .map(|s| s.map(crate::item::ItemStack::from_tuple))
+            .collect(),
+        craft_grid: v4.craft_grid,
+        selected_slot: v4.selected_slot,
+        air: v4.air,
+        health: v4.health,
+        home_pos: v4.home_pos,
+        spawn_pos: v4.spawn_pos,
+        permission_level: v4.permission_level,
+        play_time_seconds: v4.play_time_seconds,
+        last_dimension: v4.last_dimension,
+        highlight_mode: v4.highlight_mode,
+        game_mode: v4.game_mode,
+        food: v4.food,
+        saturation: v4.saturation,
+        xp: v4.xp,
+        armor: v4.armor,
+    };
+    let raw_v5 = bincode::serde::encode_to_vec(&v5, cfg)
+        .map_err(|err| invalid(format!("v5 payload encode failed: {err}")))?;
+    let uncompressed_len_v5 = raw_v5.len() as u64;
+
+    let (kind_v5, body_v5): (u8, Vec<u8>) = match zstd::encode_all(&raw_v5[..], ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < raw_v5.len() => (COMP_ZSTD, compressed),
+        _ => (COMP_NONE, raw_v5),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v5.len() + 17);
+    out.extend_from_slice(PLAYER_MAGIC);
+    out.extend_from_slice(&5u32.to_le_bytes());
+    out.push(kind_v5);
+    out.extend_from_slice(&uncompressed_len_v5.to_le_bytes());
+    out.extend_from_slice(&body_v5);
     Ok(out)
 }
 
@@ -1075,8 +1201,10 @@ mod tests {
             COMP_ZSTD => decode_zstd(body, uncompressed_len).unwrap(),
             other => panic!("unexpected compression kind {other}"),
         };
+        // W466: the arrow emits the FROZEN v4 shape now (the live
+        // PlayerSave is v5 with ItemStack slots).
         let (v4, _read) =
-            bincode::serde::decode_from_slice::<PlayerSave, _>(&raw4, cfg)
+            bincode::serde::decode_from_slice::<PlayerSaveV4, _>(&raw4, cfg)
                 .unwrap();
         assert_eq!(v4.format_version, 4);
         assert_eq!(v4.health, 13.5);
@@ -1085,6 +1213,99 @@ mod tests {
         assert_eq!(v4.saturation, 5.0);
         assert_eq!(v4.xp, 0);
         assert_eq!(v4.armor, vec![None; 4]);
+    }
+
+    /// W466: a hand-built v4 envelope lifts through the 4 -> 5
+    /// arrow with every inventory tuple promoted to an `ItemStack`
+    /// with empty components; all other v4 fields carry through.
+    #[test]
+    fn player_v4_to_v5_lifts_item_stacks() {
+        let cfg = bincode::config::standard();
+        let mut inventory: Vec<Option<(u16, u8)>> =
+            vec![None; INVENTORY_SLOTS_DEFAULT];
+        inventory[0] = Some((1, 64));
+        inventory[3] = Some((48, 1)); // flint+steel (was map-tracked)
+        let v4 = PlayerSaveV4 {
+            format_version: 4,
+            pos: [2.5, 71.0, -3.5],
+            yaw: 0.7,
+            pitch: 0.2,
+            inventory,
+            craft_grid: vec![None; CRAFT_GRID_SLOTS_DEFAULT],
+            selected_slot: 3,
+            air: 8.0,
+            health: 12.0,
+            home_pos: None,
+            spawn_pos: Some([1.0, 66.0, 1.0]),
+            permission_level: 4,
+            play_time_seconds: 11,
+            last_dimension: "the_end".to_string(),
+            highlight_mode: 2,
+            game_mode: 1,
+            food: 14.0,
+            saturation: 2.5,
+            xp: 77,
+            armor: vec![Some((312, 1)), None, None, None],
+        };
+        let raw = bincode::serde::encode_to_vec(&v4, cfg).unwrap();
+        let mut bytes: Vec<u8> = Vec::with_capacity(raw.len() + 17);
+        bytes.extend_from_slice(PLAYER_MAGIC);
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.push(COMP_NONE);
+        bytes.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&raw);
+
+        let out = player_v4_to_v5(&bytes).expect("arrow lifts");
+        assert_eq!(
+            u32::from_le_bytes([out[4], out[5], out[6], out[7]]),
+            5
+        );
+        let kind = out[8];
+        let len = u64::from_le_bytes(out[9..17].try_into().unwrap()) as usize;
+        let body: Vec<u8> = match kind {
+            COMP_NONE => out[17..].to_vec(),
+            _ => decode_zstd(&out[17..], len).unwrap(),
+        };
+        let (v5, _read) =
+            bincode::serde::decode_from_slice::<PlayerSave, _>(&body, cfg)
+                .unwrap();
+        assert_eq!(v5.format_version, 5);
+        assert_eq!(
+            v5.inventory[0],
+            Some(crate::item::ItemStack::new(1, 64))
+        );
+        assert_eq!(
+            v5.inventory[3],
+            Some(crate::item::ItemStack::new(48, 1))
+        );
+        assert!(
+            v5.inventory[3]
+                .as_ref()
+                .unwrap()
+                .components
+                .is_empty(),
+            "lifted stacks start with empty components"
+        );
+        assert!(v5.inventory[1].is_none());
+        // v4 fields carry through.
+        assert_eq!(v5.health, 12.0);
+        assert_eq!(v5.game_mode, 1);
+        assert_eq!(v5.food, 14.0);
+        assert_eq!(v5.saturation, 2.5);
+        assert_eq!(v5.xp, 77);
+        assert_eq!(v5.armor[0], Some((312, 1)));
+        assert_eq!(v5.last_dimension, "the_end");
+    }
+
+    #[test]
+    fn player_v4_to_v5_rejects_non_v4_input() {
+        // Driving the v4 -> v5 step on a non-v4 envelope must
+        // surface an error rather than corrupting bytes.
+        let mut bytes = vec![0u8; 17];
+        bytes[..4].copy_from_slice(PLAYER_MAGIC);
+        bytes[4..8].copy_from_slice(&5u32.to_le_bytes());
+        let err = player_v4_to_v5(&bytes).expect_err("must reject v5");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]

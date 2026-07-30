@@ -341,6 +341,16 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         4,
         super::players::player_v3_to_v4,
     );
+    // W466: player.bin v4 -> v5 lifts every inventory tuple into
+    // an `ItemStack` with empty components (the ItemStack core
+    // refactor). The old durability map was never persisted, so
+    // there is no wear to fold in.
+    reg.register(
+        SaveKind::Player,
+        4,
+        5,
+        super::players::player_v4_to_v5,
+    );
 }
 
 /// JSON peek struct - decodes just the `format_version` key and

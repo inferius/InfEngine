@@ -185,8 +185,8 @@ let mut v = Voxel::new();
     v.player_yaw = 1.234;
     v.player_pitch = -0.42;
     v.player_health = 13.0;
-    v.inventory[0] = Some((BlockId(1), 32));
-    v.inventory[5] = Some((BlockId(7), 64));
+    v.inventory[0] = Some(crate::item::ItemStack::new(1, 32));
+    v.inventory[5] = Some(crate::item::ItemStack::new(7, 64));
     v.switch_dim(NETHER);
     // Pose + inventory must NOT swap with the dim. The MC
     // contract has the player carry their stuff through the
@@ -197,8 +197,8 @@ let mut v = Voxel::new();
     assert!((v.player_yaw - 1.234).abs() < 1e-3);
     assert!((v.player_pitch + 0.42).abs() < 1e-3);
     assert_eq!(v.player_health, 13.0);
-    assert_eq!(v.inventory[0], Some((BlockId(1), 32)));
-    assert_eq!(v.inventory[5], Some((BlockId(7), 64)));
+    assert_eq!(v.inventory[0], Some(crate::item::ItemStack::new(1, 32)));
+    assert_eq!(v.inventory[5], Some(crate::item::ItemStack::new(7, 64)));
 }
 
 #[test]

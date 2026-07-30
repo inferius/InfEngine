@@ -227,13 +227,13 @@ impl Voxel {
         let mut overflow: Vec<(BlockId, u8)> = Vec::new();
         for cell in self.craft_grid_3x3.iter_mut() {
             if let Some((b, c)) = cell.take()
-                && !crate::inventory::inv_pickup_n(&mut self.inventory, b, c)
+                && !crate::inventory::inv_pickup_n_stacks(&mut self.inventory, b, c)
             {
                 overflow.push((b, c));
             }
         }
         if let Some((id, c)) = self.crafting_table_held.take()
-            && !crate::inventory::inv_pickup_n(
+            && !crate::inventory::inv_pickup_n_stacks(
                 &mut self.inventory,
                 BlockId(id),
                 c,
@@ -258,7 +258,7 @@ impl Voxel {
     pub(crate) fn close_stonecutter_ui(&mut self) {
         let pos = self.stonecutter_open.take();
         if let Some((id, c)) = self.stonecutter_input.take()
-            && !crate::inventory::inv_pickup_n(&mut self.inventory, BlockId(id), c)
+            && !crate::inventory::inv_pickup_n_stacks(&mut self.inventory, BlockId(id), c)
             && let Some(p) = pos
         {
             self.spawn_drop(BlockId(id), p);
@@ -271,7 +271,7 @@ impl Voxel {
         let pos = self.smithing_open.take();
         let slots = std::mem::take(&mut self.smithing_slots);
         for (id, c) in slots.into_iter().flatten() {
-            if !crate::inventory::inv_pickup_n(
+            if !crate::inventory::inv_pickup_n_stacks(
                 &mut self.inventory,
                 BlockId(id),
                 c,

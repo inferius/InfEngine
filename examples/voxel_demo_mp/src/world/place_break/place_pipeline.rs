@@ -60,11 +60,11 @@ pub(crate) fn apply_block_place(
             vx.rebuild_chunks(&coords);
             if !is_client
                 && !vx.abilities.instabuild
-                && let Some((_, count)) =
+                && let Some(st) =
                     vx.inventory[vx.selected_slot].as_mut()
             {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
+                st.count = st.count.saturating_sub(1);
+                if st.count == 0 {
                     vx.inventory[vx.selected_slot] = None;
                 }
             }
@@ -520,10 +520,10 @@ pub(crate) fn apply_block_place(
     // Decrement the active stack (host only, not creative).
     if !is_client
         && !vx.abilities.instabuild
-        && let Some((_, count)) = vx.inventory[vx.selected_slot].as_mut()
+        && let Some(st) = vx.inventory[vx.selected_slot].as_mut()
     {
-        *count = count.saturating_sub(1);
-        if *count == 0 {
+        st.count = st.count.saturating_sub(1);
+        if st.count == 0 {
             vx.inventory[vx.selected_slot] = None;
         }
     }

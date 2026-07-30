@@ -546,7 +546,7 @@ fn shift_inv_to_grid(
     }
 }
 
-/// Insert into the u16-inv (mirrors `inventory::inv_pickup_n`).
+/// Insert into the u16-inv (mirrors `inventory::inv_pickup_n_stacks`).
 /// Returns leftover.
 fn inv_insert(inv: &mut [Option<(u16, u8)>], id: u16, n: u8) -> u8 {
     let cap = cap(id);

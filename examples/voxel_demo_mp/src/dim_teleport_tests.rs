@@ -144,14 +144,14 @@ fn teleport_preserves_player_inventory() {
     v.world.set([0, 8, 0], BlockId(PORTAL_ID));
     v.player_pos = glam::Vec3::new(0.5, 9.0, 0.5);
     // Stash some inventory before teleport.
-    v.inventory[0] = Some((BlockId(1), 32));
-    v.inventory[3] = Some((BlockId(7), 64));
+    v.inventory[0] = Some(crate::item::ItemStack::new(1, 32));
+    v.inventory[3] = Some(crate::item::ItemStack::new(7, 64));
     v.player_health = 18.0;
     v.do_cross_dim_teleport([0, 8, 0]);
     assert_eq!(v.current_dim, NETHER);
     // Inventory + health survived the dim switch.
-    assert_eq!(v.inventory[0], Some((BlockId(1), 32)));
-    assert_eq!(v.inventory[3], Some((BlockId(7), 64)));
+    assert_eq!(v.inventory[0], Some(crate::item::ItemStack::new(1, 32)));
+    assert_eq!(v.inventory[3], Some(crate::item::ItemStack::new(7, 64)));
     assert_eq!(v.player_health, 18.0);
 }
 
