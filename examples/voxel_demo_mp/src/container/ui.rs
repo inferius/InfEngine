@@ -25,6 +25,7 @@
 //! surface flat and trivially compose-able from multiple call sites.
 
 use super::Container;
+use crate::item::ItemStack;
 use crate::item::icons::{icon_for, icon_uv_rect};
 
 /// W9.3: per-item UV resolver. Callers pass a closure that turns an
@@ -104,7 +105,7 @@ pub(crate) fn draw_grid(
     ui: &mut egui::Ui,
     cfg: &GridConfig,
     container: &Container,
-    held: Option<(u16, u8)>,
+    held: Option<&ItemStack>,
     atlas: Option<egui::TextureId>,
 ) -> Vec<GridAction> {
     draw_grid_with_uv(ui, cfg, container, held, atlas, &|_| None)
@@ -118,7 +119,7 @@ pub(crate) fn draw_grid_with_uv(
     ui: &mut egui::Ui,
     cfg: &GridConfig,
     container: &Container,
-    held: Option<(u16, u8)>,
+    held: Option<&ItemStack>,
     atlas: Option<egui::TextureId>,
     uv_resolver: UvResolver<'_>,
 ) -> Vec<GridAction> {
@@ -140,7 +141,9 @@ pub(crate) fn draw_grid_with_uv(
         .spacing(egui::vec2(2.0, 2.0))
         .show(ui, |ui| {
             for idx in 0..total {
-                let slot = container.slot(idx);
+                // W467: borrow the stack - the widget only reads
+                // id + count, no need to clone components per tile.
+                let slot = container.slot_ref(idx);
                 let resp = draw_one_slot(ui, slot, cfg.tile_px, atlas, uv_resolver);
                 // Modifier mapping. We sample once per slot so a
                 // Shift-LMB and a plain LMB on the same slot don't
@@ -178,7 +181,7 @@ pub(crate) fn draw_grid_with_uv(
 /// C.3 swaps it in.
 fn draw_one_slot(
     ui: &mut egui::Ui,
-    slot: super::Slot,
+    slot: Option<&ItemStack>,
     tile_px: f32,
     atlas: Option<egui::TextureId>,
     uv_resolver: UvResolver<'_>,
@@ -187,7 +190,8 @@ fn draw_one_slot(
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, egui::Color32::from_gray(24));
-    if let Some((id, count)) = slot {
+    if let Some(st) = slot {
+        let (id, count) = (st.id, st.count);
         // W9.3: prefer the resource_pack UV when supplied + non-None,
         // then the legacy 4x4-atlas icon, then the tinted swatch.
         let resolved_uv = uv_resolver(id).or_else(|| icon_for(id).map(icon_uv_rect));
@@ -247,8 +251,8 @@ fn draw_one_slot(
     };
     painter.rect_stroke(rect, 4.0, outline, egui::StrokeKind::Inside);
     // W364: item-name hover tooltip (R20 request).
-    if let Some((id, _)) = slot {
-        return resp.on_hover_text(crate::item::item_display_name(id));
+    if let Some(st) = slot {
+        return resp.on_hover_text(crate::item::item_display_name(st.id));
     }
     resp
 }

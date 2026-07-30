@@ -17,6 +17,8 @@
 
 use tempfile::TempDir;
 
+use crate::item::ItemStack;
+
 use super::chunks::{
     CHUNK_PAYLOAD_VERSION, ChunkPayload, ChunkVoxels, chunk_path_in_dir,
     read_chunk_in_dir, write_chunk_in_dir,
@@ -170,11 +172,11 @@ fn per_dim_containers_files_independent() {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![ChestSave {
             pos: [1, 2, 3],
-            slots: vec![Some((1, 64)), None, None],
+            slots: vec![Some(ItemStack::new(1, 64)), None, None],
         }],
         furnaces: vec![FurnaceSave {
             pos: [4, 5, 6],
-            slots: vec![Some((14, 8)), Some((13, 16)), None],
+            slots: vec![Some(ItemStack::new(14, 8)), Some(ItemStack::new(13, 16)), None],
             fuel_left_ms: 1000,
             fuel_full_ms: 8000,
             cook_progress_ms: 200,
@@ -194,7 +196,7 @@ fn per_dim_containers_files_independent() {
         format_version: CONTAINERS_FORMAT_VERSION,
         chests: vec![ChestSave {
             pos: [10, 20, 30],
-            slots: vec![Some((44, 5)), None, None], // netherrack
+            slots: vec![Some(ItemStack::new(44, 5)), None, None], // netherrack
         }],
         furnaces: Vec::new(),
         fires: Vec::new(),
@@ -216,7 +218,7 @@ fn per_dim_containers_files_independent() {
     assert_eq!(lo.chests[0].pos, [1, 2, 3]);
     assert_eq!(ln.chests.len(), 1);
     assert_eq!(ln.chests[0].pos, [10, 20, 30]);
-    assert_eq!(ln.chests[0].slots[0], Some((44, 5)));
+    assert_eq!(ln.chests[0].slots[0], Some(ItemStack::new(44, 5)));
 }
 
 #[test]

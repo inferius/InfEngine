@@ -713,11 +713,11 @@ mod tests {
                 .slots
                 .iter()
                 .flatten()
-                .map(|(id, n)| {
-                    let name = crate::item::item_type(*id)
+                .map(|st| {
+                    let name = crate::item::item_type(st.id)
                         .map(|it| it.name)
                         .unwrap_or("?");
-                    format!("{name} x{n}")
+                    format!("{name} x{}", st.count)
                 })
                 .collect();
             println!("chest at {:?}: [{}]", ch.pos, items.join(", "));

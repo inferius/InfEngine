@@ -162,9 +162,11 @@ pub(in crate::world_save::runtime) fn apply_dimension_containers(
 ) {
     voxel.chests.clear();
     for chest in containers_bundle.chests {
+        // W467: slots are ItemStack rows - move them straight in,
+        // components included.
         let mut c = crate::container::Container::with_size(chest.slots.len());
-        for (i, slot) in chest.slots.iter().enumerate() {
-            c.set_slot(i, *slot);
+        for (i, slot) in chest.slots.into_iter().enumerate() {
+            c.set_slot(i, slot);
         }
         voxel.chests.insert(chest.pos, c);
     }
@@ -179,8 +181,8 @@ pub(in crate::world_save::runtime) fn apply_dimension_containers(
         if furnace.slots.len() != c.len() {
             c = crate::container::Container::with_size(furnace.slots.len());
         }
-        for (i, slot) in furnace.slots.iter().enumerate() {
-            c.set_slot(i, *slot);
+        for (i, slot) in furnace.slots.into_iter().enumerate() {
+            c.set_slot(i, slot);
         }
         voxel.furnaces.insert(furnace.pos, c);
         voxel.furnace_runtimes.insert(
@@ -222,8 +224,8 @@ pub(in crate::world_save::runtime) fn apply_dimension_containers(
         if stand.slots.len() != c.len() {
             c = crate::container::Container::with_size(stand.slots.len());
         }
-        for (i, slot) in stand.slots.iter().enumerate() {
-            c.set_slot(i, *slot);
+        for (i, slot) in stand.slots.into_iter().enumerate() {
+            c.set_slot(i, slot);
         }
         voxel.brewing_stands.insert(stand.pos, c);
         voxel.brewing_runtimes.insert(

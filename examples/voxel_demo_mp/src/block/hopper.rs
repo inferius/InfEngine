@@ -4,9 +4,11 @@
 //! item from the container directly ABOVE it and pushes one item to
 //! the container directly BELOW it. This is the classic
 //! redstone-adjacent transport mechanic, and it needs NO new data
-//! model: it just moves `(item_id, count)` stacks between the
-//! `Container`s the engine already stores in `Voxel::chests` (chests,
-//! barrels and hoppers all live there).
+//! model: it just moves `ItemStack`s between the `Container`s the
+//! engine already stores in `Voxel::chests` (chests, barrels and
+//! hoppers all live there). W467: the moved single-item stack
+//! clones the source slot's components, so a worn tool pulled
+//! through a hopper keeps its damage.
 //!
 //! v1 scope: vertical transport between chest/barrel/hopper. Furnace
 //! input/output coupling, sideways-facing hoppers and the manual
@@ -15,6 +17,7 @@
 use std::collections::HashMap;
 
 use crate::container::Container;
+use crate::item::ItemStack;
 
 /// Hopper buffer size (MC = 5 slots).
 pub(crate) const HOPPER_SLOTS: usize = 5;
@@ -23,21 +26,29 @@ pub(crate) const HOPPER_SLOTS: usize = 5;
 /// clock so the cadence is frame-rate independent.
 pub(crate) const HOPPER_INTERVAL_MS: u32 = 400;
 
-/// Remove one item from the first non-empty slot. Returns `(id, 1)`
-/// or `None` when every slot is empty.
-fn take_one(c: &mut Container) -> Option<(u16, u8)> {
+/// Remove one item from the first non-empty slot. Returns a
+/// single-count stack carrying the slot's components, or `None`
+/// when every slot is empty.
+fn take_one(c: &mut Container) -> Option<ItemStack> {
     for i in 0..c.len() {
-        if let Some((id, n)) = c.slot(i) {
-            let left = n - 1;
-            c.set_slot(i, if left == 0 { None } else { Some((id, left)) });
-            return Some((id, 1));
+        if let Some(st) = c.slot(i) {
+            let left = st.count - 1;
+            c.set_slot(
+                i,
+                if left == 0 {
+                    None
+                } else {
+                    Some(st.with_count(left))
+                },
+            );
+            return Some(st.with_count(1));
         }
     }
     None
 }
 
 /// Insert one item; returns true when it found a home (0 leftover).
-fn insert_one(c: &mut Container, stack: (u16, u8)) -> bool {
+fn insert_one(c: &mut Container, stack: ItemStack) -> bool {
     c.insert(stack) == 0
 }
 
@@ -58,8 +69,10 @@ pub(crate) fn transport_round(
         if containers.contains_key(&above)
             && let Some(item) = containers.get_mut(&above).and_then(take_one)
         {
-            let placed =
-                containers.get_mut(&hp).map(|h| insert_one(h, item)).unwrap_or(false);
+            let placed = containers
+                .get_mut(&hp)
+                .map(|h| insert_one(h, item.clone()))
+                .unwrap_or(false);
             if !placed
                 && let Some(a) = containers.get_mut(&above)
             {
@@ -70,8 +83,10 @@ pub(crate) fn transport_round(
         if containers.contains_key(&below)
             && let Some(item) = containers.get_mut(&hp).and_then(take_one)
         {
-            let placed =
-                containers.get_mut(&below).map(|b| insert_one(b, item)).unwrap_or(false);
+            let placed = containers
+                .get_mut(&below)
+                .map(|b| insert_one(b, item.clone()))
+                .unwrap_or(false);
             if !placed
                 && let Some(h) = containers.get_mut(&hp)
             {
@@ -87,8 +102,8 @@ mod tests {
 
     fn chest_with(items: &[(u16, u8)]) -> Container {
         let mut c = Container::with_size(27);
-        for (i, &it) in items.iter().enumerate() {
-            c.set_slot(i, Some(it));
+        for (i, &(id, n)) in items.iter().enumerate() {
+            c.set_slot(i, Some(ItemStack::new(id, n)));
         }
         c
     }
@@ -105,14 +120,14 @@ mod tests {
         transport_round(&mut map, &[[0, 0, 0]]);
 
         // One pulled from above (10 -> 9); one pushed to below (0 -> 1).
-        assert_eq!(map[&[0, 1, 0]].slot(0), Some((5, 9)));
+        assert_eq!(map[&[0, 1, 0]].slot_tuple(0), Some((5, 9)));
         // The hopper either holds it briefly or it already moved down;
         // total conserved across the three containers = 10.
         let total: u32 = [[0, 1, 0], [0, 0, 0], [0, -1, 0]]
             .iter()
             .map(|p| {
                 (0..map[p].len())
-                    .filter_map(|i| map[p].slot(i))
+                    .filter_map(|i| map[p].slot_tuple(i))
                     .map(|(_, n)| n as u32)
                     .sum::<u32>()
             })
@@ -129,13 +144,41 @@ mod tests {
         // no [0,-1,0]
         transport_round(&mut map, &[[0, 0, 0]]);
         let above: u32 = (0..map[&[0, 1, 0]].len())
-            .filter_map(|i| map[&[0, 1, 0]].slot(i))
+            .filter_map(|i| map[&[0, 1, 0]].slot_tuple(i))
             .map(|(_, n)| n as u32)
             .sum();
         let hop: u32 = (0..map[&[0, 0, 0]].len())
-            .filter_map(|i| map[&[0, 0, 0]].slot(i))
+            .filter_map(|i| map[&[0, 0, 0]].slot_tuple(i))
             .map(|(_, n)| n as u32)
             .sum();
         assert_eq!(above + hop, 1, "item conserved, just relocated");
+    }
+
+    /// W467: a worn item pulled through the hopper keeps its
+    /// damage - and never count-merges with a fresh stack of the
+    /// same id sitting in the destination.
+    #[test]
+    fn worn_item_keeps_damage_through_hopper() {
+        let mut worn = ItemStack::new(48, 1);
+        worn.components.damage = 20;
+        let mut above = Container::with_size(27);
+        above.set_slot(0, Some(worn.clone()));
+        let mut below = Container::with_size(27);
+        below.set_slot(0, Some(ItemStack::new(48, 1))); // fresh same-id
+
+        let mut map: HashMap<[i32; 3], Container> = HashMap::new();
+        map.insert([0, 1, 0], above);
+        map.insert([0, 0, 0], Container::with_size(HOPPER_SLOTS));
+        map.insert([0, -1, 0], below);
+
+        // Two rounds: pull into the hopper, then push below.
+        transport_round(&mut map, &[[0, 0, 0]]);
+        transport_round(&mut map, &[[0, 0, 0]]);
+
+        let dest = &map[&[0, -1, 0]];
+        // Fresh stack untouched (no count-merge with the worn one).
+        assert_eq!(dest.slot(0), Some(ItemStack::new(48, 1)));
+        // Worn item landed in its own slot, damage intact.
+        assert_eq!(dest.slot(1), Some(worn));
     }
 }

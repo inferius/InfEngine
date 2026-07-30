@@ -1280,7 +1280,7 @@ pub(crate) fn fill_container(
     rng: &mut SplitMix64,
 ) {
     let mut free: Vec<usize> = (0..container.len())
-        .filter(|&i| container.slot(i).is_none())
+        .filter(|&i| container.slot_ref(i).is_none())
         .collect();
     for &(id, count) in stacks {
         if free.is_empty() {
@@ -1288,7 +1288,8 @@ pub(crate) fn fill_container(
         }
         let pick = (rng.next_u64() % free.len() as u64) as usize;
         let slot = free.swap_remove(pick);
-        container.set_slot(slot, Some((id, count)));
+        // Loot is always freshly minted - empty components.
+        container.set_slot(slot, Some(crate::item::ItemStack::new(id, count)));
     }
 }
 
@@ -1359,13 +1360,20 @@ mod tests {
     /// fill_container scatters into empty slots without overwriting.
     #[test]
     fn fill_scatters_into_empty_slots() {
+        use crate::item::ItemStack;
         let mut c = crate::container::Container::with_size(27);
-        c.set_slot(3, Some((1, 1)));
+        c.set_slot(3, Some(ItemStack::new(1, 1)));
         let stacks = vec![(10u16, 2u8), (11, 3), (12, 4)];
         fill_container(&mut c, &stacks, &mut SplitMix64::new(7));
-        assert_eq!(c.slot(3), Some((1, 1)), "existing slot untouched");
-        let placed: Vec<_> =
-            (0..27).filter_map(|i| c.slot(i)).filter(|s| s.0 >= 10).collect();
+        assert_eq!(
+            c.slot(3),
+            Some(ItemStack::new(1, 1)),
+            "existing slot untouched"
+        );
+        let placed: Vec<_> = (0..27)
+            .filter_map(|i| c.slot(i))
+            .filter(|s| s.id >= 10)
+            .collect();
         assert_eq!(placed.len(), 3);
     }
 }

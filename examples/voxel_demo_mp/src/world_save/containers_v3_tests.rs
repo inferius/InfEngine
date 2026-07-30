@@ -11,10 +11,12 @@
 
 use tempfile::TempDir;
 
+use crate::item::ItemStack;
+
 use super::containers::{
-    CONTAINERS_FORMAT_VERSION, CONTAINERS_MAGIC, ChestSave, DimensionContainers,
-    FireSave, FurnaceSave, containers_path_in_dir, read_containers_in_dir,
-    write_containers_in_dir,
+    CONTAINERS_FORMAT_VERSION, CONTAINERS_MAGIC, ChestSave, ChestSaveV6,
+    DimensionContainers, FireSave, FurnaceSave, FurnaceSaveV6,
+    containers_path_in_dir, read_containers_in_dir, write_containers_in_dir,
 };
 use super::migrate::{MigrationRegistry, SaveKind};
 
@@ -22,16 +24,37 @@ const SLUG: &str = "slot3";
 const DIM: &str = "overworld";
 
 fn populated_chest_at(pos: [i32; 3]) -> ChestSave {
-    let mut slots: Vec<Option<(u16, u8)>> = vec![None; 27];
-    slots[0] = Some((1, 64));
-    slots[5] = Some((25, 1));
+    let mut slots: Vec<Option<ItemStack>> = vec![None; 27];
+    slots[0] = Some(ItemStack::new(1, 64));
+    slots[5] = Some(ItemStack::new(25, 1));
     ChestSave { pos, slots }
 }
 
 fn populated_furnace_at(pos: [i32; 3]) -> FurnaceSave {
+    let mut slots: Vec<Option<ItemStack>> = vec![None; 3];
+    slots[0] = Some(ItemStack::new(14, 2));
+    FurnaceSave {
+        pos,
+        slots,
+        fuel_left_ms: 1234,
+        fuel_full_ms: 80_000,
+        cook_progress_ms: 567,
+    }
+}
+
+/// W467: FROZEN tuple-slotted fixtures for the hand-built v2
+/// envelope (a genuine v2 file stores `(u16, u8)` slots).
+fn populated_chest_v6_at(pos: [i32; 3]) -> ChestSaveV6 {
+    let mut slots: Vec<Option<(u16, u8)>> = vec![None; 27];
+    slots[0] = Some((1, 64));
+    slots[5] = Some((25, 1));
+    ChestSaveV6 { pos, slots }
+}
+
+fn populated_furnace_v6_at(pos: [i32; 3]) -> FurnaceSaveV6 {
     let mut slots: Vec<Option<(u16, u8)>> = vec![None; 3];
     slots[0] = Some((14, 2));
-    FurnaceSave {
+    FurnaceSaveV6 {
         pos,
         slots,
         fuel_left_ms: 1234,
@@ -115,15 +138,17 @@ fn write_v2_containers_file(
     base: &std::path::Path,
     slug: &str,
     dim: &str,
-    chests: Vec<ChestSave>,
-    furnaces: Vec<FurnaceSave>,
+    chests: Vec<ChestSaveV6>,
+    furnaces: Vec<FurnaceSaveV6>,
 ) {
     use serde::{Deserialize, Serialize};
+    // W467: the v2 payload stores tuple slots - build it from the
+    // FROZEN V6 shapes, never the live (stack) structs.
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     struct DimensionContainersV2 {
         pub format_version: u32,
-        pub chests: Vec<ChestSave>,
-        pub furnaces: Vec<FurnaceSave>,
+        pub chests: Vec<ChestSaveV6>,
+        pub furnaces: Vec<FurnaceSaveV6>,
     }
     let v2 = DimensionContainersV2 {
         format_version: 2,
@@ -149,7 +174,8 @@ fn write_v2_containers_file(
 fn containers_v2_to_v3_migration_round_trip() {
     use super::containers::{
         containers_v2_to_v3, containers_v3_to_v4, containers_v4_to_v5,
-        containers_v5_to_v6, read_containers_in_dir_with_registry,
+        containers_v5_to_v6, containers_v6_to_v7,
+        read_containers_in_dir_with_registry,
     };
 
     let tmp = TempDir::new().unwrap();
@@ -157,8 +183,8 @@ fn containers_v2_to_v3_migration_round_trip() {
         tmp.path(),
         SLUG,
         DIM,
-        vec![populated_chest_at([3, 64, 7])],
-        vec![populated_furnace_at([4, 64, 7])],
+        vec![populated_chest_v6_at([3, 64, 7])],
+        vec![populated_furnace_v6_at([4, 64, 7])],
     );
     let mut registry = MigrationRegistry::new();
     registry.register(SaveKind::Containers, 2, 3, containers_v2_to_v3);
@@ -168,12 +194,14 @@ fn containers_v2_to_v3_migration_round_trip() {
     // W143: the live format moved to v5 - chain the production
     // 4 -> 5 arrow so the read reaches the current version.
     registry.register(SaveKind::Containers, 4, 5, containers_v4_to_v5);
-    // W387: chain the production 5 -> 6 arrow (live format is v6).
+    // W387: 5 -> 6 (orientation bytes).
+    registry.register(SaveKind::Containers, 5, 6, containers_v5_to_v6);
+    // W467: chain the production 6 -> 7 arrow (live format is v7).
     registry.register(
         SaveKind::Containers,
-        5,
+        6,
         CONTAINERS_FORMAT_VERSION,
-        containers_v5_to_v6,
+        containers_v6_to_v7,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
@@ -199,8 +227,8 @@ fn containers_v2_to_v3_migration_via_default_registry() {
         tmp.path(),
         SLUG,
         DIM,
-        vec![populated_chest_at([0, 64, 0])],
-        vec![populated_furnace_at([1, 64, 1])],
+        vec![populated_chest_v6_at([0, 64, 0])],
+        vec![populated_furnace_v6_at([1, 64, 1])],
     );
     let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
     assert_eq!(loaded.format_version, CONTAINERS_FORMAT_VERSION);
@@ -215,7 +243,8 @@ fn containers_v2_to_v3_migration_via_default_registry() {
 fn containers_v2_to_v3_preserves_chest_and_furnace_data() {
     use super::containers::{
         containers_v2_to_v3, containers_v3_to_v4, containers_v4_to_v5,
-        containers_v5_to_v6, read_containers_in_dir_with_registry,
+        containers_v5_to_v6, containers_v6_to_v7,
+        read_containers_in_dir_with_registry,
     };
     let tmp = TempDir::new().unwrap();
     write_v2_containers_file(
@@ -223,12 +252,12 @@ fn containers_v2_to_v3_preserves_chest_and_furnace_data() {
         SLUG,
         DIM,
         vec![
-            populated_chest_at([1, 64, 1]),
-            populated_chest_at([2, 64, 2]),
+            populated_chest_v6_at([1, 64, 1]),
+            populated_chest_v6_at([2, 64, 2]),
         ],
         vec![
-            populated_furnace_at([3, 64, 3]),
-            populated_furnace_at([4, 64, 4]),
+            populated_furnace_v6_at([3, 64, 3]),
+            populated_furnace_v6_at([4, 64, 4]),
         ],
     );
     let mut registry = MigrationRegistry::new();
@@ -239,19 +268,21 @@ fn containers_v2_to_v3_preserves_chest_and_furnace_data() {
     // W143: the live format moved to v5 - chain the production
     // 4 -> 5 arrow so the read reaches the current version.
     registry.register(SaveKind::Containers, 4, 5, containers_v4_to_v5);
-    // W387: chain the production 5 -> 6 arrow (live format is v6).
+    // W387: 5 -> 6 (orientation bytes).
+    registry.register(SaveKind::Containers, 5, 6, containers_v5_to_v6);
+    // W467: chain the production 6 -> 7 arrow (live format is v7).
     registry.register(
         SaveKind::Containers,
-        5,
+        6,
         CONTAINERS_FORMAT_VERSION,
-        containers_v5_to_v6,
+        containers_v6_to_v7,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
         .unwrap();
     assert_eq!(loaded.chests.len(), 2);
     assert_eq!(loaded.furnaces.len(), 2);
-    assert_eq!(loaded.chests[0].slots[0], Some((1, 64)));
+    assert_eq!(loaded.chests[0].slots[0], Some(ItemStack::new(1, 64)));
     assert_eq!(loaded.furnaces[0].fuel_left_ms, 1234);
     assert!(loaded.fires.is_empty());
 }

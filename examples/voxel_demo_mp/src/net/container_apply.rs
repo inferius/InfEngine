@@ -38,19 +38,25 @@ pub(crate) fn apply_chest_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::n
             // put it back. The host doesn't yet track per-viewer
             // cursors; a transient local cursor lives for the
             // duration of the apply call.
-            let mut cursor: Option<(u16, u8)> = None;
+            //
+            // W468: `ClientInv` is still tuple-shaped, so the
+            // remote viewer's inventory converts at this edge -
+            // components moving chest -> remote inventory are
+            // dropped here (same loss as pre-W467; the host-side
+            // chest itself keeps its components through every op).
+            let mut cursor: Option<crate::item::ItemStack> = None;
             if let NetRole::Server { inventories, pending_inv_sends, .. } = &mut vx.net
                 && let Some(inv) = inventories.get_mut(client_id)
             {
-                let mut inv_u16: Vec<Option<(u16, u8)>> = inv
+                let mut inv_stacks: Vec<Option<crate::item::ItemStack>> = inv
                     .inventory
                     .iter()
-                    .map(|s| s.map(|(b, c)| (b.0, c)))
+                    .map(|s| s.map(|(b, c)| crate::item::ItemStack::new(b.0, c)))
                     .collect();
                 let action = m.action.to_grid_action();
                 if m.player_side {
                     block::chest::apply_player_action(
-                        &mut inv_u16,
+                        &mut inv_stacks,
                         chest,
                         &mut cursor,
                         action,
@@ -58,16 +64,17 @@ pub(crate) fn apply_chest_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::n
                 } else {
                     block::chest::apply_chest_action(
                         chest,
-                        &mut inv_u16,
+                        &mut inv_stacks,
                         &mut cursor,
                         action,
                     );
                 }
-                for (i, slot) in inv_u16.iter().enumerate() {
+                for (i, slot) in inv_stacks.iter().enumerate() {
                     if i >= inv.inventory.len() {
                         break;
                     }
-                    inv.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                    inv.inventory[i] =
+                        slot.as_ref().map(|st| (BlockId(st.id), st.count));
                 }
                 pending_inv_sends.insert(*client_id);
             }
@@ -111,19 +118,21 @@ pub(crate) fn apply_furnace_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate:
             let Some(furnace) = vx.furnaces.get_mut(&m.pos) else {
                 continue;
             };
-            let mut cursor: Option<(u16, u8)> = None;
+            // W468: same tuple-shaped `ClientInv` edge as the
+            // chest apply above.
+            let mut cursor: Option<crate::item::ItemStack> = None;
             if let NetRole::Server { inventories, pending_inv_sends, .. } = &mut vx.net
                 && let Some(inv) = inventories.get_mut(client_id)
             {
-                let mut inv_u16: Vec<Option<(u16, u8)>> = inv
+                let mut inv_stacks: Vec<Option<crate::item::ItemStack>> = inv
                     .inventory
                     .iter()
-                    .map(|s| s.map(|(b, c)| (b.0, c)))
+                    .map(|s| s.map(|(b, c)| crate::item::ItemStack::new(b.0, c)))
                     .collect();
                 let action = m.action.to_grid_action();
                 if m.player_side {
                     block::furnace::apply_player_action(
-                        &mut inv_u16,
+                        &mut inv_stacks,
                         furnace,
                         &mut cursor,
                         action,
@@ -131,16 +140,17 @@ pub(crate) fn apply_furnace_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate:
                 } else {
                     block::furnace::apply_furnace_action(
                         furnace,
-                        &mut inv_u16,
+                        &mut inv_stacks,
                         &mut cursor,
                         action,
                     );
                 }
-                for (i, slot) in inv_u16.iter().enumerate() {
+                for (i, slot) in inv_stacks.iter().enumerate() {
                     if i >= inv.inventory.len() {
                         break;
                     }
-                    inv.inventory[i] = slot.map(|(b, c)| (BlockId(b), c));
+                    inv.inventory[i] =
+                        slot.as_ref().map(|st| (BlockId(st.id), st.count));
                 }
                 pending_inv_sends.insert(*client_id);
             }
@@ -172,7 +182,14 @@ pub(crate) fn broadcast_chest_state(vx: &mut crate::Voxel, pos: [i32; 3]) {
         let Some(chest) = vx.chests.get(&pos) else {
             return;
         };
-        let slots: Vec<Option<(u16, u8)>> = chest.slots().to_vec();
+        // W468: the wire schema is tuple-shaped - project each
+        // stack down to (id, count). Components stay host-side
+        // until the message schemas carry them.
+        let slots: Vec<Option<(u16, u8)>> = chest
+            .slots()
+            .iter()
+            .map(|s| s.as_ref().map(|st| st.as_tuple()))
+            .collect();
         // Host's `chest_held` is the cursor; on a remote viewer
         // the host doesn't track per-viewer cursors today, so we
         // pass `None` here. The next iteration of W5.3 can
@@ -208,7 +225,12 @@ pub(crate) fn broadcast_furnace_state(vx: &mut crate::Voxel, pos: [i32; 3]) {
             .get(&pos)
             .copied()
             .unwrap_or_default();
-        let slots: Vec<Option<(u16, u8)>> = furnace.slots().to_vec();
+        // W468: tuple-shaped wire projection (see chest broadcast).
+        let slots: Vec<Option<(u16, u8)>> = furnace
+            .slots()
+            .iter()
+            .map(|s| s.as_ref().map(|st| st.as_tuple()))
+            .collect();
         let msg = crate::net::FurnaceStateMsg {
             pos,
             slots,

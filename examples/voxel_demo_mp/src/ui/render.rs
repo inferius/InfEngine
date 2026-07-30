@@ -636,7 +636,8 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // chest panel can flip; we read it back after the closure
         // to clear `chest_open`.
         let mut chest_open_local = chest_open_pos.is_some();
-        let chest_held_snapshot = vx.chest_held;
+        // W467: held cursors are ItemStacks (not Copy) - clone.
+        let chest_held_snapshot = vx.chest_held.clone();
         // Furnace UI snapshot. Same shape as the chest snapshot
         // above, plus a clone of the live runtime triple so the
         // panel can draw the fuel + cook bars.
@@ -651,7 +652,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             .and_then(|p| vx.furnace_runtimes.get(p).copied())
             .unwrap_or_default();
         let mut furnace_open_local = furnace_open_pos.is_some();
-        let furnace_held_snapshot = vx.furnace_held;
+        let furnace_held_snapshot = vx.furnace_held.clone();
         let mut furnace_grid_actions: Vec<(bool, container::ui::GridAction)> = Vec::new();
         let mut furnace_held_local = furnace_held_snapshot;
         // W50.3: 3x3 crafting table snapshot. Local copies that the
@@ -732,7 +733,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             .and_then(|p| vx.brewing_runtimes.get(p).copied())
             .unwrap_or_default();
         let mut brewing_open_local = brewing_open_pos.is_some();
-        let brewing_held_snapshot = vx.brewing_held;
+        let brewing_held_snapshot = vx.brewing_held.clone();
         let mut brewing_held_local = brewing_held_snapshot;
         let mut brewing_grid_actions: Vec<(bool, container::ui::GridAction)> =
             Vec::new();
@@ -749,6 +750,13 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             .iter()
             .map(|s| s.as_ref().map(|st| st.as_tuple()))
             .collect();
+        // W467: stack-shaped inventory snapshot for the panels that
+        // are already stack-native (chest / furnace / brewing).
+        // Draw-only inside the egui closure; the post-egui applies
+        // mutate `vx.inventory` directly so components never take a
+        // tuple detour on those paths.
+        let inv_stack_snapshot: Vec<Option<crate::item::ItemStack>> =
+            vx.inventory.to_vec();
         let mp_role_label: Option<&'static str> = match &vx.net {
             NetRole::Offline => None,
             NetRole::Server { .. } => Some("hosting server"),
@@ -2204,11 +2212,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         .default_size([440.0, 460.0])
                         .show(ctx, |ui| {
                             ui.label("ESC to close - LMB take/place, RMB half/one, Shift+LMB transfer");
-                            if let Some((id, n)) = chest_held_local {
+                            if let Some(held_st) = &chest_held_local {
                                 ui.label(format!(
                                     "Holding: item {} x{}",
-                                    crate::lang::localized_item_name(id),
-                                    n
+                                    crate::lang::localized_item_name(held_st.id),
+                                    held_st.count
                                 ));
                             }
                             ui.separator();
@@ -2229,7 +2237,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                     ui,
                                     &partner_cfg,
                                     partner,
-                                    chest_held_local,
+                                    chest_held_local.as_ref(),
                                     atlas_tex_id,
                                     &icon_uv_resolver,
                                 );
@@ -2251,7 +2259,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 ui,
                                 &chest_cfg,
                                 chest,
-                                chest_held_local,
+                                chest_held_local.as_ref(),
                                 atlas_tex_id,
                                 &icon_uv_resolver,
                             );
@@ -2264,15 +2272,15 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             // on-the-fly Container view so the
                             // generic widget can drive clicks on
                             // it too. The on-screen contents come
-                            // straight from `inv_plain_snapshot`,
+                            // straight from `inv_stack_snapshot`,
                             // mirroring the host's authoritative
                             // inventory at the start of the frame.
                             let mut inv_view =
                                 container::Container::with_size(
-                                    inv_plain_snapshot.len(),
+                                    inv_stack_snapshot.len(),
                                 );
-                            for (i, s) in inv_plain_snapshot.iter().enumerate() {
-                                inv_view.set_slot(i, *s);
+                            for (i, s) in inv_stack_snapshot.iter().enumerate() {
+                                inv_view.set_slot(i, s.clone());
                             }
                             // W56.3: id_salt for the player-inv
                             // grid below the chest grids.
@@ -2287,7 +2295,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 ui,
                                 &inv_cfg,
                                 &inv_view,
-                                chest_held_local,
+                                chest_held_local.as_ref(),
                                 atlas_tex_id,
                                 &icon_uv_resolver,
                             );
@@ -2316,11 +2324,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         .default_size([440.0, 380.0])
                         .show(ctx, |ui| {
                             ui.label("ESC to close - LMB take/place, RMB half/one, Shift+LMB transfer");
-                            if let Some((id, n)) = furnace_held_local {
+                            if let Some(held_st) = &furnace_held_local {
                                 ui.label(format!(
                                     "Holding: item {} x{}",
-                                    crate::lang::localized_item_name(id),
-                                    n,
+                                    crate::lang::localized_item_name(held_st.id),
+                                    held_st.count,
                                 ));
                             }
                             ui.separator();
@@ -2338,7 +2346,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 let mut single = container::Container::with_size(1);
                                 single.set_slot(0, furnace.slot(0));
                                 let acts = container::ui::draw_grid_with_uv(
-                                    ui, &cfg_input, &single, furnace_held_local, atlas_tex_id, &icon_uv_resolver,
+                                    ui, &cfg_input, &single, furnace_held_local.as_ref(), atlas_tex_id, &icon_uv_resolver,
                                 );
                                 for a in acts {
                                     // Remap idx 0 -> furnace
@@ -2379,7 +2387,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 let mut single_f = container::Container::with_size(1);
                                 single_f.set_slot(0, furnace.slot(1));
                                 let acts_f = container::ui::draw_grid_with_uv(
-                                    ui, &cfg_fuel, &single_f, furnace_held_local, atlas_tex_id, &icon_uv_resolver,
+                                    ui, &cfg_fuel, &single_f, furnace_held_local.as_ref(), atlas_tex_id, &icon_uv_resolver,
                                 );
                                 for a in acts_f {
                                     furnace_grid_actions.push((false, remap_action(a, 1)));
@@ -2413,7 +2421,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 let mut single_o = container::Container::with_size(1);
                                 single_o.set_slot(0, furnace.slot(2));
                                 let acts_o = container::ui::draw_grid_with_uv(
-                                    ui, &cfg_out, &single_o, furnace_held_local, atlas_tex_id, &icon_uv_resolver,
+                                    ui, &cfg_out, &single_o, furnace_held_local.as_ref(), atlas_tex_id, &icon_uv_resolver,
                                 );
                                 for a in acts_o {
                                     furnace_grid_actions.push((false, remap_action(a, 2)));
@@ -2422,10 +2430,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             ui.separator();
                             ui.label("Inventory (36)");
                             let mut inv_view = container::Container::with_size(
-                                inv_plain_snapshot.len(),
+                                inv_stack_snapshot.len(),
                             );
-                            for (i, s) in inv_plain_snapshot.iter().enumerate() {
-                                inv_view.set_slot(i, *s);
+                            for (i, s) in inv_stack_snapshot.iter().enumerate() {
+                                inv_view.set_slot(i, s.clone());
                             }
                             let inv_cfg = container::ui::GridConfig {
                                 cols: 9,
@@ -2438,7 +2446,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 ui,
                                 &inv_cfg,
                                 &inv_view,
-                                furnace_held_local,
+                                furnace_held_local.as_ref(),
                                 atlas_tex_id,
                                 &icon_uv_resolver,
                             );
@@ -2523,11 +2531,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             ctx,
                             stand_snapshot: stand,
                             runtime_snapshot: brewing_runtime_snapshot,
-                            inv_plain_snapshot: &inv_plain_snapshot,
+                            inv_stack_snapshot: &inv_stack_snapshot,
                             atlas_tex_id,
                             icon_uv_resolver: &icon_uv_resolver,
                             open_local: &mut brewing_open_local,
-                            held_local: brewing_held_local,
+                            held_local: brewing_held_local.as_ref(),
                             stand_actions_out: &mut brewing_grid_actions,
                         },
                     );
@@ -3795,18 +3803,16 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         if let Some(pos) = vx.brewing_open
             && !brewing_grid_actions.is_empty()
         {
+            // W467: stack-native apply straight against
+            // `vx.inventory` - components ride through every move,
+            // no tuple detour left on this path.
             if let Some(stand) = vx.brewing_stands.get_mut(&pos) {
-                let mut inv_u16: Vec<Option<(u16, u8)>> = vx
-                    .inventory
-                    .iter()
-                    .map(|s| s.as_ref().map(|st| st.as_tuple()))
-                    .collect();
                 for (player_side, action) in brewing_grid_actions {
                     if player_side {
                         // Reuse the generic chest player-side
                         // helper; it's container-agnostic.
                         block::chest::apply_player_action(
-                            &mut inv_u16,
+                            &mut vx.inventory,
                             stand,
                             &mut brewing_held_local,
                             action,
@@ -3814,20 +3820,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     } else {
                         block::chest::apply_chest_action(
                             stand,
-                            &mut inv_u16,
+                            &mut vx.inventory,
                             &mut brewing_held_local,
                             action,
                         );
                     }
-                }
-                for (i, slot) in inv_u16.iter().enumerate() {
-                    if i >= vx.inventory.len() {
-                        break;
-                    }
-                    crate::item::stack::write_tuple_preserving(
-                    &mut vx.inventory[i],
-                    *slot,
-                );
                 }
             }
             vx.brewing_held = brewing_held_local;
@@ -3858,19 +3855,14 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 }
             }
             if let Some(chest) = vx.chests.get_mut(&pos) {
-                // Mirror the actions onto a temp u16-shaped
-                // player-inv buffer so the helpers (which expect
-                // `[Option<(u16, u8)>]`) can mutate freely; then
-                // copy back into the BlockId-shaped real inv.
-                let mut inv_u16: Vec<Option<(u16, u8)>> = vx
-                    .inventory
-                    .iter()
-                    .map(|s| s.as_ref().map(|st| st.as_tuple()))
-                    .collect();
+                // W467: stack-native apply straight against
+                // `vx.inventory` (disjoint field borrows) - a worn
+                // item moved chest <-> inventory keeps its
+                // components without any tuple round trip.
                 for (player_side, action) in chest_grid_actions {
                     if player_side {
                         block::chest::apply_player_action(
-                            &mut inv_u16,
+                            &mut vx.inventory,
                             chest,
                             &mut chest_held_local,
                             action,
@@ -3878,22 +3870,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     } else {
                         block::chest::apply_chest_action(
                             chest,
-                            &mut inv_u16,
+                            &mut vx.inventory,
                             &mut chest_held_local,
                             action,
                         );
                     }
-                }
-                // Copy mutated inv back. Length matches because
-                // we never resize.
-                for (i, slot) in inv_u16.iter().enumerate() {
-                    if i >= vx.inventory.len() {
-                        break;
-                    }
-                    crate::item::stack::write_tuple_preserving(
-                    &mut vx.inventory[i],
-                    *slot,
-                );
                 }
             }
             vx.chest_held = chest_held_local;
@@ -3909,28 +3890,17 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             && !chest_partner_actions.is_empty()
             && let Some(chest) = vx.chests.get_mut(&partner_pos)
         {
-                let mut inv_u16: Vec<Option<(u16, u8)>> = vx
-                    .inventory
-                    .iter()
-                    .map(|s| s.as_ref().map(|st| st.as_tuple()))
-                    .collect();
-                for action in chest_partner_actions {
-                    block::chest::apply_chest_action(
-                        chest,
-                        &mut inv_u16,
-                        &mut vx.chest_held,
-                        action,
-                    );
-                }
-                for (i, slot) in inv_u16.iter().enumerate() {
-                    if i >= vx.inventory.len() {
-                        break;
-                    }
-                    crate::item::stack::write_tuple_preserving(
-                    &mut vx.inventory[i],
-                    *slot,
+            // W467: stack-native, same shape as the main-chest
+            // apply above (disjoint borrows of chests / inventory /
+            // chest_held).
+            for action in chest_partner_actions {
+                block::chest::apply_chest_action(
+                    chest,
+                    &mut vx.inventory,
+                    &mut vx.chest_held,
+                    action,
                 );
-                }
+            }
         }
         // Apply queued furnace-UI actions. Mirrors the chest path
         // but routes through `block::furnace::apply_furnace_action`
@@ -3956,15 +3926,12 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 }
             }
             if let Some(furnace) = vx.furnaces.get_mut(&pos) {
-                let mut inv_u16: Vec<Option<(u16, u8)>> = vx
-                    .inventory
-                    .iter()
-                    .map(|s| s.as_ref().map(|st| st.as_tuple()))
-                    .collect();
+                // W467: stack-native apply against `vx.inventory`
+                // (see the chest apply above).
                 for (player_side, action) in furnace_grid_actions {
                     if player_side {
                         block::furnace::apply_player_action(
-                            &mut inv_u16,
+                            &mut vx.inventory,
                             furnace,
                             &mut furnace_held_local,
                             action,
@@ -3972,20 +3939,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     } else {
                         block::furnace::apply_furnace_action(
                             furnace,
-                            &mut inv_u16,
+                            &mut vx.inventory,
                             &mut furnace_held_local,
                             action,
                         );
                     }
-                }
-                for (i, slot) in inv_u16.iter().enumerate() {
-                    if i >= vx.inventory.len() {
-                        break;
-                    }
-                    crate::item::stack::write_tuple_preserving(
-                    &mut vx.inventory[i],
-                    *slot,
-                );
                 }
             }
             vx.furnace_held = furnace_held_local;

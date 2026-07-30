@@ -577,9 +577,10 @@ fn apply_dim_containers_to_maps(
 ) {
     dw.chests.clear();
     for c in bundle.chests {
+        // W467: ItemStack rows move straight in (components kept).
         let mut row = Container::with_size(c.slots.len());
-        for (i, slot) in c.slots.iter().enumerate() {
-            row.set_slot(i, *slot);
+        for (i, slot) in c.slots.into_iter().enumerate() {
+            row.set_slot(i, slot);
         }
         dw.chests.insert(c.pos, row);
     }
@@ -590,8 +591,8 @@ fn apply_dim_containers_to_maps(
         if f.slots.len() != row.len() {
             row = Container::with_size(f.slots.len());
         }
-        for (i, slot) in f.slots.iter().enumerate() {
-            row.set_slot(i, *slot);
+        for (i, slot) in f.slots.into_iter().enumerate() {
+            row.set_slot(i, slot);
         }
         dw.furnaces.insert(f.pos, row);
         dw.furnace_runtimes.insert(
@@ -631,8 +632,8 @@ fn apply_dim_containers_to_maps(
         if stand.slots.len() != row.len() {
             row = Container::with_size(stand.slots.len());
         }
-        for (i, slot) in stand.slots.iter().enumerate() {
-            row.set_slot(i, *slot);
+        for (i, slot) in stand.slots.into_iter().enumerate() {
+            row.set_slot(i, slot);
         }
         dw.brewing_stands.insert(stand.pos, row);
         dw.brewing_runtimes.insert(

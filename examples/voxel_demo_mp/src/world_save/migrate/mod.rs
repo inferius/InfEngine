@@ -247,6 +247,17 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         6,
         super::containers::containers_v5_to_v6,
     );
+    // W467: v6 -> v7 lifts every chest / furnace / brewing tuple
+    // slot into an `ItemStack` with empty components (the
+    // container-family ItemStack refactor). Old saves reload with
+    // identical contents; components start accruing from the first
+    // v7 save.
+    reg.register(
+        SaveKind::Containers,
+        6,
+        7,
+        super::containers::containers_v6_to_v7,
+    );
     // W137: entities v1 -> v2 adds `carts` + `next_cart_id`
     // (minecart persistence). v1 saves migrate with empty carts.
     reg.register(

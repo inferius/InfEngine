@@ -844,10 +844,11 @@ pub(crate) struct Voxel {
     pub(crate) furnace_state_last_sent_ms: HashMap<[i32; 3], u64>,
     /// Cursor-held stack while the chest UI is open. Mirrors how
     /// the standard inventory UI tracks a half / full stack drag;
-    /// here it's a simple `Option<(item_id, count)>` because the
-    /// chest panel uses the generic `container::ui::draw_grid`
-    /// click-and-drop flow rather than the legacy DnD widget.
-    pub(crate) chest_held: Option<(u16, u8)>,
+    /// W467: a full `ItemStack` so components ride on the cursor
+    /// between chest and inventory slots. The chest panel uses the
+    /// generic `container::ui::draw_grid` click-and-drop flow
+    /// rather than the legacy DnD widget.
+    pub(crate) chest_held: Option<crate::item::ItemStack>,
     /// Per-furnace 3-slot container state (input / fuel / output),
     /// keyed by absolute world voxel coords. Parallel to `chests`.
     /// Entries are inserted on place + removed on break (after the
@@ -882,7 +883,7 @@ pub(crate) struct Voxel {
     pub(crate) furnace_open: Option<[i32; 3]>,
     /// Cursor-held stack while the furnace UI is open. Mirrors
     /// `chest_held`.
-    pub(crate) furnace_held: Option<(u16, u8)>,
+    pub(crate) furnace_held: Option<crate::item::ItemStack>,
     /// W50.3: position of the crafting_table block the player has
     /// open. `None` means no 3x3 panel is visible. Client-side only -
     /// crafting tables aren't shared server state.
@@ -934,7 +935,8 @@ pub(crate) struct Voxel {
     /// W50.5: position of the brewing stand the player has open.
     pub(crate) brewing_open: Option<[i32; 3]>,
     /// W50.5: cursor-held stack while the brewing UI is open.
-    pub(crate) brewing_held: Option<(u16, u8)>,
+    /// Mirrors `chest_held` (stack-typed since W467).
+    pub(crate) brewing_held: Option<crate::item::ItemStack>,
     /// W61.2: open-door positions. Stored as the LOWER-half voxel
     /// pos so two halves share one entry. RMB toggles via
     /// `block::door::toggle_door`; the render path checks via

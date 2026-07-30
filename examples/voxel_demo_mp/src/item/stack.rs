@@ -3,16 +3,12 @@
 //! W466 adds the MC-style `ItemStack` model: `id + count +
 //! components` where `components` carries per-stack state (damage,
 //! future enchants / custom names). The player inventory holds
-//! `Option<ItemStack>` slots; everything outside the inventory core
-//! (containers, drops, net messages, trades) still moves plain
-//! `(u16, u8)` tuples in W466 and converts at the boundary via
-//! `from_tuple` / `as_tuple` - the W467/W468 waves push the stack
-//! type outward.
-//!
-//! The tuple-typed arithmetic helpers below (`merge_into`,
-//! `split_half`, `take_n`, `drop_into_first_free`) predate the
-//! stack type and still serve the container/chest code, which is
-//! tuple-shaped until W467.
+//! `Option<ItemStack>` slots; W467 pushes the stack type into the
+//! container family (chests / furnaces / brewing stands), so the
+//! arithmetic helpers below are stack-typed. What still moves plain
+//! `(u16, u8)` tuples - drops, net messages, trades, the craft
+//! grids - converts at the boundary via `from_tuple` / `as_tuple`
+//! until the W468 wave carries components through those edges too.
 
 use serde::{Deserialize, Serialize};
 
@@ -75,16 +71,26 @@ impl ItemStack {
     }
 
     /// Lift a plain `(id, count)` tuple into a stack with empty
-    /// components. The W466 boundary conversion for containers /
-    /// drops / net messages that still move tuples.
+    /// components. The boundary conversion for drops / net
+    /// messages that still move tuples (W468 scope).
     pub(crate) fn from_tuple((id, count): (u16, u8)) -> Self {
         Self::new(id, count)
     }
 
     /// Project the stack down to a plain `(id, count)` tuple -
-    /// drops the components. The other half of the W466 boundary.
+    /// drops the components. The other half of the boundary.
     pub(crate) fn as_tuple(&self) -> (u16, u8) {
         (self.id, self.count)
+    }
+
+    /// Clone of this stack with a different count. The standard
+    /// way to split / decrement without touching components.
+    pub(crate) fn with_count(&self, count: u8) -> Self {
+        Self {
+            id: self.id,
+            count,
+            components: self.components.clone(),
+        }
     }
 
     /// True when `other` can merge into this stack: equal id AND
@@ -122,49 +128,54 @@ pub(crate) fn write_tuple_preserving(
 
 /// Merge `incoming` into `slot` up to the destination item's
 /// `max_stack`. Returns the leftover count that couldn't fit (0 when
-/// the merge was complete).
+/// the merge was complete). The leftover conceptually keeps
+/// `incoming`'s components - only the count comes back, the caller
+/// still holds the incoming stack.
 ///
-/// Rules:
-/// - Empty slot accepts up to `max_stack`; the rest is leftover.
-/// - Same-item slot tops up to `max_stack`; the rest is leftover.
-/// - Different-item slot rejects the whole stack; full count is
-///   leftover and the slot is untouched.
-pub(crate) fn merge_into(
-    slot: &mut Option<(u16, u8)>,
-    incoming: (u16, u8),
+/// Rules (W467 components-aware lift of the old tuple `merge_into`):
+/// - Empty slot adopts the incoming stack - components included -
+///   up to `max_stack`; the rest is leftover.
+/// - A `same_stackable` slot (equal id AND equal components) tops
+///   up to `max_stack`; the rest is leftover.
+/// - Any other slot (different id OR different components - a worn
+///   tool never merges into a fresh one) rejects the whole stack;
+///   full count is leftover and the slot is untouched.
+pub(crate) fn merge_into_stacks(
+    slot: &mut Option<ItemStack>,
+    incoming: ItemStack,
 ) -> u8 {
-    let (id, count) = incoming;
-    if count == 0 {
+    if incoming.count == 0 {
         return 0;
     }
-    let cap = item_max_stack(id);
+    let cap = item_max_stack(incoming.id);
     match slot {
         None => {
-            let take = count.min(cap);
-            *slot = Some((id, take));
-            count - take
+            let take = incoming.count.min(cap);
+            let leftover = incoming.count - take;
+            *slot = Some(incoming.with_count(take));
+            leftover
         }
-        Some((sid, scount)) if *sid == id => {
-            let room = cap.saturating_sub(*scount);
-            let take = count.min(room);
-            *scount += take;
-            count - take
+        Some(st) if st.same_stackable(&incoming) => {
+            let room = cap.saturating_sub(st.count);
+            let take = incoming.count.min(room);
+            st.count += take;
+            incoming.count - take
         }
-        Some(_) => count,
+        Some(_) => incoming.count,
     }
 }
 
 /// Split a slot's stack in half. Returns the moved-out half (the
 /// smaller half on odd counts - leaves the larger half in the
-/// source slot so a misclick doesn't punish the player). Leaves
-/// the slot with the remainder, or `None` if the original count
-/// was 1 (in which case the lone item is moved and the slot
-/// clears).
-pub(crate) fn split_half(
-    slot: &mut Option<(u16, u8)>,
-) -> Option<(u16, u8)> {
-    let (id, count) = (*slot)?;
-    if count == 0 {
+/// source slot so a misclick doesn't punish the player). Both
+/// halves keep the stack's components (cloned). Leaves the slot
+/// with the remainder, or `None` if the original count was 1 (in
+/// which case the lone item is moved and the slot clears).
+pub(crate) fn split_half_stacks(
+    slot: &mut Option<ItemStack>,
+) -> Option<ItemStack> {
+    let st = slot.as_ref()?.clone();
+    if st.count == 0 {
         *slot = None;
         return None;
     }
@@ -172,68 +183,73 @@ pub(crate) fn split_half(
     // is a degenerate "no split possible" - treat as moving the
     // lone item so the slot clears (matches the "singleton clears"
     // test contract).
-    let moved = if count == 1 { 1 } else { count / 2 };
-    let remaining = count - moved;
+    let moved = if st.count == 1 { 1 } else { st.count / 2 };
+    let remaining = st.count - moved;
     if remaining == 0 {
         *slot = None;
     } else {
-        *slot = Some((id, remaining));
+        *slot = Some(st.with_count(remaining));
     }
-    Some((id, moved))
+    Some(st.with_count(moved))
 }
 
 /// Take exactly `n` items from a slot. Returns `None` (and leaves
 /// the slot untouched) if the slot has fewer than `n`, or if it's
 /// empty. The slot is cleared to `None` when the take exhausts it.
-pub(crate) fn take_n(
-    slot: &mut Option<(u16, u8)>,
+/// The taken part clones the slot's components (a half-taken worn
+/// stack is worn on both sides).
+pub(crate) fn take_n_stacks(
+    slot: &mut Option<ItemStack>,
     n: u8,
-) -> Option<(u16, u8)> {
+) -> Option<ItemStack> {
     if n == 0 {
         return None;
     }
-    let (id, count) = (*slot)?;
-    if count < n {
+    let st = slot.as_ref()?.clone();
+    if st.count < n {
         return None;
     }
-    let remaining = count - n;
+    let remaining = st.count - n;
     if remaining == 0 {
         *slot = None;
     } else {
-        *slot = Some((id, remaining));
+        *slot = Some(st.with_count(remaining));
     }
-    Some((id, n))
+    Some(st.with_count(n))
 }
 
-/// Drop a stack into the inventory: top up matching non-full slots
-/// first (cheapest move + keeps slot count low), then fall back to
-/// the first empty slot. Returns the leftover count - 0 when the
-/// whole stack landed, otherwise the surplus the caller has to spill
-/// (drop on the floor, refuse the action, ...).
+/// Drop a stack into the inventory: top up `same_stackable` non-full
+/// slots first (cheapest move + keeps slot count low), then fall
+/// back to empty slots, each fresh slot cloning the incoming
+/// components. Returns the leftover count - 0 when the whole stack
+/// landed, otherwise the surplus the caller has to spill (drop on
+/// the floor, refuse the action, ...).
 ///
 /// Mirrors the two-pass behaviour of `inventory::inv_pickup` but is
-/// typed for `(u16, u8)` and honours the item's per-id `max_stack`.
-pub(crate) fn drop_into_first_free(
-    inv: &mut [Option<(u16, u8)>],
-    item: (u16, u8),
+/// stack-typed and honours the item's per-id `max_stack`. The
+/// component rule means a worn tool passing through here never
+/// count-merges into a fresh one - it claims its own slot.
+pub(crate) fn drop_into_first_free_stacks(
+    inv: &mut [Option<ItemStack>],
+    item: ItemStack,
 ) -> u8 {
-    let (id, mut remaining) = item;
+    let mut remaining = item.count;
     if remaining == 0 {
         return 0;
     }
-    let cap = item_max_stack(id);
-    // Pass 1: top up existing same-item stacks.
+    let cap = item_max_stack(item.id);
+    // Pass 1: top up existing same-stackable stacks.
     for slot in inv.iter_mut() {
         if remaining == 0 {
             return 0;
         }
-        if let Some((sid, scount)) = slot.as_mut()
-            && *sid == id
-            && *scount < cap
+        if let Some(st) = slot.as_mut()
+            && st.same_stackable(&item)
+            && st.count < cap
         {
-            let room = cap - *scount;
+            let room = cap - st.count;
             let take = remaining.min(room);
-            *scount += take;
+            st.count += take;
             remaining -= take;
         }
     }
@@ -246,7 +262,7 @@ pub(crate) fn drop_into_first_free(
         }
         if slot.is_none() {
             let take = remaining.min(cap);
-            *slot = Some((id, take));
+            *slot = Some(item.with_count(take));
             remaining -= take;
         }
     }
@@ -256,6 +272,13 @@ pub(crate) fn drop_into_first_free(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shorthand: a worn variant of `ItemStack::new`.
+    fn worn(id: u16, count: u8, damage: u16) -> ItemStack {
+        let mut st = ItemStack::new(id, count);
+        st.components.damage = damage;
+        st
+    }
 
     #[test]
     fn components_default_is_empty() {
@@ -294,25 +317,14 @@ mod tests {
         // Different id -> never.
         assert!(!plain_a.same_stackable(&ItemStack::new(8, 10)));
         // Same id, one worn -> not mergeable.
-        let mut worn = ItemStack::new(7, 1);
-        worn.components.damage = 5;
-        assert!(!plain_a.same_stackable(&worn));
+        assert!(!plain_a.same_stackable(&worn(7, 1, 5)));
         // Two stacks worn by the SAME amount -> mergeable.
-        let mut worn_b = ItemStack::new(7, 1);
-        worn_b.components.damage = 5;
-        assert!(worn.same_stackable(&worn_b));
+        assert!(worn(7, 1, 5).same_stackable(&worn(7, 3, 5)));
     }
 
     #[test]
     fn write_tuple_preserving_keeps_components_on_same_id() {
-        let mut slot = Some(ItemStack {
-            id: 48,
-            count: 1,
-            components: ItemComponents {
-                damage: 20,
-                ..Default::default()
-            },
-        });
+        let mut slot = Some(worn(48, 1, 20));
         // Count-only change keeps the damage.
         write_tuple_preserving(&mut slot, Some((48, 1)));
         assert_eq!(slot.as_ref().unwrap().components.damage, 20);
@@ -328,30 +340,119 @@ mod tests {
     }
 
     #[test]
-    fn merge_into_zero_incoming_is_noop() {
+    fn merge_into_stacks_zero_incoming_is_noop() {
         let mut slot = None;
-        assert_eq!(merge_into(&mut slot, (3, 0)), 0);
+        assert_eq!(merge_into_stacks(&mut slot, ItemStack::new(3, 0)), 0);
         assert!(slot.is_none());
     }
 
     #[test]
-    fn split_half_singleton_clears_slot() {
-        let mut slot = Some((3, 1));
-        assert_eq!(split_half(&mut slot), Some((3, 1)));
+    fn merge_into_stacks_empty_slot_adopts_components() {
+        let mut slot: Option<ItemStack> = None;
+        let leftover = merge_into_stacks(&mut slot, worn(48, 1, 9));
+        assert_eq!(leftover, 0);
+        assert_eq!(slot, Some(worn(48, 1, 9)));
+    }
+
+    #[test]
+    fn merge_into_stacks_requires_same_stackable() {
+        // Fresh incoming onto a worn slot: full reject, slot
+        // untouched (a worn tool never merges into a fresh one).
+        let mut slot = Some(worn(7, 4, 5));
+        let leftover = merge_into_stacks(&mut slot, ItemStack::new(7, 3));
+        assert_eq!(leftover, 3);
+        assert_eq!(slot, Some(worn(7, 4, 5)));
+        // Equal-components incoming tops up.
+        let leftover = merge_into_stacks(&mut slot, worn(7, 3, 5));
+        assert_eq!(leftover, 0);
+        assert_eq!(slot, Some(worn(7, 7, 5)));
+    }
+
+    #[test]
+    fn merge_into_stacks_tops_up_to_cap() {
+        let mut slot = Some(ItemStack::new(3, 60));
+        let leftover = merge_into_stacks(&mut slot, ItemStack::new(3, 10));
+        assert_eq!(leftover, 6);
+        assert_eq!(slot, Some(ItemStack::new(3, 64)));
+        // Different item stays fully rejected.
+        let leftover = merge_into_stacks(&mut slot, ItemStack::new(2, 20));
+        assert_eq!(leftover, 20);
+    }
+
+    #[test]
+    fn split_half_stacks_singleton_clears_slot() {
+        let mut slot = Some(ItemStack::new(3, 1));
+        assert_eq!(split_half_stacks(&mut slot), Some(ItemStack::new(3, 1)));
         assert!(slot.is_none());
     }
 
     #[test]
-    fn take_n_zero_returns_none() {
-        let mut slot = Some((3, 5));
-        assert!(take_n(&mut slot, 0).is_none());
-        assert_eq!(slot, Some((3, 5)));
+    fn split_half_stacks_clones_components_to_both_halves() {
+        let mut slot = Some(worn(9, 7, 12));
+        let moved = split_half_stacks(&mut slot);
+        // floor(7/2) = 3 moved; 4 stays. Both worn by 12.
+        assert_eq!(moved, Some(worn(9, 3, 12)));
+        assert_eq!(slot, Some(worn(9, 4, 12)));
+        // Empty slot -> None.
+        let mut empty: Option<ItemStack> = None;
+        assert!(split_half_stacks(&mut empty).is_none());
     }
 
     #[test]
-    fn take_n_exact_clears_slot() {
-        let mut slot = Some((3, 5));
-        assert_eq!(take_n(&mut slot, 5), Some((3, 5)));
+    fn take_n_stacks_zero_returns_none() {
+        let mut slot = Some(ItemStack::new(3, 5));
+        assert!(take_n_stacks(&mut slot, 0).is_none());
+        assert_eq!(slot, Some(ItemStack::new(3, 5)));
+    }
+
+    #[test]
+    fn take_n_stacks_exact_clears_slot() {
+        let mut slot = Some(ItemStack::new(3, 5));
+        assert_eq!(take_n_stacks(&mut slot, 5), Some(ItemStack::new(3, 5)));
         assert!(slot.is_none());
+    }
+
+    #[test]
+    fn take_n_stacks_clones_components_to_both_parts() {
+        let mut slot = Some(worn(9, 6, 3));
+        let taken = take_n_stacks(&mut slot, 2);
+        assert_eq!(taken, Some(worn(9, 2, 3)));
+        assert_eq!(slot, Some(worn(9, 4, 3)));
+        // Too many -> None, slot untouched.
+        assert!(take_n_stacks(&mut slot, 10).is_none());
+        assert_eq!(slot, Some(worn(9, 4, 3)));
+    }
+
+    #[test]
+    fn drop_into_first_free_stacks_tops_up_then_claims_empty() {
+        let mut inv: Vec<Option<ItemStack>> =
+            vec![Some(ItemStack::new(3, 62)), None, None];
+        let leftover =
+            drop_into_first_free_stacks(&mut inv, ItemStack::new(3, 10));
+        assert_eq!(leftover, 0);
+        assert_eq!(inv[0], Some(ItemStack::new(3, 64)));
+        assert_eq!(inv[1], Some(ItemStack::new(3, 8)));
+        assert_eq!(inv[2], None);
+    }
+
+    #[test]
+    fn drop_into_first_free_stacks_worn_never_merges_into_fresh() {
+        let mut inv: Vec<Option<ItemStack>> =
+            vec![Some(ItemStack::new(48, 1)), None];
+        let leftover = drop_into_first_free_stacks(&mut inv, worn(48, 1, 7));
+        assert_eq!(leftover, 0);
+        // Fresh stack untouched; worn stack claimed the empty slot
+        // with its components intact.
+        assert_eq!(inv[0], Some(ItemStack::new(48, 1)));
+        assert_eq!(inv[1], Some(worn(48, 1, 7)));
+    }
+
+    #[test]
+    fn drop_into_first_free_stacks_leftover_when_full() {
+        let mut inv: Vec<Option<ItemStack>> = vec![Some(ItemStack::new(2, 64))];
+        let leftover =
+            drop_into_first_free_stacks(&mut inv, ItemStack::new(4, 5));
+        assert_eq!(leftover, 5);
+        assert_eq!(inv[0], Some(ItemStack::new(2, 64)));
     }
 }

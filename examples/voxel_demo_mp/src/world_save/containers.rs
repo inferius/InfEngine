@@ -65,7 +65,17 @@ pub(crate) const CONTAINERS_MAGIC: &[u8; 4] = b"INFB";
 ///   re-bent) on load. Migration v4 -> v5 lives in
 ///   `containers_v4_to_v5`; legacy rails backfill from the old
 ///   derivation on first remesh.
-pub(crate) const CONTAINERS_FORMAT_VERSION: u32 = 6;
+/// - v6 (W387): + the four orientation-byte vecs (`stairs`, `beds`,
+///   `torch_orients`, `spawners`) - per-pos state that disk-loaded
+///   chunks can never re-derive because their worldgen is skipped.
+///   Migration v5 -> v6 lives in `containers_v5_to_v6`.
+/// - v7 (W467): chest / furnace / brewing slot vecs move from
+///   `Option<(u16, u8)>` tuples to full `Option<ItemStack>` rows
+///   (id + count + components) so container contents keep damage /
+///   enchants / names across a reload. Migration v6 -> v7 lives in
+///   `containers_v6_to_v7`; tuple slots lift to stacks with empty
+///   components (identical to every pre-W467 reload).
+pub(crate) const CONTAINERS_FORMAT_VERSION: u32 = 7;
 
 /// Default zstd compression level. Matches the sibling save modules.
 const ZSTD_LEVEL: i32 = 3;
@@ -189,13 +199,14 @@ pub(crate) struct FacingSave {
 }
 
 /// W138 (v4): one persistent brewing stand (5 slots + progress).
+/// v7 (W467): slots carry full `ItemStack` rows.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct BrewingSave {
     /// Absolute world voxel coords of the stand block.
     pub pos: [i32; 3],
     /// Slot contents in slot-index order (ingredient, fuel, 3
     /// bottles - the length is recorded so the layout can grow).
-    pub slots: Vec<Option<(u16, u8)>>,
+    pub slots: Vec<Option<crate::item::ItemStack>>,
     /// Accumulated brew progress in milliseconds.
     pub progress_ms: u32,
 }
@@ -203,16 +214,16 @@ pub(crate) struct BrewingSave {
 /// One persistent chest entry.
 ///
 /// `slots` is the chest's slot vec, in slot-index order. Each
-/// entry is `Some((item_id, count))` or `None` for empty. The
-/// length is recorded per-chest so a future double-chest variant
-/// can ship with 54 slots without touching the schema for existing
-/// 27-slot saves.
+/// entry is `Some(ItemStack)` (id + count + components since v7 /
+/// W467) or `None` for empty. The length is recorded per-chest so
+/// a future double-chest variant can ship with 54 slots without
+/// touching the schema for existing 27-slot saves.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct ChestSave {
     /// Absolute world voxel coords of the chest block.
     pub pos: [i32; 3],
     /// Slot contents in slot-index order.
-    pub slots: Vec<Option<(u16, u8)>>,
+    pub slots: Vec<Option<crate::item::ItemStack>>,
 }
 
 /// One persistent fire entry. Q.4f.
@@ -236,14 +247,14 @@ pub(crate) struct FireSave {
 /// (input / fuel / output) and the live runtime triple. The slot
 /// vec keeps its `Vec<Option<...>>` shape so a future "blast
 /// furnace" variant can ship with more slots without touching the
-/// schema.
+/// schema. v7 (W467): slots carry full `ItemStack` rows.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct FurnaceSave {
     /// Absolute world voxel coords of the furnace block.
     pub pos: [i32; 3],
     /// Slot contents in slot-index order: 0 = input, 1 = fuel,
     /// 2 = output.
-    pub slots: Vec<Option<(u16, u8)>>,
+    pub slots: Vec<Option<crate::item::ItemStack>>,
     /// Remaining burn time on the current fuel item, in
     /// milliseconds.
     pub fuel_left_ms: u32,
@@ -473,8 +484,39 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 }
 
 // ---------------------------------------------------------------
-// Migration: v1 -> v2 (adds the `furnaces` field).
+// Frozen v1..v6 shapes (used only by the migration arrows).
 // ---------------------------------------------------------------
+
+/// FROZEN tuple-slotted chest row - the on-disk shape shared by
+/// every payload version v1..v6. W467 moved the LIVE `ChestSave`
+/// to `ItemStack` slots, so the old arrows must decode/encode this
+/// frozen copy (bincode is positional; decoding a tuple payload
+/// with the stack-shaped struct would corrupt it).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct ChestSaveV6 {
+    pub pos: [i32; 3],
+    pub slots: Vec<Option<(u16, u8)>>,
+}
+
+/// FROZEN tuple-slotted furnace row (payload versions v2..v6).
+/// See `ChestSaveV6` for the freeze rationale.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct FurnaceSaveV6 {
+    pub pos: [i32; 3],
+    pub slots: Vec<Option<(u16, u8)>>,
+    pub fuel_left_ms: u32,
+    pub fuel_full_ms: u32,
+    pub cook_progress_ms: u32,
+}
+
+/// FROZEN tuple-slotted brewing row (payload versions v4..v6).
+/// See `ChestSaveV6` for the freeze rationale.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct BrewingSaveV6 {
+    pub pos: [i32; 3],
+    pub slots: Vec<Option<(u16, u8)>>,
+    pub progress_ms: u32,
+}
 
 /// V1 on-disk shape (chest-slots only). Decoded just long enough
 /// to convert into the v2 shape during migration; never used at
@@ -482,7 +524,7 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct DimensionContainersV1 {
     pub format_version: u32,
-    pub chests: Vec<ChestSave>,
+    pub chests: Vec<ChestSaveV6>,
 }
 
 /// V2 on-disk shape (chests + furnaces). Decoded just long enough
@@ -491,8 +533,8 @@ struct DimensionContainersV1 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct DimensionContainersV2 {
     pub format_version: u32,
-    pub chests: Vec<ChestSave>,
-    pub furnaces: Vec<FurnaceSave>,
+    pub chests: Vec<ChestSaveV6>,
+    pub furnaces: Vec<FurnaceSaveV6>,
 }
 
 /// V3 on-disk shape (+ fires). Decoded just long enough to convert
@@ -500,8 +542,8 @@ struct DimensionContainersV2 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct DimensionContainersV3 {
     pub format_version: u32,
-    pub chests: Vec<ChestSave>,
-    pub furnaces: Vec<FurnaceSave>,
+    pub chests: Vec<ChestSaveV6>,
+    pub furnaces: Vec<FurnaceSaveV6>,
     pub fires: Vec<FireSave>,
 }
 
@@ -511,12 +553,12 @@ struct DimensionContainersV3 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct DimensionContainersV4 {
     pub format_version: u32,
-    pub chests: Vec<ChestSave>,
-    pub furnaces: Vec<FurnaceSave>,
+    pub chests: Vec<ChestSaveV6>,
+    pub furnaces: Vec<FurnaceSaveV6>,
     pub fires: Vec<FireSave>,
     pub doors: Vec<DoorSave>,
     pub chest_facings: Vec<FacingSave>,
-    pub brewing: Vec<BrewingSave>,
+    pub brewing: Vec<BrewingSaveV6>,
     pub levers_on: Vec<[i32; 3]>,
 }
 
@@ -823,14 +865,38 @@ pub(crate) fn containers_v4_to_v5(bytes: &[u8]) -> io::Result<Vec<u8>> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct DimensionContainersV5 {
     pub format_version: u32,
-    pub chests: Vec<ChestSave>,
-    pub furnaces: Vec<FurnaceSave>,
+    pub chests: Vec<ChestSaveV6>,
+    pub furnaces: Vec<FurnaceSaveV6>,
     pub fires: Vec<FireSave>,
     pub doors: Vec<DoorSave>,
     pub chest_facings: Vec<FacingSave>,
-    pub brewing: Vec<BrewingSave>,
+    pub brewing: Vec<BrewingSaveV6>,
     pub levers_on: Vec<[i32; 3]>,
     pub rails: Vec<RailShapeSave>,
+}
+
+/// V6 on-disk shape (+ orientation bytes, still tuple slots).
+/// FROZEN: the live struct moved on to v7 (`ItemStack` slots); the
+/// v5 -> v6 and v6 -> v7 arrows must encode/decode exactly this
+/// shape. The slot-free sub-structs (fires / doors / facings /
+/// levers / rails / pos-state) reuse the live types per the local
+/// precedent - they are byte-identical across v4..v7; the wave
+/// that reshapes one of them must freeze it then.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct DimensionContainersV6 {
+    pub format_version: u32,
+    pub chests: Vec<ChestSaveV6>,
+    pub furnaces: Vec<FurnaceSaveV6>,
+    pub fires: Vec<FireSave>,
+    pub doors: Vec<DoorSave>,
+    pub chest_facings: Vec<FacingSave>,
+    pub brewing: Vec<BrewingSaveV6>,
+    pub levers_on: Vec<[i32; 3]>,
+    pub rails: Vec<RailShapeSave>,
+    pub stairs: Vec<PosStateSave>,
+    pub beds: Vec<PosStateSave>,
+    pub torch_orients: Vec<PosStateSave>,
+    pub spawners: Vec<PosStateSave>,
 }
 
 /// W387: v5 -> v6 migration arrow - adds the four orientation-byte
@@ -874,7 +940,10 @@ pub(crate) fn containers_v5_to_v6(bytes: &[u8]) -> io::Result<Vec<u8>> {
         &raw_v5, cfg,
     )
     .map_err(|err| invalid(format!("v5 payload decode failed: {err}")))?;
-    let v6 = DimensionContainers {
+    // W467: encode the FROZEN V6 shape - the live struct moved on
+    // to v7 (ItemStack slots) and would poison this arrow's
+    // payload.
+    let v6 = DimensionContainersV6 {
         format_version: 6,
         chests: v5.chests,
         furnaces: v5.furnaces,
@@ -908,6 +977,114 @@ pub(crate) fn containers_v5_to_v6(bytes: &[u8]) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
+/// W467: v6 -> v7 migration arrow - lifts every tuple slot in the
+/// chest / furnace / brewing rows into an `ItemStack` with empty
+/// components (identical contents to every pre-W467 reload; the
+/// old format simply never stored components). Same wire steps as
+/// `containers_v1_to_v2`. Decodes the FROZEN `DimensionContainersV6`
+/// and encodes the live struct - when a v8 lands, this arrow must
+/// switch to a frozen V7 copy.
+pub(crate) fn containers_v6_to_v7(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < 17 {
+        return Err(invalid("containers v6 envelope truncated"));
+    }
+    if &bytes[..4] != CONTAINERS_MAGIC {
+        return Err(invalid("containers v6 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 6 {
+        return Err(invalid(format!(
+            "containers_v6_to_v7 expected v6, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14],
+        bytes[15], bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+    let raw_v6: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("v6 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown v6 compression kind {other} during migration"
+            )));
+        }
+    };
+    let cfg = bincode::config::standard();
+    let (v6, _read) = bincode::serde::decode_from_slice::<DimensionContainersV6, _>(
+        &raw_v6, cfg,
+    )
+    .map_err(|err| invalid(format!("v6 payload decode failed: {err}")))?;
+    // Lift: tuple slot -> ItemStack with empty components.
+    let lift = |slots: Vec<Option<(u16, u8)>>| -> Vec<Option<crate::item::ItemStack>> {
+        slots
+            .into_iter()
+            .map(|s| s.map(crate::item::ItemStack::from_tuple))
+            .collect()
+    };
+    let v7 = DimensionContainers {
+        format_version: 7,
+        chests: v6
+            .chests
+            .into_iter()
+            .map(|c| ChestSave { pos: c.pos, slots: lift(c.slots) })
+            .collect(),
+        furnaces: v6
+            .furnaces
+            .into_iter()
+            .map(|f| FurnaceSave {
+                pos: f.pos,
+                slots: lift(f.slots),
+                fuel_left_ms: f.fuel_left_ms,
+                fuel_full_ms: f.fuel_full_ms,
+                cook_progress_ms: f.cook_progress_ms,
+            })
+            .collect(),
+        fires: v6.fires,
+        doors: v6.doors,
+        chest_facings: v6.chest_facings,
+        brewing: v6
+            .brewing
+            .into_iter()
+            .map(|b| BrewingSave {
+                pos: b.pos,
+                slots: lift(b.slots),
+                progress_ms: b.progress_ms,
+            })
+            .collect(),
+        levers_on: v6.levers_on,
+        rails: v6.rails,
+        stairs: v6.stairs,
+        beds: v6.beds,
+        torch_orients: v6.torch_orients,
+        spawners: v6.spawners,
+    };
+    let raw_v7 = bincode::serde::encode_to_vec(&v7, cfg)
+        .map_err(|err| invalid(format!("v7 payload encode failed: {err}")))?;
+    let uncompressed_len_v7 = raw_v7.len() as u64;
+    let (kind_v7, body_v7): (u8, Vec<u8>) =
+        match zstd::encode_all(&raw_v7[..], ZSTD_LEVEL) {
+            Ok(compressed) if compressed.len() < raw_v7.len() => {
+                (COMP_ZSTD, compressed)
+            }
+            _ => (COMP_NONE, raw_v7),
+        };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v7.len() + 17);
+    out.extend_from_slice(CONTAINERS_MAGIC);
+    out.extend_from_slice(&7u32.to_le_bytes());
+    out.push(kind_v7);
+    out.extend_from_slice(&uncompressed_len_v7.to_le_bytes());
+    out.extend_from_slice(&body_v7);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -938,12 +1115,13 @@ mod tests {
     }
 
     /// W387: a frozen v5 envelope migrates to v6 with empty
-    /// orientation vecs and intact v5 payload.
+    /// orientation vecs and intact v5 payload. W467: the arrow now
+    /// encodes the FROZEN V6 shape (live moved to v7).
     #[test]
     fn v5_envelope_migrates_to_v6() {
         let v5 = DimensionContainersV5 {
             format_version: 5,
-            chests: vec![ChestSave {
+            chests: vec![ChestSaveV6 {
                 pos: [1, 2, 3],
                 slots: vec![None, Some((4, 5))],
             }],
@@ -980,7 +1158,7 @@ mod tests {
         } else {
             body.to_vec()
         };
-        let (v6, _) = bincode::serde::decode_from_slice::<DimensionContainers, _>(
+        let (v6, _) = bincode::serde::decode_from_slice::<DimensionContainersV6, _>(
             &raw2,
             cfg,
         )
@@ -990,6 +1168,116 @@ mod tests {
         assert_eq!(v6.rails.len(), 1);
         assert!(v6.stairs.is_empty());
         assert!(v6.beds.is_empty());
+    }
+
+    /// W467: a hand-built frozen v6 envelope migrates to v7 with
+    /// every tuple slot lifted to an `ItemStack` with empty
+    /// components, and the furnace runtime triple + brewing
+    /// progress preserved.
+    #[test]
+    fn v6_envelope_migrates_to_v7() {
+        let v6 = DimensionContainersV6 {
+            format_version: 6,
+            chests: vec![ChestSaveV6 {
+                pos: [1, 2, 3],
+                slots: vec![None, Some((4, 5)), Some((48, 1))],
+            }],
+            furnaces: vec![FurnaceSaveV6 {
+                pos: [4, 5, 6],
+                slots: vec![Some((14, 2)), Some((13, 1)), None],
+                fuel_left_ms: 12_345,
+                fuel_full_ms: 80_000,
+                cook_progress_ms: 4_321,
+            }],
+            fires: vec![FireSave { pos: [7, 8, 9], age: 3 }],
+            doors: Vec::new(),
+            chest_facings: Vec::new(),
+            brewing: vec![BrewingSaveV6 {
+                pos: [10, 11, 12],
+                slots: vec![Some((700, 1)), None, Some((701, 1)), None, None],
+                progress_ms: 5_500,
+            }],
+            levers_on: vec![[9, 9, 9]],
+            rails: Vec::new(),
+            stairs: vec![PosStateSave { pos: [1, 1, 1], state: 7 }],
+            beds: Vec::new(),
+            torch_orients: Vec::new(),
+            spawners: Vec::new(),
+        };
+        let cfg = bincode::config::standard();
+        let raw = bincode::serde::encode_to_vec(&v6, cfg).unwrap();
+        let mut file: Vec<u8> = Vec::new();
+        file.extend_from_slice(CONTAINERS_MAGIC);
+        file.extend_from_slice(&6u32.to_le_bytes());
+        file.push(COMP_NONE);
+        file.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+        file.extend_from_slice(&raw);
+
+        let v7_bytes = containers_v6_to_v7(&file).expect("migration");
+        let version = u32::from_le_bytes([
+            v7_bytes[4], v7_bytes[5], v7_bytes[6], v7_bytes[7],
+        ]);
+        assert_eq!(version, 7);
+        let kind = v7_bytes[8];
+        let len = u64::from_le_bytes([
+            v7_bytes[9], v7_bytes[10], v7_bytes[11], v7_bytes[12],
+            v7_bytes[13], v7_bytes[14], v7_bytes[15], v7_bytes[16],
+        ]) as usize;
+        let body = &v7_bytes[17..];
+        let raw2 = if kind == COMP_ZSTD {
+            decode_zstd(body, len).unwrap()
+        } else {
+            body.to_vec()
+        };
+        let (v7, _) = bincode::serde::decode_from_slice::<DimensionContainers, _>(
+            &raw2, cfg,
+        )
+        .unwrap();
+        assert_eq!(v7.format_version, 7);
+        // Slots lifted to stacks with empty components.
+        use crate::item::ItemStack;
+        assert_eq!(
+            v7.chests[0].slots,
+            vec![
+                None,
+                Some(ItemStack::new(4, 5)),
+                Some(ItemStack::new(48, 1)),
+            ],
+        );
+        // Furnace runtime triple preserved.
+        assert_eq!(v7.furnaces[0].slots[0], Some(ItemStack::new(14, 2)));
+        assert_eq!(v7.furnaces[0].fuel_left_ms, 12_345);
+        assert_eq!(v7.furnaces[0].fuel_full_ms, 80_000);
+        assert_eq!(v7.furnaces[0].cook_progress_ms, 4_321);
+        // Brewing progress preserved + slots lifted.
+        assert_eq!(v7.brewing[0].progress_ms, 5_500);
+        assert_eq!(v7.brewing[0].slots[0], Some(ItemStack::new(700, 1)));
+        // Non-slot collections travel unchanged.
+        assert_eq!(v7.fires.len(), 1);
+        assert_eq!(v7.levers_on, vec![[9, 9, 9]]);
+        assert_eq!(v7.stairs[0].state, 7);
+    }
+
+    /// W467: the v6 -> v7 arrow refuses anything that isn't a v6
+    /// containers envelope (matching the older arrows' style).
+    #[test]
+    fn v6_to_v7_rejects_non_v6_input() {
+        // Wrong version in an otherwise valid envelope.
+        let mut file: Vec<u8> = Vec::new();
+        file.extend_from_slice(CONTAINERS_MAGIC);
+        file.extend_from_slice(&5u32.to_le_bytes());
+        file.push(COMP_NONE);
+        file.extend_from_slice(&0u64.to_le_bytes());
+        let err = containers_v6_to_v7(&file).expect_err("v5 input must refuse");
+        assert!(err.to_string().contains("expected v6"));
+        // Wrong magic.
+        let mut bad_magic = file.clone();
+        bad_magic[..4].copy_from_slice(b"XXXX");
+        let err = containers_v6_to_v7(&bad_magic).expect_err("magic mismatch");
+        assert!(err.to_string().to_lowercase().contains("magic"));
+        // Truncated header.
+        let err = containers_v6_to_v7(&file[..8]).expect_err("truncated");
+        assert!(err.to_string().contains("truncated"));
     }
 
     #[test]
@@ -1007,7 +1295,7 @@ mod tests {
     fn v3_envelope_migrates_to_v4() {
         let v3 = DimensionContainersV3 {
             format_version: 3,
-            chests: vec![ChestSave {
+            chests: vec![ChestSaveV6 {
                 pos: [1, 2, 3],
                 slots: vec![None, Some((4, 5))],
             }],
@@ -1057,7 +1345,7 @@ mod tests {
     fn v4_envelope_migrates_to_v5() {
         let v4 = DimensionContainersV4 {
             format_version: 4,
-            chests: vec![ChestSave {
+            chests: vec![ChestSaveV6 {
                 pos: [1, 2, 3],
                 slots: vec![None, Some((4, 5))],
             }],

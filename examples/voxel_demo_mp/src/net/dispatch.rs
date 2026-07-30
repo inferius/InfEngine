@@ -1055,28 +1055,40 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         // authoritative state. The `chest_held` cursor mirrors the
         // host-tracked value (always None for Wave 5; the host
         // doesn't yet track per-viewer cursors).
+        // W468: the state messages are tuple-shaped. Write each
+        // tuple through `write_tuple_preserving` against the
+        // EXISTING local container so a count-only change from the
+        // host never strips the components of an untouched local
+        // stack (mirror containers normally have no components
+        // until the schema carries them, but the preserve rule
+        // costs nothing and protects host-migrated saves).
         for state in chest_state_updates {
-            let mut c = block::chest::new_chest();
-            for (i, slot) in state.slots.iter().enumerate() {
-                if i >= c.len() {
-                    break;
-                }
-                c.set_slot(i, *slot);
+            let c = vx
+                .chests
+                .entry(state.pos)
+                .or_insert_with(block::chest::new_chest);
+            for i in 0..c.len() {
+                let tuple = state.slots.get(i).copied().flatten();
+                let mut cur = c.slot(i);
+                crate::item::stack::write_tuple_preserving(&mut cur, tuple);
+                c.set_slot(i, cur);
             }
-            vx.chests.insert(state.pos, c);
             if vx.chest_open == Some(state.pos) {
-                vx.chest_held = state.cursor;
+                vx.chest_held =
+                    state.cursor.map(crate::item::ItemStack::from_tuple);
             }
         }
         for state in furnace_state_updates {
-            let mut f = block::furnace::new_furnace();
-            for (i, slot) in state.slots.iter().enumerate() {
-                if i >= f.len() {
-                    break;
-                }
-                f.set_slot(i, *slot);
+            let f = vx
+                .furnaces
+                .entry(state.pos)
+                .or_insert_with(block::furnace::new_furnace);
+            for i in 0..f.len() {
+                let tuple = state.slots.get(i).copied().flatten();
+                let mut cur = f.slot(i);
+                crate::item::stack::write_tuple_preserving(&mut cur, tuple);
+                f.set_slot(i, cur);
             }
-            vx.furnaces.insert(state.pos, f);
             vx.furnace_runtimes.insert(
                 state.pos,
                 block::furnace::FurnaceRuntime {
@@ -1086,7 +1098,8 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                 },
             );
             if vx.furnace_open == Some(state.pos) {
-                vx.furnace_held = state.cursor;
+                vx.furnace_held =
+                    state.cursor.map(crate::item::ItemStack::from_tuple);
             }
         }
         // Removals: clean up local mob bookkeeping mirroring what

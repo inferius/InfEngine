@@ -8,20 +8,20 @@
 //! entities on break, and translate a frame of `GridAction`s into
 //! per-slot mutations during the open-UI loop.
 //!
-//! Phase C.3 keeps the player inventory in its current
-//! `Vec<Option<(BlockId, u8)>>` shape (no Container migration), so
-//! the helpers below operate on `Slot = Option<(u16, u8)>` directly:
-//! the same shape both the existing inventory + the new chest
-//! container use at the wire level. The thin player-inventory
-//! adapter at the bottom of this file lets the UI loop reuse the
-//! generic `Container` ops against the host's hotbar + storage
-//! rows without rewriting the player inventory storage.
+//! W467: the container family and the player inventory are both
+//! `Option<ItemStack>`-slotted, so the apply helpers below move
+//! full stacks - components (damage / enchants / name) travel with
+//! every take / place / transfer, and merging anywhere requires
+//! `same_stackable` (a worn tool never count-merges into a fresh
+//! one). Only the break/spill edge still flattens to bare item ids
+//! because the drop-entity path is tuple-shaped until W468.
 
 #![allow(dead_code)]
 
 use crate::container::Container;
 use crate::container::ui::GridAction;
-use crate::item::stack::{drop_into_first_free, merge_into, take_n};
+use crate::item::ItemStack;
+use crate::item::stack::{drop_into_first_free_stacks, merge_into_stacks, take_n_stacks};
 
 /// Number of slots in a single chest. Matches MC's small chest
 /// (3 rows of 9). Larger / double-chests can change this per-chest
@@ -79,15 +79,19 @@ pub(crate) fn partner_for(
 }
 
 /// Flatten a chest's contents into the per-item drop list emitted
-/// on break. Each slot of `(id, count)` expands to `count` copies
-/// of `id` so the caller can spawn one drop entity per item -
-/// matching the rest of the game's "one drop per item" convention.
-/// Returns an empty vec for an empty chest.
+/// on break. Each slot expands to `count` copies of its id so the
+/// caller can spawn one drop entity per item - matching the rest
+/// of the game's "one drop per item" convention. Returns an empty
+/// vec for an empty chest.
+///
+/// W468 carries components through drops; until then this edge
+/// flattens to bare ids exactly like before W467 (a spilled worn
+/// tool respawns fresh - no regression, same loss as today).
 pub(crate) fn drain_drops(chest: &Container) -> Vec<u16> {
     let mut out: Vec<u16> = Vec::new();
-    for (id, count) in chest.slots().iter().flatten() {
-        for _ in 0..*count {
-            out.push(*id);
+    for st in chest.slots().iter().flatten() {
+        for _ in 0..st.count {
+            out.push(st.id);
         }
     }
     out
@@ -96,20 +100,24 @@ pub(crate) fn drain_drops(chest: &Container) -> Vec<u16> {
 /// Recover a cursor-held stack into the chest when the UI closes.
 /// Returns the per-item leftover Vec the caller should spawn as
 /// floor drops at the chest position - any item the chest couldn't
-/// absorb (e.g. full chest, missing chest) lands here.
+/// absorb (e.g. full chest, missing chest) lands here. The part
+/// that DOES land keeps the held stack's components; the spilled
+/// leftover flattens to ids (drop path is tuple-shaped until W468).
 ///
 /// Pulled out as a free fn so the close path stays trivially
 /// testable; the runtime caller wraps it with the chest lookup +
 /// the drop spawn loop.
 pub(crate) fn recover_held_on_close(
     chest: Option<&mut Container>,
-    held: Option<(u16, u8)>,
+    held: Option<ItemStack>,
 ) -> Vec<u16> {
-    let Some((id, count)) = held else {
+    let Some(stack) = held else {
         return Vec::new();
     };
+    let id = stack.id;
+    let count = stack.count;
     let leftover = match chest {
-        Some(c) => c.insert((id, count)),
+        Some(c) => c.insert(stack),
         None => count,
     };
     (0..leftover).map(|_| id).collect()
@@ -120,32 +128,32 @@ pub(crate) fn recover_held_on_close(
 /// the next cursor state).
 ///
 /// `partner` is the player's inventory slots, used for shift-click
-/// transfers. We hand it in as `&mut [Slot]` (the existing
-/// inventory shape) instead of a `Container` so the chest UI works
-/// against the unchanged inventory storage.
+/// transfers. We hand it in as `&mut [Option<ItemStack>]` (the
+/// inventory's slot shape) so the chest UI works against the
+/// player-inventory storage directly.
 pub(crate) fn apply_chest_action(
     chest: &mut Container,
-    partner: &mut [Option<(u16, u8)>],
-    held: &mut Option<(u16, u8)>,
+    partner: &mut [Option<ItemStack>],
+    held: &mut Option<ItemStack>,
     action: GridAction,
 ) {
     match action {
         GridAction::Take(idx) => {
             // Pick up the whole slot into the cursor.
             if held.is_none()
-                && let Some((id, n)) = chest.take(idx)
+                && let Some(st) = chest.take(idx)
             {
-                *held = Some((id, n));
+                *held = Some(st);
             }
         }
         GridAction::TakeHalf(idx) => {
             // RMB on a non-empty slot with no held stack: pull
             // half (rounded up) onto the cursor. Matches MC's
-            // RMB-take semantics.
+            // RMB-take semantics. Components clone to both halves.
             if held.is_some() {
                 return;
             }
-            let Some((_id, count)) = chest.slot(idx) else {
+            let Some(count) = chest.slot_ref(idx).map(|st| st.count) else {
                 return;
             };
             let half = count.div_ceil(2);
@@ -164,15 +172,15 @@ pub(crate) fn apply_chest_action(
         }
         GridAction::Transfer(idx) => {
             // Shift-click: move the chest slot's contents into
-            // the player's inventory.
-            let Some((id, count)) = chest.slot(idx) else {
+            // the player's inventory (components ride along).
+            let Some(stack) = chest.slot(idx) else {
                 return;
             };
-            let leftover = drop_into_first_free(partner, (id, count));
+            let leftover = drop_into_first_free_stacks(partner, stack.clone());
             if leftover == 0 {
                 chest.set_slot(idx, None);
             } else {
-                chest.set_slot(idx, Some((id, leftover)));
+                chest.set_slot(idx, Some(stack.with_count(leftover)));
             }
         }
     }
@@ -183,18 +191,18 @@ pub(crate) fn apply_chest_action(
 /// chest. Mirrors `apply_chest_action` but with the slots <->
 /// container roles reversed.
 pub(crate) fn apply_player_action(
-    inv: &mut [Option<(u16, u8)>],
+    inv: &mut [Option<ItemStack>],
     chest: &mut Container,
-    held: &mut Option<(u16, u8)>,
+    held: &mut Option<ItemStack>,
     action: GridAction,
 ) {
     match action {
         GridAction::Take(idx) => {
             if held.is_none()
                 && let Some(slot) = inv.get_mut(idx)
-                && let Some((id, n)) = slot.take()
+                && let Some(st) = slot.take()
             {
-                *held = Some((id, n));
+                *held = Some(st);
             }
         }
         GridAction::TakeHalf(idx) => {
@@ -202,9 +210,11 @@ pub(crate) fn apply_player_action(
                 return;
             }
             let Some(slot) = inv.get_mut(idx) else { return };
-            let Some((_id, count)) = *slot else { return };
+            let Some(count) = slot.as_ref().map(|st| st.count) else {
+                return;
+            };
             let half = count.div_ceil(2);
-            if let Some(taken) = take_n(slot, half) {
+            if let Some(taken) = take_n_stacks(slot, half) {
                 *held = Some(taken);
             }
         }
@@ -218,12 +228,12 @@ pub(crate) fn apply_player_action(
             // Shift-click: move the player-inv slot's contents
             // into the chest.
             let Some(slot) = inv.get_mut(idx) else { return };
-            let Some((id, count)) = *slot else { return };
-            let leftover = chest.insert((id, count));
+            let Some(stack) = slot.clone() else { return };
+            let leftover = chest.insert(stack.clone());
             if leftover == 0 {
                 *slot = None;
             } else {
-                *slot = Some((id, leftover));
+                *slot = Some(stack.with_count(leftover));
             }
         }
     }
@@ -233,36 +243,35 @@ pub(crate) fn apply_player_action(
 /// Returns nothing; updates `held` + the slot in place.
 fn place_held(
     chest: &mut Container,
-    held: &mut Option<(u16, u8)>,
+    held: &mut Option<ItemStack>,
     idx: usize,
     single: bool,
 ) {
-    let Some((id, count)) = *held else { return };
+    let Some(cur) = held.clone() else { return };
     // Single-item place lifts one from the cursor, then merges
     // it into the slot.
-    let to_place = if single { 1 } else { count };
-    let leftover_in_cursor = count - to_place;
-    let leftover_after_insert = chest.insert_at(idx, (id, to_place));
+    let to_place = if single { 1 } else { cur.count };
+    let leftover_in_cursor = cur.count - to_place;
+    let leftover_after_insert = chest.insert_at(idx, cur.with_count(to_place));
     // What didn't fit in the slot comes back to the cursor;
     // combine with anything the single-mode lift left behind.
     let new_cursor_count = leftover_in_cursor + leftover_after_insert;
     *held = if new_cursor_count == 0 {
         None
     } else {
-        Some((id, new_cursor_count))
+        Some(cur.with_count(new_cursor_count))
     };
-    // Swap path: if the slot already held a DIFFERENT item AND
-    // the place was a "full stack onto a foreign slot", MC swaps
-    // the two. We only swap when the cursor is now empty (i.e.
-    // every item we held landed somewhere) - otherwise the
-    // partial merge stays partial. Detect "nothing landed" by
+    // Swap path: if the slot held NON-STACKABLE content (different
+    // id, or same id with different components - MC swaps a fresh
+    // tool onto a worn one) AND the place was a "full stack onto a
+    // foreign slot", swap the two. Detect "nothing landed" by
     // comparing pre-insert leftover to to_place.
     if leftover_after_insert == to_place && !single {
         // The slot rejected our items because they didn't match.
         // Swap: take the slot's existing contents into the cursor,
         // place our items into the now-empty slot.
         let existing = chest.take(idx);
-        let placed = chest.insert_at(idx, (id, count));
+        let placed = chest.insert_at(idx, cur.clone());
         // If our items now fit, the swap succeeded - drop the
         // cursor onto the slot we just cleared.
         if placed == 0 {
@@ -273,38 +282,42 @@ fn place_held(
             if let Some(prev) = existing {
                 let _ = chest.insert_at(idx, prev);
             }
-            *held = Some((id, count));
+            *held = Some(cur);
         }
     }
 }
 
 /// Place-into-slot variant for the player inventory side. Uses
-/// `merge_into` / `take_n` on a raw slot ref so it mirrors how the
-/// existing inventory module mutates its `Vec<Option<(u16, u8)>>`.
+/// `merge_into_stacks` / `take_n_stacks` on a raw slot ref so it
+/// mirrors how the inventory module mutates its stack slots.
 fn place_into_slot(
-    inv: &mut [Option<(u16, u8)>],
-    held: &mut Option<(u16, u8)>,
+    inv: &mut [Option<ItemStack>],
+    held: &mut Option<ItemStack>,
     idx: usize,
     single: bool,
 ) {
-    let Some((id, count)) = *held else { return };
+    let Some(cur) = held.clone() else { return };
     let Some(slot) = inv.get_mut(idx) else { return };
-    let to_place = if single { 1 } else { count };
-    let leftover_in_cursor = count - to_place;
-    // Try a merge first.
-    let pre = *slot;
-    let leftover_after = merge_into(slot, (id, to_place));
+    let to_place = if single { 1 } else { cur.count };
+    let leftover_in_cursor = cur.count - to_place;
+    // Try a merge first. `merge_into_stacks` rejects wholesale
+    // when the slot isn't `same_stackable` with the cursor.
+    let pre_mismatch = slot
+        .as_ref()
+        .is_some_and(|st| !st.same_stackable(&cur));
+    let leftover_after = merge_into_stacks(slot, cur.with_count(to_place));
     let new_cursor_count = leftover_in_cursor + leftover_after;
     *held = if new_cursor_count == 0 {
         None
     } else {
-        Some((id, new_cursor_count))
+        Some(cur.with_count(new_cursor_count))
     };
-    // Swap on full-stack reject (same-id merge with no room is
-    // also "no swap" because there's no foreign content).
-    if leftover_after == to_place && !single && pre.is_some_and(|(eid, _)| eid != id) {
+    // Swap on full-stack reject when the slot held non-stackable
+    // content (a same-stackable merge with no room is "no swap"
+    // because there's no foreign content).
+    if leftover_after == to_place && !single && pre_mismatch {
         let existing = slot.take();
-        *slot = Some((id, count));
+        *slot = Some(cur);
         *held = existing;
     }
 }

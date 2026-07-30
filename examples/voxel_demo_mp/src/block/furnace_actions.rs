@@ -5,17 +5,21 @@
 //! file holds the place / break / cook step; this file holds the
 //! per-click apply helpers.
 //!
-//! Both `apply_furnace_action` (chest-side LMB / RMB / shift) and
+//! Both `apply_furnace_action` (furnace-side LMB / RMB / shift) and
 //! `apply_player_action` (player-side) route through `Container::
 //! insert_at` so the accept filters on the furnace stay honoured:
 //! a non-fuel stack dropped onto the fuel slot bounces back to
 //! the cursor; the output slot rejects every player-driven place.
+//!
+//! W467: stack-native - components ride through every take / place
+//! / transfer, and merges require `same_stackable`.
 
 #![allow(dead_code)]
 
 use crate::container::Container;
 use crate::container::ui::GridAction;
-use crate::item::stack::{drop_into_first_free, merge_into, take_n};
+use crate::item::ItemStack;
+use crate::item::stack::{drop_into_first_free_stacks, merge_into_stacks, take_n_stacks};
 
 /// Apply one `GridAction` against the furnace container. Returns
 /// the next held-stack value indirectly through `held`. Mirrors
@@ -27,23 +31,23 @@ use crate::item::stack::{drop_into_first_free, merge_into, take_n};
 /// transfers (Transfer action).
 pub(crate) fn apply_furnace_action(
     furnace: &mut Container,
-    partner: &mut [Option<(u16, u8)>],
-    held: &mut Option<(u16, u8)>,
+    partner: &mut [Option<ItemStack>],
+    held: &mut Option<ItemStack>,
     action: GridAction,
 ) {
     match action {
         GridAction::Take(idx) => {
             if held.is_none()
-                && let Some((id, n)) = furnace.take(idx)
+                && let Some(st) = furnace.take(idx)
             {
-                *held = Some((id, n));
+                *held = Some(st);
             }
         }
         GridAction::TakeHalf(idx) => {
             if held.is_some() {
                 return;
             }
-            let Some((_id, count)) = furnace.slot(idx) else {
+            let Some(count) = furnace.slot_ref(idx).map(|st| st.count) else {
                 return;
             };
             let half = count.div_ceil(2);
@@ -59,15 +63,15 @@ pub(crate) fn apply_furnace_action(
         }
         GridAction::Transfer(idx) => {
             // Shift-click pulls the furnace slot's contents into
-            // the player's inventory.
-            let Some((id, count)) = furnace.slot(idx) else {
+            // the player's inventory (components ride along).
+            let Some(stack) = furnace.slot(idx) else {
                 return;
             };
-            let leftover = drop_into_first_free(partner, (id, count));
+            let leftover = drop_into_first_free_stacks(partner, stack.clone());
             if leftover == 0 {
                 furnace.set_slot(idx, None);
             } else {
-                furnace.set_slot(idx, Some((id, leftover)));
+                furnace.set_slot(idx, Some(stack.with_count(leftover)));
             }
         }
     }
@@ -80,18 +84,18 @@ pub(crate) fn apply_furnace_action(
 /// only the fuel slot empty falls back to the input slot (or
 /// stays put if none of the slots accept it).
 pub(crate) fn apply_player_action(
-    inv: &mut [Option<(u16, u8)>],
+    inv: &mut [Option<ItemStack>],
     furnace: &mut Container,
-    held: &mut Option<(u16, u8)>,
+    held: &mut Option<ItemStack>,
     action: GridAction,
 ) {
     match action {
         GridAction::Take(idx) => {
             if held.is_none()
                 && let Some(slot) = inv.get_mut(idx)
-                && let Some((id, n)) = slot.take()
+                && let Some(st) = slot.take()
             {
-                *held = Some((id, n));
+                *held = Some(st);
             }
         }
         GridAction::TakeHalf(idx) => {
@@ -99,9 +103,11 @@ pub(crate) fn apply_player_action(
                 return;
             }
             let Some(slot) = inv.get_mut(idx) else { return };
-            let Some((_id, count)) = *slot else { return };
+            let Some(count) = slot.as_ref().map(|st| st.count) else {
+                return;
+            };
             let half = count.div_ceil(2);
-            if let Some(taken) = take_n(slot, half) {
+            if let Some(taken) = take_n_stacks(slot, half) {
                 *held = Some(taken);
             }
         }
@@ -113,12 +119,12 @@ pub(crate) fn apply_player_action(
         }
         GridAction::Transfer(idx) => {
             let Some(slot) = inv.get_mut(idx) else { return };
-            let Some((id, count)) = *slot else { return };
-            let leftover = furnace.insert((id, count));
+            let Some(stack) = slot.clone() else { return };
+            let leftover = furnace.insert(stack.clone());
             if leftover == 0 {
                 *slot = None;
             } else {
-                *slot = Some((id, leftover));
+                *slot = Some(stack.with_count(leftover));
             }
         }
     }
@@ -131,19 +137,20 @@ pub(crate) fn apply_player_action(
 /// cursor.
 fn place_held(
     furnace: &mut Container,
-    held: &mut Option<(u16, u8)>,
+    held: &mut Option<ItemStack>,
     idx: usize,
     single: bool,
 ) {
-    let Some((id, count)) = *held else { return };
-    let to_place = if single { 1 } else { count };
-    let leftover_in_cursor = count - to_place;
-    let leftover_after_insert = furnace.insert_at(idx, (id, to_place));
+    let Some(cur) = held.clone() else { return };
+    let to_place = if single { 1 } else { cur.count };
+    let leftover_in_cursor = cur.count - to_place;
+    let leftover_after_insert =
+        furnace.insert_at(idx, cur.with_count(to_place));
     let new_cursor_count = leftover_in_cursor + leftover_after_insert;
     *held = if new_cursor_count == 0 {
         None
     } else {
-        Some((id, new_cursor_count))
+        Some(cur.with_count(new_cursor_count))
     };
 }
 
@@ -151,27 +158,30 @@ fn place_held(
 /// the per-item `max_stack` from the item registry via the shared
 /// stack helpers.
 fn place_into_slot(
-    inv: &mut [Option<(u16, u8)>],
-    held: &mut Option<(u16, u8)>,
+    inv: &mut [Option<ItemStack>],
+    held: &mut Option<ItemStack>,
     idx: usize,
     single: bool,
 ) {
-    let Some((id, count)) = *held else { return };
+    let Some(cur) = held.clone() else { return };
     let Some(slot) = inv.get_mut(idx) else { return };
-    let to_place = if single { 1 } else { count };
-    let leftover_in_cursor = count - to_place;
-    let pre = *slot;
-    let leftover_after = merge_into(slot, (id, to_place));
+    let to_place = if single { 1 } else { cur.count };
+    let leftover_in_cursor = cur.count - to_place;
+    let pre_mismatch = slot
+        .as_ref()
+        .is_some_and(|st| !st.same_stackable(&cur));
+    let leftover_after = merge_into_stacks(slot, cur.with_count(to_place));
     let new_cursor_count = leftover_in_cursor + leftover_after;
     *held = if new_cursor_count == 0 {
         None
     } else {
-        Some((id, new_cursor_count))
+        Some(cur.with_count(new_cursor_count))
     };
-    // Swap on full-stack reject when the slot held a different id.
-    if leftover_after == to_place && !single && pre.is_some_and(|(eid, _)| eid != id) {
+    // Swap on full-stack reject when the slot held non-stackable
+    // content (different id, or same id with different components).
+    if leftover_after == to_place && !single && pre_mismatch {
         let existing = slot.take();
-        *slot = Some((id, count));
+        *slot = Some(cur);
         *held = existing;
     }
 }

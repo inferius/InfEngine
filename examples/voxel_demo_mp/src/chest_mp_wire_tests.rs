@@ -15,6 +15,8 @@ use crate::net::{
 use crate::Voxel;
 use infengine_voxel::BlockId;
 
+use crate::item::ItemStack;
+
 #[test]
 fn chest_open_registers_viewer() {
     let mut v = Voxel::new();
@@ -69,7 +71,7 @@ fn chest_act_from_non_viewer_is_ignored() {
     // Seed the chest with one stone stack so we can check the
     // act wasn't applied.
     if let Some(c) = v.chests.get_mut(&pos) {
-        c.set_slot(0, Some((1, 16)));
+        c.set_slot(0, Some(ItemStack::new(1, 16)));
     }
     v.apply_chest_act_msgs(&[(
         99,
@@ -79,7 +81,7 @@ fn chest_act_from_non_viewer_is_ignored() {
             action: ChestAct::Take(0),
         },
     )]);
-    assert_eq!(v.chests.get(&pos).unwrap().slot(0), Some((1, 16)));
+    assert_eq!(v.chests.get(&pos).unwrap().slot(0), Some(ItemStack::new(1, 16)));
 }
 
 #[test]

@@ -179,14 +179,17 @@ pub(crate) fn break_furnace(
 }
 
 /// Flatten a furnace's slot contents into a per-item drop list.
-/// Each slot of `(id, count)` expands to `count` copies of `id`.
-/// Output slot included - the player gets back any already-cooked
-/// output the furnace held at break time.
+/// Each slot expands to `count` copies of its id. Output slot
+/// included - the player gets back any already-cooked output the
+/// furnace held at break time.
+///
+/// W468 carries components through drops; until then this edge
+/// flattens to bare ids (same loss as pre-W467, no regression).
 pub(crate) fn drain_drops(furnace: &Container) -> Vec<u16> {
     let mut out: Vec<u16> = Vec::new();
-    for (id, count) in furnace.slots().iter().flatten() {
-        for _ in 0..*count {
-            out.push(*id);
+    for st in furnace.slots().iter().flatten() {
+        for _ in 0..st.count {
+            out.push(st.id);
         }
     }
     out
@@ -248,7 +251,8 @@ pub(crate) fn step_one_furnace(
     dt_ms: u32,
 ) {
     // Gate: idle if input is empty OR has no recipe.
-    let Some((input_id, _input_count)) = furnace.slot(FURNACE_INPUT_SLOT) else {
+    let Some(input_id) = furnace.slot_ref(FURNACE_INPUT_SLOT).map(|st| st.id)
+    else {
         // No input. Let the current fuel finish (so the UI burn
         // bar drains visibly) but don't accumulate cook progress.
         drain_fuel_idle(runtime, dt_ms);
@@ -258,7 +262,7 @@ pub(crate) fn step_one_furnace(
         drain_fuel_idle(runtime, dt_ms);
         return;
     };
-    // Output gate: must be empty OR same-id-with-room.
+    // Output gate: must be empty OR plain-same-id-with-room.
     if !output_slot_can_accept(furnace, output_id, output_count_per) {
         drain_fuel_idle(runtime, dt_ms);
         return;
@@ -266,25 +270,25 @@ pub(crate) fn step_one_furnace(
 
     // Light a fresh fuel item if needed.
     if runtime.fuel_left_ms == 0 {
-        let Some((fuel_id, fuel_count)) = furnace.slot(FURNACE_FUEL_SLOT) else {
+        let Some(fuel) = furnace.slot(FURNACE_FUEL_SLOT) else {
             // No fuel to light. Cook progress stays put (no
             // decay) but fuel bar stays at zero.
             runtime.fuel_full_ms = 0;
             return;
         };
-        let burn_ticks = fuel_burn_ticks(fuel_id);
+        let burn_ticks = fuel_burn_ticks(fuel.id);
         if burn_ticks == 0 {
             // Fuel slot somehow contains a non-fuel - bail.
             runtime.fuel_full_ms = 0;
             return;
         }
-        // Consume one fuel item. Same-id stack decrement, or
-        // clear the slot when count drops to 0.
-        let new_count = fuel_count.saturating_sub(1);
+        // Consume one fuel item. Count decrement keeps the stack's
+        // components; clear the slot when count drops to 0.
+        let new_count = fuel.count.saturating_sub(1);
         if new_count == 0 {
             furnace.set_slot(FURNACE_FUEL_SLOT, None);
         } else {
-            furnace.set_slot(FURNACE_FUEL_SLOT, Some((fuel_id, new_count)));
+            furnace.set_slot(FURNACE_FUEL_SLOT, Some(fuel.with_count(new_count)));
         }
         runtime.fuel_full_ms = burn_ticks * TICK_MS;
         runtime.fuel_left_ms = runtime.fuel_full_ms;
@@ -313,35 +317,39 @@ pub(crate) fn step_one_furnace(
     while runtime.cook_progress_ms >= FURNACE_COOK_MS_PER_OUTPUT {
         // Re-fetch the input slot fresh - the previous iteration
         // may have emptied it.
-        let Some((cur_in_id, cur_in_count)) = furnace.slot(FURNACE_INPUT_SLOT) else {
+        let Some(cur_in) = furnace.slot(FURNACE_INPUT_SLOT) else {
             break;
         };
         // Recipe may differ from the original `output_id` if the
         // player swapped the input mid-cook. Bail in that case;
         // the next tick re-evaluates.
-        let Some((cur_out_id, cur_out_count)) = smelt_recipe(cur_in_id) else {
+        let Some((cur_out_id, cur_out_count)) = smelt_recipe(cur_in.id) else {
             break;
         };
         if !output_slot_can_accept(furnace, cur_out_id, cur_out_count) {
             break;
         }
         runtime.cook_progress_ms -= FURNACE_COOK_MS_PER_OUTPUT;
-        // Decrement input by 1; clear when it hits 0.
-        let new_in = cur_in_count.saturating_sub(1);
+        // Decrement input by 1 (components preserved on the
+        // remainder); clear when it hits 0.
+        let new_in = cur_in.count.saturating_sub(1);
         if new_in == 0 {
             furnace.set_slot(FURNACE_INPUT_SLOT, None);
         } else {
-            furnace.set_slot(FURNACE_INPUT_SLOT, Some((cur_in_id, new_in)));
+            furnace.set_slot(FURNACE_INPUT_SLOT, Some(cur_in.with_count(new_in)));
         }
-        // Push the output. The output slot's accept_nothing
-        // filter blocks `insert_at`, so we update via set_slot:
-        // either start a new stack or grow the existing one.
+        // Push the output as a FRESH stack (empty components). The
+        // output slot's accept_nothing filter blocks `insert_at`,
+        // so we update via set_slot: either start a new stack or
+        // grow the existing plain one (`output_slot_can_accept`
+        // already guaranteed it's plain + has room).
         let new_output = match furnace.slot(FURNACE_OUTPUT_SLOT) {
-            None => Some((cur_out_id, cur_out_count)),
-            Some((sid, scount)) if sid == cur_out_id => {
-                Some((cur_out_id, scount.saturating_add(cur_out_count)))
+            None => Some(crate::item::ItemStack::new(cur_out_id, cur_out_count)),
+            Some(st) if st.id == cur_out_id && st.components.is_empty() => {
+                let grown = st.count.saturating_add(cur_out_count);
+                Some(st.with_count(grown))
             }
-            // Mismatched output id - bail out of the cook loop.
+            // Mismatched output stack - bail out of the cook loop.
             Some(_) => {
                 // Put progress back so we don't lose it next tick.
                 runtime.cook_progress_ms += FURNACE_COOK_MS_PER_OUTPUT;
@@ -369,18 +377,20 @@ fn drain_fuel_idle(runtime: &mut FurnaceRuntime, dt_ms: u32) {
 }
 
 /// True when the output slot can accept `count` more of `output_id`.
-/// Empty slot accepts; same-id stack with room accepts; different-id
-/// or full same-id slot rejects.
+/// Empty slot accepts; a PLAIN (empty-components) same-id stack
+/// with room accepts; anything else rejects - the cook always
+/// emits fresh stacks, and fresh output never merges into a stack
+/// carrying components (W467 `same_stackable` rule).
 fn output_slot_can_accept(
     furnace: &Container,
     output_id: u16,
     count: u8,
 ) -> bool {
-    match furnace.slot(FURNACE_OUTPUT_SLOT) {
+    match furnace.slot_ref(FURNACE_OUTPUT_SLOT) {
         None => true,
-        Some((sid, scount)) if sid == output_id => {
+        Some(st) if st.id == output_id && st.components.is_empty() => {
             let cap = crate::item::item_max_stack(output_id);
-            scount.saturating_add(count) <= cap
+            st.count.saturating_add(count) <= cap
         }
         Some(_) => false,
     }
@@ -411,10 +421,13 @@ pub(crate) fn apply_catch_up_output(
     let Some(furnace) = furnaces.get_mut(&pos) else {
         return false;
     };
+    // Catch-up outputs are fresh stacks; merge only into a plain
+    // same-id stack (mirrors `output_slot_can_accept`).
     let new_output = match furnace.slot(FURNACE_OUTPUT_SLOT) {
-        None => Some((block, count)),
-        Some((sid, scount)) if sid == block => {
-            Some((block, scount.saturating_add(count)))
+        None => Some(crate::item::ItemStack::new(block, count)),
+        Some(st) if st.id == block && st.components.is_empty() => {
+            let grown = st.count.saturating_add(count);
+            Some(st.with_count(grown))
         }
         Some(_) => return false,
     };
@@ -428,16 +441,19 @@ pub(crate) fn apply_catch_up_output(
 /// `chest::recover_held_on_close` but operates against the furnace
 /// container - same accept filters apply, so a held stack of the
 /// wrong type for the input slot may end up leftover even when
-/// other slots are technically empty.
+/// other slots are technically empty. The leftover flattens to
+/// bare ids (drop path stays tuple-shaped until W468).
 pub(crate) fn recover_held_on_close(
     furnace: Option<&mut Container>,
-    held: Option<(u16, u8)>,
+    held: Option<crate::item::ItemStack>,
 ) -> Vec<u16> {
-    let Some((id, count)) = held else {
+    let Some(stack) = held else {
         return Vec::new();
     };
+    let id = stack.id;
+    let count = stack.count;
     let leftover = match furnace {
-        Some(c) => c.insert((id, count)),
+        Some(c) => c.insert(stack),
         None => count,
     };
     (0..leftover).map(|_| id).collect()

@@ -13,6 +13,7 @@ use super::{
     new_furnace, place_furnace, recover_held_on_close,
 };
 use crate::container::Container;
+use crate::item::ItemStack;
 
 // ---- Accept-filter wiring ----
 
@@ -56,7 +57,7 @@ fn output_slot_rejects_every_id() {
 #[test]
 fn output_slot_blocks_player_insert() {
     let mut c = new_furnace();
-    let leftover = c.insert_at(FURNACE_OUTPUT_SLOT, (1, 4));
+    let leftover = c.insert_at(FURNACE_OUTPUT_SLOT, ItemStack::new(1, 4));
     assert_eq!(leftover, 4);
     assert_eq!(c.slot(FURNACE_OUTPUT_SLOT), None);
 }
@@ -64,8 +65,8 @@ fn output_slot_blocks_player_insert() {
 #[test]
 fn set_slot_bypasses_filter_for_cook_path() {
     let mut c = new_furnace();
-    c.set_slot(FURNACE_OUTPUT_SLOT, Some((43, 1)));
-    assert_eq!(c.slot(FURNACE_OUTPUT_SLOT), Some((43, 1)));
+    c.set_slot(FURNACE_OUTPUT_SLOT, Some(ItemStack::new(43, 1)));
+    assert_eq!(c.slot(FURNACE_OUTPUT_SLOT), Some(ItemStack::new(43, 1)));
 }
 
 #[test]
@@ -98,7 +99,7 @@ fn place_furnace_idempotent_keeps_existing() {
     let mut furnaces: HashMap<[i32; 3], Container> = HashMap::new();
     let mut runtimes: HashMap<[i32; 3], FurnaceRuntime> = HashMap::new();
     place_furnace(&mut furnaces, &mut runtimes, [0, 0, 0]);
-    furnaces.get_mut(&[0, 0, 0]).unwrap().set_slot(0, Some((14, 5)));
+    furnaces.get_mut(&[0, 0, 0]).unwrap().set_slot(0, Some(ItemStack::new(14, 5)));
     runtimes.insert(
         [0, 0, 0],
         FurnaceRuntime {
@@ -110,7 +111,7 @@ fn place_furnace_idempotent_keeps_existing() {
     place_furnace(&mut furnaces, &mut runtimes, [0, 0, 0]);
     assert_eq!(
         furnaces.get(&[0, 0, 0]).unwrap().slot(0),
-        Some((14, 5)),
+        Some(ItemStack::new(14, 5)),
         "second place must not wipe existing content",
     );
     let rt = runtimes.get(&[0, 0, 0]).unwrap();
@@ -125,9 +126,9 @@ fn break_furnace_returns_drops_and_removes_entry() {
     place_furnace(&mut furnaces, &mut runtimes, [1, 2, 3]);
     {
         let f = furnaces.get_mut(&[1, 2, 3]).unwrap();
-        f.set_slot(0, Some((14, 3)));
-        f.set_slot(1, Some((13, 2)));
-        f.set_slot(2, Some((43, 1)));
+        f.set_slot(0, Some(ItemStack::new(14, 3)));
+        f.set_slot(1, Some(ItemStack::new(13, 2)));
+        f.set_slot(2, Some(ItemStack::new(43, 1)));
     }
     let drops = break_furnace(&mut furnaces, &mut runtimes, [1, 2, 3]);
     assert_eq!(drops.len(), 6);
@@ -157,9 +158,9 @@ fn drain_drops_empty_is_empty() {
 #[test]
 fn drain_drops_expands_each_stack_to_per_item_drops() {
     let mut c = new_furnace();
-    c.set_slot(0, Some((14, 4)));
-    c.set_slot(1, Some((13, 2)));
-    c.set_slot(2, Some((43, 3)));
+    c.set_slot(0, Some(ItemStack::new(14, 4)));
+    c.set_slot(1, Some(ItemStack::new(13, 2)));
+    c.set_slot(2, Some(ItemStack::new(43, 3)));
     let drops = drain_drops(&c);
     assert_eq!(drops.len(), 9);
     assert_eq!(drops.iter().filter(|d| **d == 14).count(), 4);
@@ -196,29 +197,29 @@ fn recover_held_no_stack_no_drops() {
 #[test]
 fn recover_held_smeltable_lands_in_input_slot() {
     let mut c = new_furnace();
-    let drops = recover_held_on_close(Some(&mut c), Some((14, 5)));
+    let drops = recover_held_on_close(Some(&mut c), Some(ItemStack::new(14, 5)));
     assert!(drops.is_empty());
-    assert_eq!(c.slot(FURNACE_INPUT_SLOT), Some((14, 5)));
+    assert_eq!(c.slot(FURNACE_INPUT_SLOT), Some(ItemStack::new(14, 5)));
 }
 
 #[test]
 fn recover_held_fuel_lands_in_fuel_slot() {
     let mut c = new_furnace();
-    let drops = recover_held_on_close(Some(&mut c), Some((13, 8)));
+    let drops = recover_held_on_close(Some(&mut c), Some(ItemStack::new(13, 8)));
     assert!(drops.is_empty());
-    assert_eq!(c.slot(FURNACE_FUEL_SLOT), Some((13, 8)));
+    assert_eq!(c.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(13, 8)));
 }
 
 #[test]
 fn recover_held_non_matching_item_falls_as_drops() {
     let mut c = new_furnace();
-    let drops = recover_held_on_close(Some(&mut c), Some((1, 3)));
+    let drops = recover_held_on_close(Some(&mut c), Some(ItemStack::new(1, 3)));
     assert_eq!(drops, vec![1, 1, 1]);
     assert!(c.is_empty());
 }
 
 #[test]
 fn recover_held_no_furnace_dumps_everything() {
-    let drops = recover_held_on_close(None, Some((14, 4)));
+    let drops = recover_held_on_close(None, Some(ItemStack::new(14, 4)));
     assert_eq!(drops, vec![14, 14, 14, 14]);
 }

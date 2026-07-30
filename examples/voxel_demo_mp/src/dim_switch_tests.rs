@@ -6,6 +6,7 @@
 
 use crate::Voxel;
 use crate::dim::{NETHER, OVERWORLD};
+use crate::item::ItemStack;
 use crate::worldgen::{self, WorldGen, dim_seed};
 use infengine_voxel::{BlockId, Chunk, ChunkCoord};
 
@@ -208,7 +209,7 @@ let mut v = Voxel::new();
     v.current_dim = OVERWORLD.to_string();
     // Drop a chest in the overworld.
     let mut chest = crate::container::Container::with_size(27);
-    chest.set_slot(0, Some((1, 5)));
+    chest.set_slot(0, Some(ItemStack::new(1, 5)));
     v.chests.insert([10, 20, 30], chest);
     // Switch to nether: the chest map should be empty there.
     v.switch_dim(NETHER);
@@ -219,18 +220,18 @@ let mut v = Voxel::new();
     // Add a nether chest at a different pos so we can verify
     // it parks separately when we go back.
     let mut nether_chest = crate::container::Container::with_size(27);
-    nether_chest.set_slot(0, Some((44, 7))); // 44 = netherrack
+    nether_chest.set_slot(0, Some(ItemStack::new(44, 7))); // 44 = netherrack
     v.chests.insert([1, 2, 3], nether_chest);
     // Bounce back to overworld: our original chest should be
     // back, the nether chest should be gone (parked).
     v.switch_dim(OVERWORLD);
     assert!(v.chests.contains_key(&[10, 20, 30]));
     assert!(!v.chests.contains_key(&[1, 2, 3]));
-    assert_eq!(v.chests.get(&[10, 20, 30]).unwrap().slot(0), Some((1, 5)));
+    assert_eq!(v.chests.get(&[10, 20, 30]).unwrap().slot(0), Some(ItemStack::new(1, 5)));
     // Round-trip back to nether: the netherrack chest survives.
     v.switch_dim(NETHER);
     assert!(v.chests.contains_key(&[1, 2, 3]));
-    assert_eq!(v.chests.get(&[1, 2, 3]).unwrap().slot(0), Some((44, 7)));
+    assert_eq!(v.chests.get(&[1, 2, 3]).unwrap().slot(0), Some(ItemStack::new(44, 7)));
 }
 
 #[test]
@@ -266,8 +267,8 @@ let mut v = Voxel::new();
     // Drop a chest with a unique block-id payload.
     let chest_pos: [i32; 3] = [10, 20, 30];
     let mut chest = crate::container::Container::with_size(27);
-    chest.set_slot(0, Some((42, 17)));
-    chest.set_slot(5, Some((99, 3)));
+    chest.set_slot(0, Some(ItemStack::new(42, 17)));
+    chest.set_slot(5, Some(ItemStack::new(99, 3)));
     v.chests.insert(chest_pos, chest);
 
     // Walk away to the nether: switch dim, generate a chunk
@@ -282,8 +283,8 @@ let mut v = Voxel::new();
     // Chest should be back, content intact.
     assert!(v.chests.contains_key(&chest_pos));
     let restored = v.chests.get(&chest_pos).unwrap();
-    assert_eq!(restored.slot(0), Some((42, 17)));
-    assert_eq!(restored.slot(5), Some((99, 3)));
+    assert_eq!(restored.slot(0), Some(ItemStack::new(42, 17)));
+    assert_eq!(restored.slot(5), Some(ItemStack::new(99, 3)));
 
     // Terrain regen must match the original gen byte-for-byte.
     // This is the regression that broke before F.2 - the user

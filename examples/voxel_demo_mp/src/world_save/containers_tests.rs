@@ -16,6 +16,8 @@
 
 use tempfile::TempDir;
 
+use crate::item::ItemStack;
+
 use super::containers::{
     CONTAINERS_FORMAT_VERSION, CONTAINERS_MAGIC, ChestSave, DimensionContainers,
     containers_path_in_dir, read_containers_in_dir, write_containers_in_dir,
@@ -40,12 +42,12 @@ fn empty_chest_at(pos: [i32; 3]) -> ChestSave {
 }
 
 fn populated_chest_at(pos: [i32; 3]) -> ChestSave {
-    let mut slots: Vec<Option<(u16, u8)>> = vec![None; 27];
-    slots[0] = Some((ITEM_STONE, 64));
-    slots[1] = Some((ITEM_DIRT, 32));
-    slots[5] = Some((ITEM_SWORD_IRON, 1));
-    slots[13] = Some((ITEM_PLANKS, 17));
-    slots[26] = Some((ITEM_CHEST, 4));
+    let mut slots: Vec<Option<ItemStack>> = vec![None; 27];
+    slots[0] = Some(ItemStack::new(ITEM_STONE, 64));
+    slots[1] = Some(ItemStack::new(ITEM_DIRT, 32));
+    slots[5] = Some(ItemStack::new(ITEM_SWORD_IRON, 1));
+    slots[13] = Some(ItemStack::new(ITEM_PLANKS, 17));
+    slots[26] = Some(ItemStack::new(ITEM_CHEST, 4));
     ChestSave { pos, slots }
 }
 
@@ -119,11 +121,11 @@ fn containers_roundtrip_populated_chest() {
     assert_eq!(loaded, original);
     assert_eq!(loaded.chests.len(), 1);
     let chest = &loaded.chests[0];
-    assert_eq!(chest.slots[0], Some((ITEM_STONE, 64)));
-    assert_eq!(chest.slots[1], Some((ITEM_DIRT, 32)));
-    assert_eq!(chest.slots[5], Some((ITEM_SWORD_IRON, 1)));
-    assert_eq!(chest.slots[13], Some((ITEM_PLANKS, 17)));
-    assert_eq!(chest.slots[26], Some((ITEM_CHEST, 4)));
+    assert_eq!(chest.slots[0], Some(ItemStack::new(ITEM_STONE, 64)));
+    assert_eq!(chest.slots[1], Some(ItemStack::new(ITEM_DIRT, 32)));
+    assert_eq!(chest.slots[5], Some(ItemStack::new(ITEM_SWORD_IRON, 1)));
+    assert_eq!(chest.slots[13], Some(ItemStack::new(ITEM_PLANKS, 17)));
+    assert_eq!(chest.slots[26], Some(ItemStack::new(ITEM_CHEST, 4)));
 }
 
 #[test]
@@ -313,9 +315,9 @@ fn containers_slot_count_is_preserved() {
     let double_chest = ChestSave {
         pos: [42, 64, 42],
         slots: {
-            let mut slots: Vec<Option<(u16, u8)>> = vec![None; 54];
-            slots[0] = Some((ITEM_STONE, 1));
-            slots[53] = Some((ITEM_PLANKS, 64));
+            let mut slots: Vec<Option<ItemStack>> = vec![None; 54];
+            slots[0] = Some(ItemStack::new(ITEM_STONE, 1));
+            slots[53] = Some(ItemStack::new(ITEM_PLANKS, 64));
             slots
         },
     };
@@ -339,7 +341,7 @@ fn containers_slot_count_is_preserved() {
     let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
     assert_eq!(loaded, original);
     assert_eq!(loaded.chests[0].slots.len(), 54);
-    assert_eq!(loaded.chests[0].slots[53], Some((ITEM_PLANKS, 64)));
+    assert_eq!(loaded.chests[0].slots[53], Some(ItemStack::new(ITEM_PLANKS, 64)));
 }
 
 #[test]
@@ -361,10 +363,10 @@ fn containers_chest_save_to_container_roundtrip() {
     // the same conversion `apply_dimension_containers` does at
     // load time.
     use crate::container::Container;
-    let mut slots: Vec<Option<(u16, u8)>> = vec![None; 27];
-    slots[0] = Some((ITEM_STONE, 64));
-    slots[10] = Some((ITEM_DIRT, 8));
-    slots[26] = Some((ITEM_PLANKS, 1));
+    let mut slots: Vec<Option<ItemStack>> = vec![None; 27];
+    slots[0] = Some(ItemStack::new(ITEM_STONE, 64));
+    slots[10] = Some(ItemStack::new(ITEM_DIRT, 8));
+    slots[26] = Some(ItemStack::new(ITEM_PLANKS, 1));
     let chest = ChestSave {
         pos: [3, 64, 7],
         slots: slots.clone(),
@@ -373,12 +375,12 @@ fn containers_chest_save_to_container_roundtrip() {
     // apply_dimension_containers does).
     let mut c = Container::with_size(chest.slots.len());
     for (i, slot) in chest.slots.iter().enumerate() {
-        c.set_slot(i, *slot);
+        c.set_slot(i, slot.clone());
     }
     assert_eq!(c.len(), 27);
-    assert_eq!(c.slot(0), Some((ITEM_STONE, 64)));
-    assert_eq!(c.slot(10), Some((ITEM_DIRT, 8)));
-    assert_eq!(c.slot(26), Some((ITEM_PLANKS, 1)));
+    assert_eq!(c.slot(0), Some(ItemStack::new(ITEM_STONE, 64)));
+    assert_eq!(c.slot(10), Some(ItemStack::new(ITEM_DIRT, 8)));
+    assert_eq!(c.slot(26), Some(ItemStack::new(ITEM_PLANKS, 1)));
     // And back to a ChestSave (mirrors build_dimension_containers).
     let round_trip = ChestSave {
         pos: chest.pos,
@@ -397,13 +399,13 @@ fn containers_full_save_load_through_typed_apis() {
     // Phase 1: simulate live state - three chests with mixed
     // contents at distinct positions.
     use std::collections::HashMap;
-    let mut live: HashMap<[i32; 3], Vec<Option<(u16, u8)>>> = HashMap::new();
+    let mut live: HashMap<[i32; 3], Vec<Option<ItemStack>>> = HashMap::new();
     live.insert(
         [10, 64, 10],
         {
             let mut s = vec![None; 27];
-            s[0] = Some((ITEM_STONE, 64));
-            s[1] = Some((ITEM_DIRT, 32));
+            s[0] = Some(ItemStack::new(ITEM_STONE, 64));
+            s[1] = Some(ItemStack::new(ITEM_DIRT, 32));
             s
         },
     );
@@ -412,7 +414,7 @@ fn containers_full_save_load_through_typed_apis() {
         [-5, 65, 5],
         {
             let mut s = vec![None; 27];
-            s[26] = Some((ITEM_SWORD_IRON, 1));
+            s[26] = Some(ItemStack::new(ITEM_SWORD_IRON, 1));
             s
         },
     );
@@ -443,7 +445,7 @@ fn containers_full_save_load_through_typed_apis() {
     // Phase 3: read back + rebuild the chest map (mirrors
     // apply_dimension_containers).
     let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
-    let mut rebuilt: HashMap<[i32; 3], Vec<Option<(u16, u8)>>> = HashMap::new();
+    let mut rebuilt: HashMap<[i32; 3], Vec<Option<ItemStack>>> = HashMap::new();
     for chest in &loaded.chests {
         rebuilt.insert(chest.pos, chest.slots.clone());
     }
@@ -454,6 +456,51 @@ fn containers_full_save_load_through_typed_apis() {
         let got = rebuilt.get(pos).expect("missing chest pos after reload");
         assert_eq!(got, slots, "slots mismatch at {pos:?}");
     }
+}
+
+/// W467: a damaged stack parked in a chest survives the full
+/// Container -> ChestSave -> disk -> ChestSave -> Container round
+/// trip (the whole point of the v7 stack-slotted schema).
+#[test]
+fn containers_damaged_stack_round_trips() {
+    use crate::container::Container;
+    let tmp = TempDir::new().unwrap();
+    let mut damaged = ItemStack::new(ITEM_SWORD_IRON, 1);
+    damaged.components.damage = 20;
+    let mut live = Container::with_size(27);
+    live.set_slot(3, Some(damaged.clone()));
+    live.set_slot(4, Some(ItemStack::new(ITEM_STONE, 12)));
+    // Save side: mirrors build_dimension_containers_from.
+    let bundle = DimensionContainers {
+        format_version: CONTAINERS_FORMAT_VERSION,
+        chests: vec![ChestSave {
+            pos: [5, 64, 5],
+            slots: live.slots().to_vec(),
+        }],
+        furnaces: Vec::new(),
+        fires: Vec::new(),
+        doors: Vec::new(),
+        chest_facings: Vec::new(),
+        brewing: Vec::new(),
+        levers_on: Vec::new(),
+        rails: Vec::new(),
+        stairs: Vec::new(),
+        beds: Vec::new(),
+        torch_orients: Vec::new(),
+        spawners: Vec::new(),
+    };
+    write_containers_in_dir(tmp.path(), SLUG, DIM, &bundle).unwrap();
+    // Load side: mirrors apply_dimension_containers.
+    let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
+    let chest = &loaded.chests[0];
+    let mut rebuilt = Container::with_size(chest.slots.len());
+    for (i, slot) in chest.slots.iter().enumerate() {
+        rebuilt.set_slot(i, slot.clone());
+    }
+    let back = rebuilt.slot(3).expect("damaged stack present");
+    assert_eq!(back.components.damage, 20, "damage must survive the save");
+    assert_eq!(back, damaged);
+    assert_eq!(rebuilt.slot(4), Some(ItemStack::new(ITEM_STONE, 12)));
 }
 
 #[test]

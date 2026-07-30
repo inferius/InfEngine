@@ -21,11 +21,13 @@ pub(crate) struct BrewingPanelInputs<'a> {
     pub(crate) ctx: &'a egui::Context,
     pub(crate) stand_snapshot: &'a container::Container,
     pub(crate) runtime_snapshot: BrewingRuntime,
-    pub(crate) inv_plain_snapshot: &'a [Option<(u16, u8)>],
+    /// W467: stack-shaped player-inventory snapshot (draw-only;
+    /// render.rs applies clicks against the live inventory).
+    pub(crate) inv_stack_snapshot: &'a [Option<crate::item::ItemStack>],
     pub(crate) atlas_tex_id: Option<egui::TextureId>,
     pub(crate) icon_uv_resolver: &'a dyn Fn(u16) -> Option<[f32; 4]>,
     pub(crate) open_local: &'a mut bool,
-    pub(crate) held_local: Option<(u16, u8)>,
+    pub(crate) held_local: Option<&'a crate::item::ItemStack>,
     /// Click actions emitted by the stand grid. First field is
     /// false (stand-side); render.rs applies them against the
     /// real `Voxel::brewing_stands` entry.
@@ -40,7 +42,7 @@ pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
         ctx,
         stand_snapshot,
         runtime_snapshot,
-        inv_plain_snapshot,
+        inv_stack_snapshot,
         atlas_tex_id,
         icon_uv_resolver,
         open_local,
@@ -62,11 +64,11 @@ pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
             ui.label(
                 "ESC to close - LMB take/place, RMB half/one, Shift+LMB transfer",
             );
-            if let Some((id, n)) = held_local {
+            if let Some(held_st) = held_local {
                 ui.label(format!(
                     "Holding: item {} x{}",
-                    crate::lang::localized_item_name(id),
-                    n,
+                    crate::lang::localized_item_name(held_st.id),
+                    held_st.count,
                 ));
             }
             ui.separator();
@@ -114,9 +116,9 @@ pub(crate) fn render(inputs: BrewingPanelInputs<'_>) {
             // Mirror of the player inventory. Clicks routed
             // through stand_actions_out tagged as player_side.
             let mut inv_view =
-                container::Container::with_size(inv_plain_snapshot.len());
-            for (i, s) in inv_plain_snapshot.iter().enumerate() {
-                inv_view.set_slot(i, *s);
+                container::Container::with_size(inv_stack_snapshot.len());
+            for (i, s) in inv_stack_snapshot.iter().enumerate() {
+                inv_view.set_slot(i, s.clone());
             }
             let inv_cfg = container::ui::GridConfig {
                 cols: 9,
@@ -146,7 +148,7 @@ fn draw_single(
     ui: &mut egui::Ui,
     stand: &container::Container,
     slot_idx: usize,
-    held: Option<(u16, u8)>,
+    held: Option<&crate::item::ItemStack>,
     atlas_tex_id: Option<egui::TextureId>,
     icon_uv_resolver: &dyn Fn(u16) -> Option<[f32; 4]>,
     actions_out: &mut Vec<(bool, container::ui::GridAction)>,

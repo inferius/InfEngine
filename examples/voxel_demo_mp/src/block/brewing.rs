@@ -95,10 +95,12 @@ pub(crate) fn break_brewing_stand(
     let Some(stand) = stands.remove(&pos) else {
         return Vec::new();
     };
+    // W468 carries components through drops; until then the spill
+    // edge flattens to bare ids (same loss as pre-W467).
     let mut out: Vec<u16> = Vec::new();
-    for (id, count) in stand.slots().iter().flatten() {
-        for _ in 0..*count {
-            out.push(*id);
+    for st in stand.slots().iter().flatten() {
+        for _ in 0..st.count {
+            out.push(st.id);
         }
     }
     out
@@ -143,8 +145,8 @@ pub(crate) fn step_one_stand(
     runtime: &mut BrewingRuntime,
     dt_ms: u32,
 ) {
-    let Some((ingredient_id, _ingredient_count)) =
-        stand.slot(SLOT_INGREDIENT)
+    let Some(ingredient_id) =
+        stand.slot_ref(SLOT_INGREDIENT).map(|st| st.id)
     else {
         runtime.progress_ms = 0;
         return;
@@ -152,7 +154,7 @@ pub(crate) fn step_one_stand(
     // Find which bottle slots match the current ingredient.
     let mut matched: Vec<(usize, u16)> = Vec::with_capacity(3);
     for slot_idx in [SLOT_BOTTLE_0, SLOT_BOTTLE_1, SLOT_BOTTLE_2] {
-        if let Some((base_id, _)) = stand.slot(slot_idx)
+        if let Some(base_id) = stand.slot_ref(slot_idx).map(|st| st.id)
             && let Some(recipe) = brewing_for(ingredient_id, base_id)
         {
             matched.push((slot_idx, recipe.output));
@@ -166,16 +168,14 @@ pub(crate) fn step_one_stand(
     while runtime.progress_ms >= BREW_MS_PER_OUTPUT {
         // Re-check ingredient + matches each iteration in case
         // the previous loop emptied something.
-        let Some((cur_ing_id, cur_ing_count)) =
-            stand.slot(SLOT_INGREDIENT)
-        else {
+        let Some(cur_ing) = stand.slot(SLOT_INGREDIENT) else {
             runtime.progress_ms = 0;
             break;
         };
         let mut transforms: Vec<(usize, u16)> = Vec::with_capacity(3);
         for slot_idx in [SLOT_BOTTLE_0, SLOT_BOTTLE_1, SLOT_BOTTLE_2] {
-            if let Some((base_id, _)) = stand.slot(slot_idx)
-                && let Some(recipe) = brewing_for(cur_ing_id, base_id)
+            if let Some(base_id) = stand.slot_ref(slot_idx).map(|st| st.id)
+                && let Some(recipe) = brewing_for(cur_ing.id, base_id)
             {
                 transforms.push((slot_idx, recipe.output));
             }
@@ -185,33 +185,41 @@ pub(crate) fn step_one_stand(
             break;
         }
         runtime.progress_ms -= BREW_MS_PER_OUTPUT;
-        // Transform each matching bottle (count preserved).
+        // Transform each matching bottle (count preserved). The
+        // brewed potion is a NEW item - fresh empty components.
         for (slot_idx, output_id) in transforms {
-            let count = stand.slot(slot_idx).map(|(_, c)| c).unwrap_or(1);
-            stand.set_slot(slot_idx, Some((output_id, count)));
+            let count = stand.slot_ref(slot_idx).map(|st| st.count).unwrap_or(1);
+            stand.set_slot(
+                slot_idx,
+                Some(crate::item::ItemStack::new(output_id, count)),
+            );
         }
-        // Consume one ingredient.
-        let new_count = cur_ing_count.saturating_sub(1);
+        // Consume one ingredient (components preserved on the
+        // remainder).
+        let new_count = cur_ing.count.saturating_sub(1);
         if new_count == 0 {
             stand.set_slot(SLOT_INGREDIENT, None);
         } else {
-            stand.set_slot(SLOT_INGREDIENT, Some((cur_ing_id, new_count)));
+            stand.set_slot(SLOT_INGREDIENT, Some(cur_ing.with_count(new_count)));
         }
     }
 }
 
 /// Recover the held cursor stack into the stand when the UI
 /// closes. Returns the per-item leftover the caller spawns as
-/// floor drops.
+/// floor drops (id-shaped until W468 carries components through
+/// drops).
 pub(crate) fn recover_held_on_close(
     stand: Option<&mut Container>,
-    held: Option<(u16, u8)>,
+    held: Option<crate::item::ItemStack>,
 ) -> Vec<u16> {
-    let Some((id, count)) = held else {
+    let Some(stack) = held else {
         return Vec::new();
     };
+    let id = stack.id;
+    let count = stack.count;
     let leftover = match stand {
-        Some(c) => c.insert((id, count)),
+        Some(c) => c.insert(stack),
         None => count,
     };
     (0..leftover).map(|_| id).collect()
@@ -220,6 +228,7 @@ pub(crate) fn recover_held_on_close(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::item::ItemStack;
     use crate::recipes::brewing::BREWING_RECIPES;
 
     #[test]
@@ -244,13 +253,13 @@ mod tests {
         // bottle, tick past the threshold, check the output.
         let recipe = &BREWING_RECIPES[0];
         let mut stand = new_brewing_stand();
-        stand.set_slot(SLOT_INGREDIENT, Some((recipe.ingredient, 1)));
-        stand.set_slot(SLOT_BOTTLE_0, Some((recipe.base, 1)));
+        stand.set_slot(SLOT_INGREDIENT, Some(ItemStack::new(recipe.ingredient, 1)));
+        stand.set_slot(SLOT_BOTTLE_0, Some(ItemStack::new(recipe.base, 1)));
         let mut rt = BrewingRuntime::default();
         // One big step covering the full brew duration plus
         // overflow.
         step_one_stand(&mut stand, &mut rt, BREW_MS_PER_OUTPUT + 100);
-        assert_eq!(stand.slot(SLOT_BOTTLE_0).map(|(id, _)| id), Some(recipe.output));
+        assert_eq!(stand.slot_ref(SLOT_BOTTLE_0).map(|st| st.id), Some(recipe.output));
         // Ingredient consumed (was 1).
         assert!(stand.slot(SLOT_INGREDIENT).is_none());
         // Overflow preserved.
@@ -261,15 +270,15 @@ mod tests {
     fn three_bottles_transform_in_parallel() {
         let recipe = &BREWING_RECIPES[0];
         let mut stand = new_brewing_stand();
-        stand.set_slot(SLOT_INGREDIENT, Some((recipe.ingredient, 1)));
-        stand.set_slot(SLOT_BOTTLE_0, Some((recipe.base, 1)));
-        stand.set_slot(SLOT_BOTTLE_1, Some((recipe.base, 1)));
-        stand.set_slot(SLOT_BOTTLE_2, Some((recipe.base, 1)));
+        stand.set_slot(SLOT_INGREDIENT, Some(ItemStack::new(recipe.ingredient, 1)));
+        stand.set_slot(SLOT_BOTTLE_0, Some(ItemStack::new(recipe.base, 1)));
+        stand.set_slot(SLOT_BOTTLE_1, Some(ItemStack::new(recipe.base, 1)));
+        stand.set_slot(SLOT_BOTTLE_2, Some(ItemStack::new(recipe.base, 1)));
         let mut rt = BrewingRuntime::default();
         step_one_stand(&mut stand, &mut rt, BREW_MS_PER_OUTPUT);
         for slot in [SLOT_BOTTLE_0, SLOT_BOTTLE_1, SLOT_BOTTLE_2] {
             assert_eq!(
-                stand.slot(slot).map(|(id, _)| id),
+                stand.slot_ref(slot).map(|st| st.id),
                 Some(recipe.output)
             );
         }
@@ -282,8 +291,8 @@ mod tests {
         let recipe = &BREWING_RECIPES[0];
         let mut stand = new_brewing_stand();
         // Ingredient with no matching base.
-        stand.set_slot(SLOT_INGREDIENT, Some((recipe.ingredient, 1)));
-        stand.set_slot(SLOT_BOTTLE_0, Some((9999, 1)));
+        stand.set_slot(SLOT_INGREDIENT, Some(ItemStack::new(recipe.ingredient, 1)));
+        stand.set_slot(SLOT_BOTTLE_0, Some(ItemStack::new(9999, 1)));
         let mut rt = BrewingRuntime { progress_ms: 1234 };
         step_one_stand(&mut stand, &mut rt, 100);
         assert_eq!(rt.progress_ms, 0);
@@ -305,8 +314,8 @@ mod tests {
         let mut runtimes: HashMap<[i32; 3], BrewingRuntime> = HashMap::new();
         place_brewing_stand(&mut stands, &mut runtimes, pos);
         let stand = stands.get_mut(&pos).unwrap();
-        stand.set_slot(SLOT_INGREDIENT, Some((recipe.ingredient, 2)));
-        stand.set_slot(SLOT_BOTTLE_0, Some((recipe.base, 3)));
+        stand.set_slot(SLOT_INGREDIENT, Some(ItemStack::new(recipe.ingredient, 2)));
+        stand.set_slot(SLOT_BOTTLE_0, Some(ItemStack::new(recipe.base, 3)));
         let drops = break_brewing_stand(&mut stands, &mut runtimes, pos);
         // 2 ingredients + 3 bottles = 5 drops.
         assert_eq!(drops.len(), 5);

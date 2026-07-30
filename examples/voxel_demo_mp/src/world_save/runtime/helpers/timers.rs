@@ -49,7 +49,8 @@ pub(in crate::world_save::runtime) fn build_timers(voxel: &Voxel) -> ScheduledTi
     // smeltable input (otherwise the catch-up has nothing to do).
     // Each emits zero or more FurnaceOutput events on load.
     for (pos, furnace) in voxel.furnaces.iter() {
-        let Some((input_id, _)) = furnace.slot(0) else {
+        // W467: id-keyed gate - slot_tuple projects the stack down.
+        let Some((input_id, _)) = furnace.slot_tuple(0) else {
             continue;
         };
         let Some((output_id, _)) = crate::smelting::smelt_recipe(input_id) else {
@@ -69,7 +70,7 @@ pub(in crate::world_save::runtime) fn build_timers(voxel: &Voxel) -> ScheduledTi
             / crate::block::furnace::TICK_MS;
         // Skip timers that have no fuel left AND no progress AND
         // no spare fuel in the slot - they're inert.
-        let has_fuel_in_slot = matches!(furnace.slot(1), Some((id, n)) if n > 0
+        let has_fuel_in_slot = matches!(furnace.slot_tuple(1), Some((id, n)) if n > 0
             && crate::smelting::fuel_burn_ticks(id) > 0);
         if fuel_left_ticks == 0 && cook_progress_ticks == 0 && !has_fuel_in_slot {
             continue;

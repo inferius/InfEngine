@@ -13,9 +13,12 @@
 
 use tempfile::TempDir;
 
+use crate::item::ItemStack;
+
 use super::containers::{
-    CONTAINERS_FORMAT_VERSION, CONTAINERS_MAGIC, ChestSave, DimensionContainers, FurnaceSave,
-    containers_path_in_dir, read_containers_in_dir, write_containers_in_dir,
+    CONTAINERS_FORMAT_VERSION, CONTAINERS_MAGIC, ChestSave, ChestSaveV6,
+    DimensionContainers, FurnaceSave, containers_path_in_dir,
+    read_containers_in_dir, write_containers_in_dir,
 };
 use super::migrate::{MigrationRegistry, SaveKind};
 
@@ -28,28 +31,21 @@ const ITEM_PLANKS: u16 = 7;
 const ITEM_SWORD_IRON: u16 = 25;
 const ITEM_CHEST: u16 = 41;
 
-fn empty_chest_at(pos: [i32; 3]) -> ChestSave {
-    ChestSave {
-        pos,
-        slots: vec![None; 27],
-    }
-}
-
 fn populated_chest_at(pos: [i32; 3]) -> ChestSave {
-    let mut slots: Vec<Option<(u16, u8)>> = vec![None; 27];
-    slots[0] = Some((ITEM_STONE, 64));
-    slots[1] = Some((ITEM_DIRT, 32));
-    slots[5] = Some((ITEM_SWORD_IRON, 1));
-    slots[13] = Some((ITEM_PLANKS, 17));
-    slots[26] = Some((ITEM_CHEST, 4));
+    let mut slots: Vec<Option<ItemStack>> = vec![None; 27];
+    slots[0] = Some(ItemStack::new(ITEM_STONE, 64));
+    slots[1] = Some(ItemStack::new(ITEM_DIRT, 32));
+    slots[5] = Some(ItemStack::new(ITEM_SWORD_IRON, 1));
+    slots[13] = Some(ItemStack::new(ITEM_PLANKS, 17));
+    slots[26] = Some(ItemStack::new(ITEM_CHEST, 4));
     ChestSave { pos, slots }
 }
 
 fn populated_furnace_at(pos: [i32; 3]) -> FurnaceSave {
-    let mut slots: Vec<Option<(u16, u8)>> = vec![None; 3];
-    slots[0] = Some((14, 2));
-    slots[1] = Some((13, 1));
-    slots[2] = Some((43, 5));
+    let mut slots: Vec<Option<ItemStack>> = vec![None; 3];
+    slots[0] = Some(ItemStack::new(14, 2));
+    slots[1] = Some(ItemStack::new(13, 1));
+    slots[2] = Some(ItemStack::new(43, 5));
     FurnaceSave {
         pos,
         slots,
@@ -57,6 +53,26 @@ fn populated_furnace_at(pos: [i32; 3]) -> FurnaceSave {
         fuel_full_ms: 80_000,
         cook_progress_ms: 4_321,
     }
+}
+
+/// W467: FROZEN tuple-slotted chest fixtures for the hand-built v1
+/// envelope - a genuine v1 file stores `(u16, u8)` slots, so the
+/// old-payload writer must not use the live (stack-slotted) shape.
+fn empty_chest_v6_at(pos: [i32; 3]) -> ChestSaveV6 {
+    ChestSaveV6 {
+        pos,
+        slots: vec![None; 27],
+    }
+}
+
+fn populated_chest_v6_at(pos: [i32; 3]) -> ChestSaveV6 {
+    let mut slots: Vec<Option<(u16, u8)>> = vec![None; 27];
+    slots[0] = Some((ITEM_STONE, 64));
+    slots[1] = Some((ITEM_DIRT, 32));
+    slots[5] = Some((ITEM_SWORD_IRON, 1));
+    slots[13] = Some((ITEM_PLANKS, 17));
+    slots[26] = Some((ITEM_CHEST, 4));
+    ChestSaveV6 { pos, slots }
 }
 
 #[test]
@@ -87,8 +103,8 @@ fn containers_roundtrip_furnaces_v2() {
     assert_eq!(loaded.furnaces[0].fuel_left_ms, 12_345);
     assert_eq!(loaded.furnaces[0].fuel_full_ms, 80_000);
     assert_eq!(loaded.furnaces[0].cook_progress_ms, 4_321);
-    assert_eq!(loaded.furnaces[0].slots[0], Some((14, 2)));
-    assert_eq!(loaded.furnaces[0].slots[2], Some((43, 5)));
+    assert_eq!(loaded.furnaces[0].slots[0], Some(ItemStack::new(14, 2)));
+    assert_eq!(loaded.furnaces[0].slots[2], Some(ItemStack::new(43, 5)));
 }
 
 #[test]
@@ -121,13 +137,15 @@ fn write_v1_containers_file(
     base: &std::path::Path,
     slug: &str,
     dim: &str,
-    chests: Vec<ChestSave>,
+    chests: Vec<ChestSaveV6>,
 ) {
     use serde::{Deserialize, Serialize};
+    // W467: the v1 payload stores tuple slots - build it from the
+    // FROZEN ChestSaveV6 shape, never the live (stack) ChestSave.
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     struct DimensionContainersV1 {
         pub format_version: u32,
-        pub chests: Vec<ChestSave>,
+        pub chests: Vec<ChestSaveV6>,
     }
     let v1 = DimensionContainersV1 {
         format_version: 1,
@@ -152,7 +170,7 @@ fn write_v1_containers_file(
 fn containers_v1_to_v2_migration_round_trip() {
     use super::containers::{
         containers_v1_to_v2, containers_v2_to_v3, containers_v3_to_v4,
-        containers_v4_to_v5, containers_v5_to_v6,
+        containers_v4_to_v5, containers_v5_to_v6, containers_v6_to_v7,
         read_containers_in_dir_with_registry,
     };
 
@@ -161,7 +179,7 @@ fn containers_v1_to_v2_migration_round_trip() {
         tmp.path(),
         SLUG,
         DIM,
-        vec![populated_chest_at([3, 64, 7])],
+        vec![populated_chest_v6_at([3, 64, 7])],
     );
     let mut registry = MigrationRegistry::new();
     // Chain: v1 -> v2 -> v3. Tests with an explicit registry must
@@ -176,13 +194,15 @@ fn containers_v1_to_v2_migration_round_trip() {
     // W143: the live format moved to v5 - chain the production
     // 4 -> 5 arrow so the read reaches the current version.
     registry.register(SaveKind::Containers, 4, 5, containers_v4_to_v5);
-    // W387: the live format moved to v6 - chain the production
-    // 5 -> 6 arrow so the read reaches the current version.
+    // W387: 5 -> 6 (orientation bytes).
+    registry.register(SaveKind::Containers, 5, 6, containers_v5_to_v6);
+    // W467: the live format moved to v7 - chain the production
+    // 6 -> 7 arrow so the read reaches the current version.
     registry.register(
         SaveKind::Containers,
-        5,
+        6,
         CONTAINERS_FORMAT_VERSION,
-        containers_v5_to_v6,
+        containers_v6_to_v7,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
@@ -190,7 +210,7 @@ fn containers_v1_to_v2_migration_round_trip() {
     assert_eq!(loaded.format_version, CONTAINERS_FORMAT_VERSION);
     assert_eq!(loaded.chests.len(), 1);
     assert_eq!(loaded.chests[0].pos, [3, 64, 7]);
-    assert_eq!(loaded.chests[0].slots[0], Some((ITEM_STONE, 64)));
+    assert_eq!(loaded.chests[0].slots[0], Some(ItemStack::new(ITEM_STONE, 64)));
     assert!(loaded.furnaces.is_empty());
     assert!(loaded.fires.is_empty());
 
@@ -204,7 +224,7 @@ fn containers_v1_to_v2_migration_round_trip() {
 #[test]
 fn containers_v1_to_v2_migration_via_default_registry() {
     let tmp = TempDir::new().unwrap();
-    write_v1_containers_file(tmp.path(), SLUG, DIM, vec![empty_chest_at([0, 64, 0])]);
+    write_v1_containers_file(tmp.path(), SLUG, DIM, vec![empty_chest_v6_at([0, 64, 0])]);
     let loaded = read_containers_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
     assert_eq!(loaded.format_version, CONTAINERS_FORMAT_VERSION);
     assert!(loaded.furnaces.is_empty());
@@ -215,7 +235,7 @@ fn containers_v1_to_v2_migration_via_default_registry() {
 fn containers_v1_to_v2_migration_preserves_chest_slot_data() {
     use super::containers::{
         containers_v1_to_v2, containers_v2_to_v3, containers_v3_to_v4,
-        containers_v4_to_v5, containers_v5_to_v6,
+        containers_v4_to_v5, containers_v5_to_v6, containers_v6_to_v7,
         read_containers_in_dir_with_registry,
     };
     let tmp = TempDir::new().unwrap();
@@ -224,9 +244,9 @@ fn containers_v1_to_v2_migration_preserves_chest_slot_data() {
         SLUG,
         DIM,
         vec![
-            populated_chest_at([1, 64, 1]),
-            populated_chest_at([2, 64, 2]),
-            empty_chest_at([3, 64, 3]),
+            populated_chest_v6_at([1, 64, 1]),
+            populated_chest_v6_at([2, 64, 2]),
+            empty_chest_v6_at([3, 64, 3]),
         ],
     );
     let mut registry = MigrationRegistry::new();
@@ -238,20 +258,21 @@ fn containers_v1_to_v2_migration_preserves_chest_slot_data() {
     // W143: the live format moved to v5 - chain the production
     // 4 -> 5 arrow so the read reaches the current version.
     registry.register(SaveKind::Containers, 4, 5, containers_v4_to_v5);
-    // W387: the live format moved to v6 - chain the production
-    // 5 -> 6 arrow so the read reaches the current version.
+    // W387: 5 -> 6 (orientation bytes).
+    registry.register(SaveKind::Containers, 5, 6, containers_v5_to_v6);
+    // W467: chain the production 6 -> 7 arrow (live format is v7).
     registry.register(
         SaveKind::Containers,
-        5,
+        6,
         CONTAINERS_FORMAT_VERSION,
-        containers_v5_to_v6,
+        containers_v6_to_v7,
     );
     let loaded = read_containers_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()
         .unwrap();
     assert_eq!(loaded.chests.len(), 3);
-    assert_eq!(loaded.chests[0].slots[26], Some((ITEM_CHEST, 4)));
-    assert_eq!(loaded.chests[1].slots[5], Some((ITEM_SWORD_IRON, 1)));
+    assert_eq!(loaded.chests[0].slots[26], Some(ItemStack::new(ITEM_CHEST, 4)));
+    assert_eq!(loaded.chests[1].slots[5], Some(ItemStack::new(ITEM_SWORD_IRON, 1)));
     assert!(loaded.chests[2].slots.iter().all(|s| s.is_none()));
 }
 

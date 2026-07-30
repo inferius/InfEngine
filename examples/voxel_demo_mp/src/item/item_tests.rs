@@ -6,8 +6,10 @@
 //! `item/mod.rs` under `#[cfg(test)]`.
 
 use super::icons::{IconSpec, icon_for};
+use super::ItemStack;
 use super::stack::{
-    drop_into_first_free, merge_into, split_half, take_n,
+    drop_into_first_free_stacks, merge_into_stacks, split_half_stacks,
+    take_n_stacks,
 };
 use super::{
     ITEM_TYPES, ItemCategory, item_category, item_display_name,
@@ -240,49 +242,49 @@ fn icon_for_unknown_id_is_none() {
 }
 
 // ---------------------------------------------------------------
-// Stack arithmetic - merge_into.
+// Stack arithmetic - merge_into_stacks.
 // ---------------------------------------------------------------
 
 #[test]
 fn merge_into_empty_slot() {
-    let mut slot: Option<(u16, u8)> = None;
-    let leftover = merge_into(&mut slot, (3, 10));
+    let mut slot: Option<ItemStack> = None;
+    let leftover = merge_into_stacks(&mut slot, ItemStack::new(3, 10));
     assert_eq!(leftover, 0);
-    assert_eq!(slot, Some((3, 10)));
+    assert_eq!(slot, Some(ItemStack::new(3, 10)));
 }
 
 #[test]
 fn merge_into_partial_stack_same_item() {
     // slot (3, 40) + incoming (3, 30), max_stack 64 -> slot
     // (3, 64), leftover 6.
-    let mut slot = Some((3, 40));
-    let leftover = merge_into(&mut slot, (3, 30));
+    let mut slot = Some(ItemStack::new(3, 40));
+    let leftover = merge_into_stacks(&mut slot, ItemStack::new(3, 30));
     assert_eq!(leftover, 6);
-    assert_eq!(slot, Some((3, 64)));
+    assert_eq!(slot, Some(ItemStack::new(3, 64)));
 }
 
 #[test]
 fn merge_into_different_item() {
     // Different item leaves the slot untouched; full count is
     // leftover.
-    let mut slot = Some((1, 10));
-    let leftover = merge_into(&mut slot, (2, 20));
+    let mut slot = Some(ItemStack::new(1, 10));
+    let leftover = merge_into_stacks(&mut slot, ItemStack::new(2, 20));
     assert_eq!(leftover, 20);
-    assert_eq!(slot, Some((1, 10)));
+    assert_eq!(slot, Some(ItemStack::new(1, 10)));
 }
 
 #[test]
 fn merge_into_empty_respects_tool_max_stack_one() {
     // Pickaxe (id 16) caps at 1: merging (16, 5) into empty
     // leaves 4 leftover.
-    let mut slot: Option<(u16, u8)> = None;
-    let leftover = merge_into(&mut slot, (16, 5));
+    let mut slot: Option<ItemStack> = None;
+    let leftover = merge_into_stacks(&mut slot, ItemStack::new(16, 5));
     assert_eq!(leftover, 4);
-    assert_eq!(slot, Some((16, 1)));
+    assert_eq!(slot, Some(ItemStack::new(16, 1)));
 }
 
 // ---------------------------------------------------------------
-// Stack arithmetic - split_half.
+// Stack arithmetic - split_half_stacks.
 // ---------------------------------------------------------------
 
 #[test]
@@ -291,66 +293,66 @@ fn split_half_odd_stack() {
     // Floor goes to the moved-out half, ceiling stays in the
     // source slot - misclicks leave the player with the bigger
     // half they started from.
-    let mut slot = Some((3, 17));
-    let moved = split_half(&mut slot);
-    assert_eq!(moved, Some((3, 8)));
-    assert_eq!(slot, Some((3, 9)));
+    let mut slot = Some(ItemStack::new(3, 17));
+    let moved = split_half_stacks(&mut slot);
+    assert_eq!(moved, Some(ItemStack::new(3, 8)));
+    assert_eq!(slot, Some(ItemStack::new(3, 9)));
 }
 
 #[test]
 fn split_half_even_stack() {
-    let mut slot = Some((3, 10));
-    let moved = split_half(&mut slot);
-    assert_eq!(moved, Some((3, 5)));
-    assert_eq!(slot, Some((3, 5)));
+    let mut slot = Some(ItemStack::new(3, 10));
+    let moved = split_half_stacks(&mut slot);
+    assert_eq!(moved, Some(ItemStack::new(3, 5)));
+    assert_eq!(slot, Some(ItemStack::new(3, 5)));
 }
 
 #[test]
 fn split_half_empty_returns_none() {
-    let mut slot: Option<(u16, u8)> = None;
-    assert!(split_half(&mut slot).is_none());
+    let mut slot: Option<ItemStack> = None;
+    assert!(split_half_stacks(&mut slot).is_none());
 }
 
 // ---------------------------------------------------------------
-// Stack arithmetic - take_n.
+// Stack arithmetic - take_n_stacks.
 // ---------------------------------------------------------------
 
 #[test]
 fn take_n_exact() {
-    let mut slot = Some((3, 10));
-    let taken = take_n(&mut slot, 4);
-    assert_eq!(taken, Some((3, 4)));
-    assert_eq!(slot, Some((3, 6)));
+    let mut slot = Some(ItemStack::new(3, 10));
+    let taken = take_n_stacks(&mut slot, 4);
+    assert_eq!(taken, Some(ItemStack::new(3, 4)));
+    assert_eq!(slot, Some(ItemStack::new(3, 6)));
 }
 
 #[test]
 fn take_n_too_many() {
-    let mut slot = Some((3, 5));
-    let taken = take_n(&mut slot, 10);
+    let mut slot = Some(ItemStack::new(3, 5));
+    let taken = take_n_stacks(&mut slot, 10);
     assert!(taken.is_none());
     // Slot untouched.
-    assert_eq!(slot, Some((3, 5)));
+    assert_eq!(slot, Some(ItemStack::new(3, 5)));
 }
 
 // ---------------------------------------------------------------
-// Stack arithmetic - drop_into_first_free.
+// Stack arithmetic - drop_into_first_free_stacks.
 // ---------------------------------------------------------------
 
 #[test]
 fn drop_into_first_free_fills_first_empty() {
-    let mut inv: [Option<(u16, u8)>; 4] = [
-        Some((1, 3)),
+    let mut inv: [Option<ItemStack>; 4] = [
+        Some(ItemStack::new(1, 3)),
         None,
-        Some((2, 7)),
+        Some(ItemStack::new(2, 7)),
         None,
     ];
     // Item 4 (sand) doesn't match any existing slot, so it lands
     // in the first empty slot (index 1).
-    let leftover = drop_into_first_free(&mut inv, (4, 5));
+    let leftover = drop_into_first_free_stacks(&mut inv, ItemStack::new(4, 5));
     assert_eq!(leftover, 0);
-    assert_eq!(inv[0], Some((1, 3)));
-    assert_eq!(inv[1], Some((4, 5)));
-    assert_eq!(inv[2], Some((2, 7)));
+    assert_eq!(inv[0], Some(ItemStack::new(1, 3)));
+    assert_eq!(inv[1], Some(ItemStack::new(4, 5)));
+    assert_eq!(inv[2], Some(ItemStack::new(2, 7)));
     assert_eq!(inv[3], None);
 }
 
@@ -358,18 +360,18 @@ fn drop_into_first_free_fills_first_empty() {
 fn drop_into_first_free_tops_up_existing_stacks_first() {
     // Two existing partial stacks of the same item should fill
     // up before we claim an empty slot.
-    let mut inv: [Option<(u16, u8)>; 3] = [
-        Some((3, 60)), // room for 4 more
+    let mut inv: [Option<ItemStack>; 3] = [
+        Some(ItemStack::new(3, 60)), // room for 4 more
         None,
-        Some((3, 50)), // room for 14 more
+        Some(ItemStack::new(3, 50)), // room for 14 more
     ];
-    let leftover = drop_into_first_free(&mut inv, (3, 10));
+    let leftover = drop_into_first_free_stacks(&mut inv, ItemStack::new(3, 10));
     // 4 into slot 0 -> (3, 64), 6 into slot 2 -> (3, 56), empty
     // slot untouched, leftover 0.
     assert_eq!(leftover, 0);
-    assert_eq!(inv[0], Some((3, 64)));
+    assert_eq!(inv[0], Some(ItemStack::new(3, 64)));
     assert_eq!(inv[1], None);
-    assert_eq!(inv[2], Some((3, 56)));
+    assert_eq!(inv[2], Some(ItemStack::new(3, 56)));
 }
 
 #[test]
@@ -377,30 +379,30 @@ fn drop_into_first_free_overflows_into_next() {
     // 3 partial same-item slots that together don't quite fit
     // the incoming stack. Remainder ends up in the next free
     // slot when one exists.
-    let mut inv: [Option<(u16, u8)>; 4] = [
-        Some((3, 62)), // room 2
-        Some((3, 60)), // room 4
-        Some((3, 58)), // room 6
+    let mut inv: [Option<ItemStack>; 4] = [
+        Some(ItemStack::new(3, 62)), // room 2
+        Some(ItemStack::new(3, 60)), // room 4
+        Some(ItemStack::new(3, 58)), // room 6
         None,
     ];
-    let leftover = drop_into_first_free(&mut inv, (3, 20));
+    let leftover = drop_into_first_free_stacks(&mut inv, ItemStack::new(3, 20));
     // 2 + 4 + 6 = 12 absorbed, 8 spills into slot 3.
     assert_eq!(leftover, 0);
-    assert_eq!(inv[0], Some((3, 64)));
-    assert_eq!(inv[1], Some((3, 64)));
-    assert_eq!(inv[2], Some((3, 64)));
-    assert_eq!(inv[3], Some((3, 8)));
+    assert_eq!(inv[0], Some(ItemStack::new(3, 64)));
+    assert_eq!(inv[1], Some(ItemStack::new(3, 64)));
+    assert_eq!(inv[2], Some(ItemStack::new(3, 64)));
+    assert_eq!(inv[3], Some(ItemStack::new(3, 8)));
 }
 
 #[test]
 fn drop_into_first_free_returns_leftover_when_inv_full() {
-    let mut inv: [Option<(u16, u8)>; 2] = [
-        Some((1, 64)),
-        Some((2, 64)),
+    let mut inv: [Option<ItemStack>; 2] = [
+        Some(ItemStack::new(1, 64)),
+        Some(ItemStack::new(2, 64)),
     ];
     // No room for sand: full count comes back as leftover.
-    let leftover = drop_into_first_free(&mut inv, (4, 5));
+    let leftover = drop_into_first_free_stacks(&mut inv, ItemStack::new(4, 5));
     assert_eq!(leftover, 5);
-    assert_eq!(inv[0], Some((1, 64)));
-    assert_eq!(inv[1], Some((2, 64)));
+    assert_eq!(inv[0], Some(ItemStack::new(1, 64)));
+    assert_eq!(inv[1], Some(ItemStack::new(2, 64)));
 }
