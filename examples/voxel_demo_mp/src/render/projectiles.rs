@@ -16,6 +16,10 @@ pub(crate) struct ArrowMeshes {
     /// W337: crossed-quad large fireball (the fire_charge sprite,
     /// MC FireballRenderer's billboard at ~1 block).
     pub(crate) fireball: Option<MeshHandle>,
+    /// W462: crossed-quad trident (the item sprite rolled 45 deg so
+    /// its diagonal shaft flies point-first - the cheap read of
+    /// MC's ThrownTridentRenderer at gameplay distance).
+    pub(crate) trident: Option<MeshHandle>,
 }
 
 impl ArrowMeshes {
@@ -118,6 +122,42 @@ pub(crate) fn load_arrow_meshes(
         r.bind_mesh_albedo_arc(mesh, albedo);
         out.fireball = Some(mesh);
     }
+    // W462: the trident - crossed unit quads with item/trident.png,
+    // stretched a touch along X so the throw reads spear-like.
+    let tp = dir.parent().map(|p| p.join("item").join("trident.png"));
+    if let Some(tp) = tp
+        && let Ok(img) = image::open(&tp)
+    {
+        let img = img.to_rgba8();
+        let albedo = r.make_mesh_albedo(img.width(), img.height(), &img);
+        let mut verts: Vec<MeshVertex> = Vec::new();
+        let mut idxs: Vec<u32> = Vec::new();
+        let mut quad = |corners: [[f32; 3]; 4], normal: [f32; 3]| {
+            let base = verts.len() as u32;
+            let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+            for i in 0..4 {
+                verts.push(
+                    MeshVertex::new(corners[i], normal)
+                        .with_uv(uvs[i])
+                        .with_light(0.0, 1.0),
+                );
+            }
+            idxs.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            idxs.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+        };
+        const S: f32 = 0.55;
+        quad(
+            [[-S, -S, 0.0], [S, -S, 0.0], [S, S, 0.0], [-S, S, 0.0]],
+            [0.0, 0.0, 1.0],
+        );
+        quad(
+            [[-S, 0.0, -S], [S, 0.0, -S], [S, 0.0, S], [-S, 0.0, S]],
+            [0.0, 1.0, 0.0],
+        );
+        let mesh = r.create_mesh("voxel_demo_mp::trident", &verts, &idxs);
+        r.bind_mesh_albedo_arc(mesh, albedo);
+        out.trident = Some(mesh);
+    }
     tracing::info!("arrow projectile mesh baked");
     out
 }
@@ -164,12 +204,26 @@ pub(crate) fn draw_arrows(
 ) {
     let Some(mesh) = meshes.mesh else { return };
     let white = [1.0f32, 1.0, 1.0, 1.0];
+    // W462: the trident sprite points up-right; roll the mesh so
+    // its shaft lies along the +X flight axis.
+    let roll =
+        Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_4);
     for a in arrows {
         let m = arrow_matrix(a.pos, a.vel);
-        r.draw_mesh_pbr(mesh, m.to_cols_array(), white, 0.0, 0.9);
+        match (a.trident, meshes.trident) {
+            (true, Some(t)) => {
+                r.draw_mesh_pbr(t, (m * roll).to_cols_array(), white, 0.0, 0.9);
+            }
+            _ => r.draw_mesh_pbr(mesh, m.to_cols_array(), white, 0.0, 0.9),
+        }
     }
     for msg in remote.values() {
         let m = arrow_matrix(Vec3::from(msg.pos), Vec3::from(msg.vel));
-        r.draw_mesh_pbr(mesh, m.to_cols_array(), white, 0.0, 0.9);
+        match (msg.trident, meshes.trident) {
+            (true, Some(t)) => {
+                r.draw_mesh_pbr(t, (m * roll).to_cols_array(), white, 0.0, 0.9);
+            }
+            _ => r.draw_mesh_pbr(mesh, m.to_cols_array(), white, 0.0, 0.9),
+        }
     }
 }

@@ -1090,6 +1090,45 @@ fn step_one(
                 );
             }
         }
+        // W462: DrownedTridentAttackGoal - the ~6% of drowned that
+        // spawn holding a trident (MC natural equip chance) throw
+        // it on the MC cadence (interval 40 ticks, radius 10); the
+        // rest stay melee-only.
+        if m.kind == super::kinds::KIND_DROWNED
+            && m.id.is_multiple_of(16)
+            && m.attack_cd <= 0.0
+            && let Some(p) = chase_player_pos
+        {
+            const TRIDENT_COOLDOWN: f32 = 2.0;
+            const TRIDENT_MIN_D2: f32 = 3.0 * 3.0;
+            const TRIDENT_MAX_D2: f32 = 10.0 * 10.0;
+            let ddx = p[0] - m.pos[0];
+            let ddy = p[1] - m.pos[1];
+            let ddz = p[2] - m.pos[2];
+            let pd2 = ddx * ddx + ddy * ddy + ddz * ddz;
+            if (TRIDENT_MIN_D2..=TRIDENT_MAX_D2).contains(&pd2) {
+                m.attack_cd = TRIDENT_COOLDOWN;
+                let eye =
+                    glam::Vec3::new(m.pos[0], m.pos[1] + 1.5, m.pos[2]);
+                let tgt = glam::Vec3::new(p[0], p[1] - 0.6, p[2]);
+                let mut vel = crate::projectile::aim_at(
+                    eye,
+                    tgt,
+                    crate::projectile::SKELETON_ARROW_SPEED,
+                );
+                vel += glam::Vec3::new(
+                    rng.next_f32() - 0.5,
+                    rng.next_f32() - 0.5,
+                    rng.next_f32() - 0.5,
+                ) * 1.2;
+                crate::projectile::spawn_trident(voxel, eye, vel);
+                voxel.sfx_at(
+                    "mob/drowned/shoot",
+                    [eye.x, eye.y, eye.z],
+                    |_, _| {},
+                );
+            }
+        }
         // W432: EndermanLookForPlayerGoal (the stare). Meeting the
         // enderman's gaze inside 32 blocks provokes it for the MC
         // persistent-anger window; the scream marks the moment.

@@ -144,6 +144,8 @@ pub(crate) struct ArrowMsg {
     pub(crate) id: u32,
     pub(crate) pos: [f32; 3],
     pub(crate) vel: [f32; 3],
+    /// W462: render as a trident instead of an arrow.
+    pub(crate) trident: bool,
 }
 
 /// W337: snapshot of one host-side ghast fireball. Same lifecycle

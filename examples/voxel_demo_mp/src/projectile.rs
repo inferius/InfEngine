@@ -24,6 +24,8 @@ pub(crate) const ARROW_GRAVITY: f32 = 20.0;
 const ARROW_DRAG_PER_TICK: f32 = 0.99;
 /// Skeleton arrow damage (MC: 1-4 by difficulty/velocity).
 const ARROW_DAMAGE: f32 = 3.0;
+/// W462: MC ThrownTrident base damage.
+const TRIDENT_DAMAGE: f32 = 8.0;
 /// Flight lifetime cap; a lost arrow despawns quietly.
 const ARROW_LIFETIME_S: f32 = 60.0;
 /// How long a lodged arrow stays visible in the wall.
@@ -210,6 +212,11 @@ pub(crate) struct Arrow {
     /// W417: player-fired arrows hit MOBS and skip player bodies;
     /// mob-fired (skeleton) arrows keep hitting players only.
     pub(crate) from_player: bool,
+    /// W462: thrown trident (drowned) - trident damage + the
+    /// trident mesh; never player-collectible (MC drowned tridents
+    /// are CREATIVE_ONLY pickup, which from_player=false already
+    /// covers).
+    pub(crate) trident: bool,
 }
 
 /// Spawn an arrow on the host + announce it. `origin` is the
@@ -229,6 +236,23 @@ pub(crate) fn spawn_arrow(
         age: 0.0,
         stuck: None,
         from_player,
+        trident: false,
+    });
+}
+
+/// W462: spawn a drowned-thrown trident - the arrow entity with
+/// trident damage + mesh.
+pub(crate) fn spawn_trident(vx: &mut Voxel, origin: Vec3, vel: Vec3) {
+    let id = vx.next_arrow_id;
+    vx.next_arrow_id = vx.next_arrow_id.wrapping_add(1).max(1);
+    vx.arrows.push(Arrow {
+        id,
+        pos: origin,
+        vel,
+        age: 0.0,
+        stuck: None,
+        from_player: false,
+        trident: true,
     });
 }
 
@@ -251,8 +275,9 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
         return;
     }
     let mut removed: Vec<u32> = Vec::new();
-    let mut host_hits = 0u32;
-    let mut remote_hits: Vec<u32> = Vec::new();
+    // W462: per-hit damage (arrow 3 vs trident 8).
+    let mut host_hits: Vec<f32> = Vec::new();
+    let mut remote_hits: Vec<(u32, f32)> = Vec::new();
     let mut impacts: Vec<Vec3> = Vec::new();
     // W417: (mob_id, damage) hits from player arrows, applied after
     // the world borrow drops.
@@ -381,9 +406,14 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
             match (hit_player, block_t) {
                 (Some((pid, pt)), bt) if bt.is_none_or(|b| pt <= b) => {
                     // Player first.
+                    let dmg = if a.trident {
+                        TRIDENT_DAMAGE
+                    } else {
+                        ARROW_DAMAGE
+                    };
                     match pid {
-                        None => host_hits += 1,
-                        Some(id) => remote_hits.push(id),
+                        None => host_hits.push(dmg),
+                        Some(id) => remote_hits.push((id, dmg)),
                     }
                     impacts.push(a.pos + dir * pt);
                     removed.push(a.id);
@@ -408,8 +438,8 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
             let _ = a.play_click(1200.0, 0.10 * g);
         });
     }
-    for _ in 0..host_hits {
-        vx.apply_player_damage(ARROW_DAMAGE);
+    for dmg in host_hits {
+        vx.apply_player_damage(dmg);
     }
     // W417: player-arrow mob damage rides the shared scaled path
     // (attacker Some(0) = the host player, like melee).
@@ -422,11 +452,9 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
     }
     if let NetRole::Server { server, .. } = &vx.net {
         let cfg = bincode::config::standard();
-        for id in remote_hits {
+        for (id, dmg) in remote_hits {
             if let Ok(buf) = bincode::serde::encode_to_vec(
-                DamageMsg {
-                    amount: ARROW_DAMAGE,
-                },
+                DamageMsg { amount: dmg },
                 cfg,
             ) {
                 server.send_bytes_to_client(id, "vx.damage", buf);
@@ -456,6 +484,7 @@ pub(crate) fn tick_arrows(vx: &mut Voxel, dt: f32) {
                 id: a.id,
                 pos: [a.pos.x, a.pos.y, a.pos.z],
                 vel: [a.vel.x, a.vel.y, a.vel.z],
+                trident: a.trident,
             };
             if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                 server.broadcast_bytes("vx.arrow", buf);
