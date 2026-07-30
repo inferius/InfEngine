@@ -106,6 +106,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         let mut day_time_update: Option<f32> = None;
         let mut seed_update: Option<u32> = None;
         let mut weather_update: Option<u8> = None;
+        let mut thunder_update: Option<bool> = None;
         let mut snow_updates: Vec<([i32; 3], u8)> = Vec::new();
         // Liquid level updates received this tick. Drained into
         // `vx.liquid_level` after the net match arm releases
@@ -352,6 +353,19 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         );
                     }
                 }
+                // W460: and the thunder flag.
+                if !new_ids.is_empty()
+                    && let Ok(buf) =
+                        bincode::serde::encode_to_vec(vx.thundering, cfg)
+                {
+                    for id in &new_ids {
+                        server.send_bytes_to_client(
+                            *id,
+                            "vx.thunder",
+                            buf.clone(),
+                        );
+                    }
+                }
                 if !new_ids.is_empty() || !departed_ids.is_empty() {
                     let mut entries: Vec<(u32, String)> =
                         vec![(0, vx.player_name.clone())];
@@ -568,6 +582,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         day_time_update: &mut day_time_update,
                         seed_update: &mut seed_update,
                         weather_update: &mut weather_update,
+                        thunder_update: &mut thunder_update,
                         snow_updates: &mut snow_updates,
                         liquid_level_updates: &mut liquid_level_updates,
                         drop_spawns: &mut drop_spawns,
@@ -778,6 +793,9 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         }
         if let Some(w) = weather_update {
             vx.weather = w;
+        }
+        if let Some(t) = thunder_update {
+            vx.thundering = t;
         }
         for (v, layers) in snow_updates {
             vx.snow_positions.insert(v, layers.clamp(1, 8));

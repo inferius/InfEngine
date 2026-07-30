@@ -91,8 +91,24 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
     //   bytes of JSON).
     let world_json_value = match world_json::read_world(slug) {
         Ok(mut wj) => {
-            if (wj.day_time - voxel.day_time).abs() > 0.5 {
+            // W460: weather state rides the same rewrite (a state
+            // flip always rewrites; pure countdown drift only when
+            // it wandered far enough to matter across a restart).
+            let weather_drift = wj.weather != voxel.weather
+                || wj.thundering != voxel.thundering
+                || (wj.weather_ticks_left - voxel.weather_ticks_left)
+                    .abs()
+                    > 30.0
+                || (wj.thunder_ticks_left - voxel.thunder_ticks_left)
+                    .abs()
+                    > 30.0;
+            if (wj.day_time - voxel.day_time).abs() > 0.5 || weather_drift
+            {
                 wj.day_time = voxel.day_time;
+                wj.weather = voxel.weather;
+                wj.weather_ticks_left = voxel.weather_ticks_left;
+                wj.thundering = voxel.thundering;
+                wj.thunder_ticks_left = voxel.thunder_ticks_left;
                 world_json::write_world(slug, &wj)?;
             }
             wj
@@ -111,6 +127,11 @@ pub(crate) fn save_world(voxel: &mut Voxel, slug: &str) -> io::Result<()> {
                 voxel.base_seed,
             );
             wj.day_time = voxel.day_time; // W46.31
+            // W460: weather into the fresh mint too.
+            wj.weather = voxel.weather;
+            wj.weather_ticks_left = voxel.weather_ticks_left;
+            wj.thundering = voxel.thundering;
+            wj.thunder_ticks_left = voxel.thunder_ticks_left;
             world_json::write_world(slug, &wj)?;
             wj
         }
@@ -200,6 +221,17 @@ fn apply_world_meta_inner(
     // W46.31: restore the saved time-of-day so the sun resumes where
     // the player left it instead of jumping to the engine's default.
     voxel.day_time = world_meta.day_time;
+    // W460: the weather cycle resumes where the save left it (MC
+    // persists rainTime/thunderTime in level.dat). A non-zero
+    // countdown marks a live stream - seed the rng so tick_weather
+    // does not re-roll the loaded stretch on its first tick.
+    voxel.weather = world_meta.weather;
+    voxel.weather_ticks_left = world_meta.weather_ticks_left;
+    voxel.thundering = world_meta.thundering;
+    voxel.thunder_ticks_left = world_meta.thunder_ticks_left;
+    if voxel.weather_ticks_left > 0.0 && voxel.weather_rng == 0 {
+        voxel.weather_rng = 0x9E37_79B1;
+    }
     // Per-dim worldgens table; populate before per-dim load so
     // each dim's chunk-gen can see its assigned variant.
     dims::apply_dim_worldgens(voxel, world_meta);

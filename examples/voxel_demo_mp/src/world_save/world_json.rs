@@ -108,6 +108,18 @@ pub struct WorldJson {
     /// when reading an older save that didn't persist this field.
     #[serde(default)]
     pub day_time: f32,
+    /// W460: weather persistence (the MC level.dat rainTime family).
+    /// 0 clear / 1 rain / 2 snow; countdowns resume on load. JSON
+    /// `serde(default)` keeps older saves loadable (clear sky).
+    #[serde(default)]
+    pub weather: u8,
+    #[serde(default)]
+    pub weather_ticks_left: f32,
+    /// W460: the independent MC thunder cycle.
+    #[serde(default)]
+    pub thundering: bool,
+    #[serde(default)]
+    pub thunder_ticks_left: f32,
 }
 
 /// `serde(default = ...)` hook for the `default_game_mode` field.
@@ -171,6 +183,11 @@ pub fn create_world_with_mode(
         dimension_worldgens: dim_gens,
         default_game_mode: default_game_mode.to_string(),
         day_time: 0.0, // W46.31
+        // W460: fresh worlds start clear; the cycle seeds itself.
+        weather: 0,
+        weather_ticks_left: 0.0,
+        thundering: false,
+        thunder_ticks_left: 0.0,
     }
 }
 

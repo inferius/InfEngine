@@ -1195,6 +1195,11 @@ pub(crate) struct Voxel {
     pub(crate) weather_ticks_left: f32,
     /// W448: xorshift stream for the duration rolls (0 = unseeded).
     pub(crate) weather_rng: u32,
+    /// W460: MC's independent thunder state - lightning fires only
+    /// while `thundering && weather != 0`. Persisted in world.json.
+    pub(crate) thundering: bool,
+    /// W460: seconds left in the current thunder stretch.
+    pub(crate) thunder_ticks_left: f32,
     /// W111: last-meshed signature per chunk (commutative fold over the
     /// chunk's liquid cell positions + levels). The diff re-meshes only
     /// chunks whose signature changed. Transient, not persisted.

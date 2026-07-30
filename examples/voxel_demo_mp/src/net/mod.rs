@@ -602,6 +602,8 @@ pub(crate) struct ClientInboxCtx<'a> {
     pub day_time_update: &'a mut Option<f32>,
     pub seed_update: &'a mut Option<u32>,
     pub weather_update: &'a mut Option<u8>,
+    /// W460: thunder flag broadcast (gates the client lightning).
+    pub thunder_update: &'a mut Option<bool>,
     pub snow_updates: &'a mut Vec<([i32; 3], u8)>,
     pub liquid_level_updates: &'a mut Vec<([i32; 3], u8)>,
     pub drop_spawns: &'a mut Vec<DropSpawnMsg>,
@@ -851,6 +853,13 @@ pub(crate) fn process_client_inbox(
                     bincode::serde::decode_from_slice::<u8, _>(&data, cfg)
                 {
                     *ctx.weather_update = Some(w);
+                }
+            }
+            "vx.thunder" => {
+                if let Ok((t, _)) =
+                    bincode::serde::decode_from_slice::<bool, _>(&data, cfg)
+                {
+                    *ctx.thunder_update = Some(t);
                 }
             }
             "vx.snow" => {

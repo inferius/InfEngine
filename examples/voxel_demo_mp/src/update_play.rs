@@ -478,11 +478,13 @@ pub(crate) fn update_play(app: &mut Voxel, ctx: &FrameContext<'_>, dt: f32) {
         } else {
             app.rain_sfx_accum = 0.0;
         }
-        // Lightning state machine. Only fires while raining.
-        // `next_lightning_at` counts down; on zero we trigger a
-        // 0.18s flash + a thud and seed the next interval at a
-        // randomized 10..=30 s window so strikes feel sporadic.
-        if app.weather == 1 {
+        // Lightning state machine. W460: fires only during a
+        // THUNDERSTORM - MC gates strikes on `isThundering &&
+        // isRaining`, so plain rain stays quiet and snow
+        // thunderstorms exist. `next_lightning_at` counts down; on
+        // zero we trigger a 0.18s flash + a thud and seed the next
+        // interval at a randomized 10..=30 s window.
+        if app.weather != 0 && app.thundering {
             app.next_lightning_at -= dt;
             if app.next_lightning_at <= 0.0 {
                 app.lightning_flash = 0.18;
