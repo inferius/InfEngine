@@ -19,8 +19,11 @@
 //! Returns: `Vec<IVec3>` from `start` (exclusive) to `goal`
 //! (inclusive). `None` when no path exists within `max_steps`.
 //!
-//! Wired into the live mob tick by H.5's `ChasePlayerGoal` - until
-//! then `find_path` is exercised by the test module only.
+//! W461: wired into the live chase via [`chase_waypoint`] - the
+//! hostile goal used to steer the direct line and walked into
+//! walls; now it follows A* waypoints with per-mob staggered
+//! re-plans, falling back to the straight line at close range, for
+//! flyers/swimmers, and when no path exists within the budget.
 
 #![allow(dead_code)]
 
@@ -188,6 +191,106 @@ fn reconstruct(
 /// Returns the path (exclusive of `start`, inclusive of `goal`)
 /// when reachable in <= `max_steps` open-list pops, `None`
 /// otherwise.
+/// W461: kinds that path on the ground grid. Flyers + swimmers
+/// keep their direct steering - a ground path would pin them to
+/// the floor.
+fn kind_walks(kind: u8) -> bool {
+    use crate::mob::kinds::*;
+    !matches!(
+        kind,
+        k if k == KIND_GHAST
+            || k == KIND_BLAZE
+            || k == KIND_PHANTOM
+            || k == KIND_BAT
+            || k == KIND_BEE
+            || k == KIND_SQUID
+            || k == KIND_GLOW_SQUID
+            || k == KIND_PARROT
+    )
+}
+
+/// W461: one mob's live path. Lives in a SIDE MAP on `Voxel`
+/// (`mob_paths`) because `MobState` is `Copy` and copied through
+/// the tick - a Vec inside it is a non-starter.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MobPath {
+    cells: Vec<[i32; 3]>,
+    next: usize,
+    repath_cd: f32,
+}
+
+/// W461: steer a chasing mob through the A* planner. Returns the
+/// position to walk toward this tick: the next waypoint's column
+/// centre, or the goal itself at close range / for non-walkers /
+/// when no path fits the step budget (open terrain rarely needs
+/// one). Re-plans at most every ~0.8 s per mob, staggered by id,
+/// and only when the goal drifted from the current path's end.
+pub(crate) fn chase_waypoint(
+    world: &World,
+    paths: &mut std::collections::HashMap<u32, MobPath>,
+    m: &crate::mob::state::MobState,
+    goal: [f32; 3],
+    dt: f32,
+) -> [f32; 3] {
+    if !kind_walks(m.kind) {
+        return goal;
+    }
+    let dx = goal[0] - m.pos[0];
+    let dz = goal[2] - m.pos[2];
+    if dx * dx + dz * dz < 4.0 {
+        // Close range: melee steering handles the last stretch.
+        paths.remove(&m.id);
+        return goal;
+    }
+    let entry = paths.entry(m.id).or_default();
+    entry.repath_cd = (entry.repath_cd - dt).max(0.0);
+    let stale = match entry.cells.get(entry.next..).and_then(|s| s.last()) {
+        None => true,
+        Some(end) => {
+            let ex = end[0] as f32 + 0.5 - goal[0];
+            let ez = end[2] as f32 + 0.5 - goal[2];
+            ex * ex + ez * ez > 4.0
+        }
+    };
+    if stale && entry.repath_cd <= 0.0 {
+        entry.repath_cd = 0.8 + (m.id % 7) as f32 * 0.05;
+        let start = [
+            m.pos[0].floor() as i32,
+            m.pos[1].floor() as i32,
+            m.pos[2].floor() as i32,
+        ];
+        let goal_cell = [
+            goal[0].floor() as i32,
+            goal[1].floor() as i32,
+            goal[2].floor() as i32,
+        ];
+        match find_path(world, start, goal_cell, 192) {
+            Some(p) => {
+                entry.cells = p;
+                entry.next = 0;
+            }
+            None => {
+                // Unreachable within budget: keep direct steering
+                // (the wall-bump hop still makes local progress).
+                entry.cells.clear();
+                entry.next = 0;
+                return goal;
+            }
+        }
+    }
+    while let Some(wp) = entry.cells.get(entry.next).copied() {
+        let wx = wp[0] as f32 + 0.5;
+        let wz = wp[2] as f32 + 0.5;
+        let d2 = (wx - m.pos[0]).powi(2) + (wz - m.pos[2]).powi(2);
+        if d2 < 0.36 {
+            entry.next += 1;
+        } else {
+            return [wx, wp[1] as f32, wz];
+        }
+    }
+    goal
+}
+
 pub(crate) fn find_path(
     world: &World,
     start: [i32; 3],

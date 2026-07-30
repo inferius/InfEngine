@@ -367,11 +367,29 @@ fn step_one(
         speed *= super::state::kind_panic_mult(m.kind);
     }
     if let Some(p) = chase_player_pos {
-        m.target = p;
+        // W461: chase through the A* planner (find_path existed
+        // since H.5 but was never wired - hostiles steered the
+        // direct line into walls). chase_waypoint falls back to
+        // the straight line at close range, for flyers, and when
+        // no path fits the budget; the waypoint list lives in the
+        // voxel.mob_paths side map (MobState is Copy).
+        m.target = super::pathfind::chase_waypoint(
+            &voxel.world,
+            &mut voxel.mob_paths,
+            &m,
+            p,
+            dt,
+        );
         m.strolling = true;
         m.retarget_at = (day_time + 1.0).rem_euclid(DAY_LENGTH_S);
     } else if let Some((_, p)) = chase_mob {
-        m.target = p;
+        m.target = super::pathfind::chase_waypoint(
+            &voxel.world,
+            &mut voxel.mob_paths,
+            &m,
+            p,
+            dt,
+        );
         m.strolling = true;
         m.retarget_at = (day_time + 1.0).rem_euclid(DAY_LENGTH_S);
     }
@@ -1238,6 +1256,8 @@ fn evict(voxel: &mut Voxel, to_remove: &[u32]) {
         voxel.mob_say_timers.remove(id);
         voxel.mob_last_xz.remove(id);
         voxel.mob_swell.remove(id);
+        // W461: drop the A* waypoint entry with the mob.
+        voxel.mob_paths.remove(id);
         if let NetRole::Server { server, .. } = &voxel.net {
             let cfg = bincode::config::standard();
             if let Ok(buf) = bincode::serde::encode_to_vec(*id, cfg) {

@@ -910,6 +910,10 @@ pub(crate) struct Voxel {
     /// WORLD_DATA_VERSION) is open - gates the legacy per-chunk
     /// fixups in `world_save::fixups`. Current saves never scrub.
     pub(crate) save_fixups_pending: bool,
+    /// W461: live A* waypoints per chasing mob (side map - MobState
+    /// is Copy). Entries drop on death / close range; transient.
+    pub(crate) mob_paths:
+        std::collections::HashMap<u32, crate::mob::pathfind::MobPath>,
     /// W341: session cache of claimed professions (mob id ->
     /// workstation-derived profession). Save persistence is a
     /// follow-up (MobSave field).
