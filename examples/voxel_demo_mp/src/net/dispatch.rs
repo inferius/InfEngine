@@ -742,9 +742,10 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                     vx.inventory[i] = s;
                 }
             }
-            for (i, s) in snap.craft.iter().enumerate() {
+            // W469: craft cells are stack-typed on the wire too.
+            for (i, s) in snap.craft.into_iter().enumerate() {
                 if i < vx.craft_grid.len() {
-                    vx.craft_grid[i] = s.map(|(b, c)| (BlockId(b), c));
+                    vx.craft_grid[i] = s;
                 }
             }
             let mut post: HashMap<u16, u32> = HashMap::new();

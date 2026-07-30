@@ -4,7 +4,6 @@
 //! debug toggles (grid, listmobs), crafting helper.
 
 use glam::Vec3;
-use infengine_voxel::BlockId;
 
 use crate::Voxel;
 use crate::block::{BLOCK_TYPES, block_type};
@@ -105,18 +104,22 @@ pub(crate) fn cmd_clearcraft(
     // Empty the 2x2 crafting grid. Frees
     // up materials trapped in the grid
     // without forcing the player to drag
-    // each slot back out manually.
-    let mut taken: Vec<(BlockId, u8)> = Vec::new();
+    // each slot back out manually. W469:
+    // stacks return wholesale (components
+    // intact); overflow past a full inv is
+    // silently dropped like before.
+    let mut taken: Vec<crate::item::ItemStack> = Vec::new();
     for s in voxel.craft_grid.iter_mut() {
         if let Some(stack) = s.take() {
             taken.push(stack);
         }
     }
     let count = taken.len() as u32;
-    for (b, c) in taken {
-        for _ in 0..c {
-            voxel.pickup(b);
-        }
+    for st in taken {
+        let _ = crate::item::stack::drop_into_first_free_stacks(
+            &mut voxel.inventory,
+            st,
+        );
     }
     lines.push(format!("Returned {count} craft slot(s)."));
     true

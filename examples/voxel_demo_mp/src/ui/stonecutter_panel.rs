@@ -9,16 +9,22 @@
 //! - click a cut output -> reports the chosen index; the caller
 //!   consumes 1 input + adds the output to the inventory.
 //!
+//! W469: stack-native - the input + inventory view hold
+//! `Option<ItemStack>`, so a (hypothetically component-carrying)
+//! input round trips intact. Cut outputs are fresh stacks (a plain
+//! material transform).
+//!
 //! All mutations are on the snapshots passed in (`input`, `inv_view`);
 //! `render.rs` applies them back to `Voxel` after the egui pass.
 
+use crate::item::ItemStack;
 use crate::recipes::stonecutter::cuts_for;
 use crate::ui::SlotIcon;
 
 pub(crate) struct StonecutterPanelInputs<'a> {
     pub(crate) ctx: &'a egui::Context,
-    pub(crate) input: &'a mut Option<(u16, u8)>,
-    pub(crate) inv_view: &'a mut [Option<(u16, u8)>],
+    pub(crate) input: &'a mut Option<ItemStack>,
+    pub(crate) inv_view: &'a mut [Option<ItemStack>],
     pub(crate) atlas_tex_id: Option<egui::TextureId>,
     pub(crate) icon_uv_resolver: &'a dyn Fn(u16) -> Option<[f32; 4]>,
     pub(crate) open_local: &'a mut bool,
@@ -64,7 +70,9 @@ pub(crate) fn render(inp: StonecutterPanelInputs<'_>) {
             // --- input slot -------------------------------------
             ui.horizontal(|ui| {
                 ui.label("Input:");
-                let icon = input.map(|(id, c)| slot_icon(id, c, icon_uv_resolver));
+                let icon = input
+                    .as_ref()
+                    .map(|st| slot_icon(st.id, st.count, icon_uv_resolver));
                 let resp = crate::ui::slot_widget::draw_slot_widget(
                     ui,
                     icon,
@@ -83,7 +91,7 @@ pub(crate) fn render(inp: StonecutterPanelInputs<'_>) {
             ui.separator();
 
             // --- cut options ------------------------------------
-            if let Some((in_id, _)) = *input {
+            if let Some(in_id) = input.as_ref().map(|st| st.id) {
                 let cuts = cuts_for(in_id);
                 if cuts.is_empty() {
                     ui.label("Not a stonecutter material.");
@@ -126,8 +134,9 @@ pub(crate) fn render(inp: StonecutterPanelInputs<'_>) {
                 .spacing([2.0, 2.0])
                 .show(ui, |ui| {
                     for i in 0..inv_view.len() {
-                        let icon =
-                            inv_view[i].map(|(id, c)| slot_icon(id, c, icon_uv_resolver));
+                        let icon = inv_view[i].as_ref().map(|st| {
+                            slot_icon(st.id, st.count, icon_uv_resolver)
+                        });
                         let resp = crate::ui::slot_widget::draw_slot_widget(
                             ui,
                             icon,
@@ -138,12 +147,12 @@ pub(crate) fn render(inp: StonecutterPanelInputs<'_>) {
                         // Click an inventory stack -> load it as input
                         // (only cuttable materials; prior input returns).
                         if resp.clicked()
-                            && let Some((id, c)) = inv_view[i]
-                            && !cuts_for(id).is_empty()
+                            && inv_view[i]
+                                .as_ref()
+                                .is_some_and(|st| !cuts_for(st.id).is_empty())
                         {
                             let prior = input.take();
-                            *input = Some((id, c));
-                            inv_view[i] = None;
+                            *input = inv_view[i].take();
                             if let Some(p) = prior {
                                 give_to_inv(inv_view, p);
                             }
@@ -160,38 +169,12 @@ pub(crate) fn render(inp: StonecutterPanelInputs<'_>) {
     }
 }
 
-/// Merge `stack` into the first compatible / empty inventory slot.
-/// Overflow is dropped (the stonecutter never overfills; callers size
-/// the inventory generously). Mirrors the simple add used elsewhere.
-/// `pub(crate)` so `render.rs`'s apply pass reuses it for the crafted
-/// output + the on-close input return.
-pub(crate) fn give_to_inv(inv: &mut [Option<(u16, u8)>], stack: (u16, u8)) {
-    let (id, mut count) = stack;
-    let cap = crate::inventory::STACK_MAX;
-    // Merge into existing stacks first.
-    for slot in inv.iter_mut() {
-        if let Some((sid, sc)) = slot
-            && *sid == id
-            && *sc < cap
-        {
-            let room = cap - *sc;
-            let add = room.min(count);
-            *sc += add;
-            count = count.saturating_sub(add);
-            if count == 0 {
-                return;
-            }
-        }
-    }
-    // Then fill empty slots.
-    for slot in inv.iter_mut() {
-        if slot.is_none() {
-            let put = count.min(cap);
-            *slot = Some((id, put));
-            count = count.saturating_sub(put);
-            if count == 0 {
-                return;
-            }
-        }
-    }
+/// Merge `stack` into the inventory view (same-stackable top-ups
+/// first, then empty slots). Overflow is dropped (the stonecutter
+/// never overfills; callers size the inventory generously) - same
+/// policy the tuple-era helper had. `pub(crate)` so `render.rs`'s
+/// apply pass reuses it for crafted outputs, trade rewards and the
+/// on-close input return.
+pub(crate) fn give_to_inv(inv: &mut [Option<ItemStack>], stack: ItemStack) {
+    let _ = crate::item::stack::drop_into_first_free_stacks(inv, stack);
 }

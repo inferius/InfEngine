@@ -386,8 +386,8 @@ pub(crate) fn armor_totals(voxel: &Voxel) -> (f32, f32) {
     let mut def = 0.0;
     let mut tough = 0.0;
     for slot in &voxel.armor_slots {
-        if let Some((id, _)) = slot
-            && let Some((_, d, t)) = crate::item::armor_props(*id)
+        if let Some(st) = slot
+            && let Some((_, d, t)) = crate::item::armor_props(st.id)
         {
             def += d;
             tough += t;

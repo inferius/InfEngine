@@ -95,18 +95,13 @@ impl Voxel {
     /// output is virtual: it's whatever recipe matches the current
     /// 2x2 grid (or `None` if no match).
     ///
-    /// W466: inventory cells carry full `ItemStack`s; craft cells
-    /// are still `(BlockId, count)` tuples and lift with empty
-    /// components at this boundary.
+    /// W469: inventory AND craft cells carry full `ItemStack`s -
+    /// no tuple lift left. The virtual craft output is always a
+    /// fresh stack (crafted results start with empty components).
     pub(crate) fn slot_read(&self, kind: SlotKind) -> Option<crate::item::ItemStack> {
         match kind {
             SlotKind::Inv(i) => self.inventory.get(i).cloned().flatten(),
-            SlotKind::Craft(i) => self
-                .craft_grid
-                .get(i)
-                .copied()
-                .flatten()
-                .map(|(b, c)| crate::item::ItemStack::new(b.0, c)),
+            SlotKind::Craft(i) => self.craft_grid.get(i).cloned().flatten(),
             SlotKind::CraftOut => match_recipe(&self.craft_grid)
                 .map(|(b, c)| crate::item::ItemStack::new(b.0, c)),
         }
@@ -114,11 +109,8 @@ impl Voxel {
 
     /// Write `value` into `kind`. Never writes to `CraftOut`
     /// (that's a virtual cell - taking from it goes through
-    /// `consume_craft` instead).
-    ///
-    /// W466: craft cells stay tuples - components drop at that
-    /// boundary (matches the old parallel durability map, which
-    /// never tracked craft cells either).
+    /// `consume_craft` instead). W469: craft cells store the full
+    /// stack - components survive a park in the grid.
     pub(crate) fn slot_write(&mut self, kind: SlotKind, value: Option<crate::item::ItemStack>) {
         match kind {
             SlotKind::Inv(i) => {
@@ -128,7 +120,7 @@ impl Voxel {
             }
             SlotKind::Craft(i) => {
                 if i < self.craft_grid.len() {
-                    self.craft_grid[i] = value.map(|s| (BlockId(s.id), s.count));
+                    self.craft_grid[i] = value;
                 }
             }
             SlotKind::CraftOut => {}
@@ -136,12 +128,13 @@ impl Voxel {
     }
 
     /// Drain one item from every populated craft cell. Called when
-    /// the player takes the craft output.
+    /// the player takes the craft output. Components stay on the
+    /// remainder (a worn ingredient consumed to 0 just vanishes).
     pub(crate) fn consume_craft(&mut self) {
         for slot in self.craft_grid.iter_mut() {
-            if let Some((_, c)) = slot.as_mut() {
-                *c = c.saturating_sub(1);
-                if *c == 0 {
+            if let Some(st) = slot.as_mut() {
+                st.count = st.count.saturating_sub(1);
+                if st.count == 0 {
                     *slot = None;
                 }
             }

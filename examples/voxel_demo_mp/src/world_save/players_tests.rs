@@ -71,9 +71,13 @@ fn player_roundtrip_populated_inventory() {
     save.inventory[2] = Some(ItemStack::new(17, 64));
     save.inventory[9] = Some(ItemStack::new(4, 12));
     save.inventory[10] = Some(ItemStack::new(5, 7));
-    // Craft grid: two cells filled (corner + centre).
-    save.craft_grid[0] = Some((1, 1));
-    save.craft_grid[4] = Some((3, 1));
+    // Craft grid: two cells filled (corner + centre). W469: the
+    // grid is stack-typed - park a worn tool to prove components
+    // survive the round trip.
+    save.craft_grid[0] = Some(ItemStack::new(1, 1));
+    let mut worn = ItemStack::new(16, 1);
+    worn.components.damage = 7;
+    save.craft_grid[4] = Some(worn.clone());
 
     write_player_in_dir(tmp.path(), SLUG, "Notch", &save).unwrap();
     let loaded = read_player_in_dir(tmp.path(), SLUG, "Notch")
@@ -84,7 +88,7 @@ fn player_roundtrip_populated_inventory() {
     assert_eq!(loaded.inventory[0], Some(ItemStack::new(1, 64)));
     assert_eq!(loaded.inventory[2], Some(ItemStack::new(17, 64)));
     assert_eq!(loaded.inventory[9], Some(ItemStack::new(4, 12)));
-    assert_eq!(loaded.craft_grid[4], Some((3, 1)));
+    assert_eq!(loaded.craft_grid[4], Some(worn));
 }
 
 #[test]
@@ -112,9 +116,21 @@ fn player_unknown_format_version_refuses_read() {
     let err = read_player_in_dir(tmp.path(), SLUG, "Alice")
         .expect_err("expected envelope version mismatch");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    let msg = err.to_string();
     assert!(
-        err.to_string().contains("777"),
-        "error must mention the unsupported version, got: {err}"
+        msg.contains("777"),
+        "error must mention the unsupported version, got: {msg}"
+    );
+    // W469/R39: the refusal must be self-explanatory - family name
+    // + the expected version, so the log line alone tells the user
+    // what happened (a save from an incompatible dev build).
+    assert!(
+        msg.contains("player"),
+        "error must name the save family, got: {msg}"
+    );
+    assert!(
+        msg.contains(&PLAYER_FORMAT_VERSION.to_string()),
+        "error must name the expected version, got: {msg}"
     );
 }
 
@@ -201,7 +217,7 @@ fn player_compression_smaller_payload() {
         *slot = Some(ItemStack::new(1, 64));
     }
     for slot in save.craft_grid.iter_mut() {
-        *slot = Some((1, 1));
+        *slot = Some(ItemStack::new(1, 1));
     }
     write_player_in_dir(tmp.path(), SLUG, "Heavy", &save).unwrap();
 
@@ -293,8 +309,10 @@ fn write_player_is_atomic_no_tmp_left_behind() {
 
 #[test]
 fn player_format_version_matches_design_doc() {
-    // Lock the published schema number. Bumped to v5 in W466
-    // with the ItemStack inventory slots (id + count + components)
-    // + a v4 -> v5 migration arrow.
-    assert_eq!(PLAYER_FORMAT_VERSION, 5);
+    // Lock the published schema number. Bumped to v6 in W469 with
+    // ItemStack armor + craft-grid slots. Per the R39 dev-save
+    // policy there is NO 5 -> 6 migration arrow - older files
+    // refuse with a clear message until the release-time
+    // migration work lands.
+    assert_eq!(PLAYER_FORMAT_VERSION, 6);
 }

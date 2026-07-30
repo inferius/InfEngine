@@ -6,6 +6,14 @@
 //! the output via `recipes::matcher::match_3x3`, and reports back
 //! to the caller whether the player clicked the output slot.
 //!
+//! W469: fully stack-native. The grid, the cursor and the player
+//! inventory view all hold `Option<ItemStack>` - components ride
+//! through every click, merges gate on `same_stackable` (a worn
+//! tool never count-merges into a fresh one), a full place onto a
+//! non-stackable slot SWAPS (the W467 semantic), and splits clone
+//! components to both halves. Recipe matching stays id + count
+//! based.
+//!
 //! Mouse handling (W54.2, matches MC `AbstractContainerScreen`):
 //! - LMB on slot with no held stack -> take whole stack.
 //! - LMB on slot with held stack -> place / merge / swap.
@@ -19,18 +27,20 @@
 //! - Held stack always painted as a floating sprite at the mouse
 //!   pointer so the player sees what's on the cursor.
 
-use infengine_voxel::BlockId;
-
 use crate::container;
+use crate::item::ItemStack;
+use crate::item::stack::{
+    drop_into_first_free_stacks, merge_into_stacks, take_n_stacks,
+};
 use crate::recipes::matcher;
 
 /// All inputs the 3x3 panel needs in one struct so render.rs
 /// doesn't have to grow another 10-arg call site.
 pub(crate) struct CraftingPanelInputs<'a> {
     pub(crate) ctx: &'a egui::Context,
-    pub(crate) grid: &'a mut [Option<(BlockId, u8)>; 9],
-    pub(crate) held: &'a mut Option<(u16, u8)>,
-    pub(crate) inv_view: &'a mut [Option<(u16, u8)>],
+    pub(crate) grid: &'a mut [Option<ItemStack>; 9],
+    pub(crate) held: &'a mut Option<ItemStack>,
+    pub(crate) inv_view: &'a mut [Option<ItemStack>],
     pub(crate) atlas_tex_id: Option<egui::TextureId>,
     pub(crate) icon_uv_resolver: &'a dyn Fn(u16) -> Option<[f32; 4]>,
     pub(crate) open_local: &'a mut bool,
@@ -149,7 +159,9 @@ pub(crate) fn render(inputs: CraftingPanelInputs<'_>) {
                     ui.vertical(|ui| {
                         for c in 0..3 {
                             let idx = r * 3 + c;
-                            let slot = grid[idx].map(|(b, n)| (b.0, n));
+                            let slot = grid[idx]
+                                .as_ref()
+                                .map(|st| (st.id, st.count));
                             let resp = draw_slot(
                                 ui,
                                 slot,
@@ -199,7 +211,10 @@ pub(crate) fn render(inputs: CraftingPanelInputs<'_>) {
                 ui.horizontal(|ui| {
                     for c in 0..9 {
                         let idx = r * 9 + c;
-                        let slot = inv_view.get(idx).copied().flatten();
+                        let slot = inv_view
+                            .get(idx)
+                            .and_then(|s| s.as_ref())
+                            .map(|st| (st.id, st.count));
                         let resp = draw_slot(
                             ui,
                             slot,
@@ -273,8 +288,15 @@ pub(crate) fn render(inputs: CraftingPanelInputs<'_>) {
     ctx.memory_mut(|m| m.data.insert_temp(drag_id, drag));
 
     // ---- Floating cursor sprite. ------------------------------
-    if let (Some(pos), Some((id, count))) = (cursor_pos, *held) {
-        paint_cursor(ctx, pos, id, count, atlas_tex_id, icon_uv_resolver);
+    if let (Some(pos), Some(st)) = (cursor_pos, held.as_ref()) {
+        paint_cursor(
+            ctx,
+            pos,
+            st.id,
+            st.count,
+            atlas_tex_id,
+            icon_uv_resolver,
+        );
     }
 }
 
@@ -340,368 +362,177 @@ fn track_slot(
     }
 }
 
+/// Resolve a `SlotRef` to its backing slot.
+fn slot_mut<'a>(
+    grid: &'a mut [Option<ItemStack>; 9],
+    inv: &'a mut [Option<ItemStack>],
+    sref: SlotRef,
+) -> Option<&'a mut Option<ItemStack>> {
+    match sref {
+        SlotRef::Grid(i) => grid.get_mut(i),
+        SlotRef::Inv(i) => inv.get_mut(i),
+    }
+}
+
 fn apply_click(
-    grid: &mut [Option<(BlockId, u8)>; 9],
-    inv: &mut [Option<(u16, u8)>],
-    held: &mut Option<(u16, u8)>,
+    grid: &mut [Option<ItemStack>; 9],
+    inv: &mut [Option<ItemStack>],
+    held: &mut Option<ItemStack>,
     sref: SlotRef,
     kind: ClickKind,
 ) {
     match kind {
-        ClickKind::Lmb => match sref {
-            SlotRef::Grid(i) => slot_lmb_grid(grid, held, i),
-            SlotRef::Inv(i) => slot_lmb_inv(inv, held, i),
-        },
-        ClickKind::Rmb => match sref {
-            SlotRef::Grid(i) => slot_rmb_grid(grid, held, i),
-            SlotRef::Inv(i) => slot_rmb_inv(inv, held, i),
-        },
+        ClickKind::Lmb => {
+            if let Some(slot) = slot_mut(grid, inv, sref) {
+                cursor_lmb(slot, held);
+            }
+        }
+        ClickKind::Rmb => {
+            if let Some(slot) = slot_mut(grid, inv, sref) {
+                cursor_rmb(slot, held);
+            }
+        }
         ClickKind::ShiftLmb => match sref {
-            SlotRef::Grid(i) => shift_grid_to_inv(grid, inv, i),
-            SlotRef::Inv(i) => shift_inv_to_grid(inv, grid, i),
+            SlotRef::Grid(i) => shift_move(grid.get_mut(i), inv),
+            SlotRef::Inv(i) => {
+                // Split-borrow dance: pull the source slot out of
+                // the inv slice so the grid can be the target.
+                if let Some(slot) = inv.get_mut(i) {
+                    shift_move(Some(slot), &mut grid[..]);
+                }
+            }
         },
     }
 }
 
-fn cap(id: u16) -> u8 {
-    crate::item::item_max_stack(id)
-}
-
-// ---- single-slot LMB ----------------------------------------
-
-fn slot_lmb_grid(
-    grid: &mut [Option<(BlockId, u8)>; 9],
-    held: &mut Option<(u16, u8)>,
-    idx: usize,
-) {
-    let Some(slot) = grid.get_mut(idx) else { return };
-    match (*slot, *held) {
-        (Some((b, c)), None) => {
-            *held = Some((b.0, c));
-            *slot = None;
+/// LMB with/without a cursor stack on one slot. The MC container
+/// click: take whole / place all (merge same-stackable up to the
+/// cap, SWAP on a foreign slot - different id OR different
+/// components).
+fn cursor_lmb(slot: &mut Option<ItemStack>, held: &mut Option<ItemStack>) {
+    match held.take() {
+        None => {
+            // Take the whole stack onto the cursor.
+            *held = slot.take();
         }
-        (None, Some((hid, hn))) => {
-            *slot = Some((BlockId(hid), hn));
-            *held = None;
-        }
-        (Some((b, c)), Some((hid, hn))) if b.0 == hid => {
-            let cap = cap(hid);
-            let room = cap.saturating_sub(c);
-            let merge = room.min(hn);
-            *slot = Some((b, c + merge));
-            let left = hn - merge;
-            *held = if left == 0 { None } else { Some((hid, left)) };
-        }
-        (Some((b, c)), Some((hid, hn))) => {
-            *slot = Some((BlockId(hid), hn));
-            *held = Some((b.0, c));
-        }
-        (None, None) => {}
-    }
-}
-
-fn slot_lmb_inv(
-    inv: &mut [Option<(u16, u8)>],
-    held: &mut Option<(u16, u8)>,
-    idx: usize,
-) {
-    let Some(slot) = inv.get_mut(idx) else { return };
-    match (*slot, *held) {
-        (Some(s), None) => {
-            *held = Some(s);
-            *slot = None;
-        }
-        (None, Some(h)) => {
-            *slot = Some(h);
-            *held = None;
-        }
-        (Some((sid, sc)), Some((hid, hn))) if sid == hid => {
-            let cap = cap(hid);
-            let room = cap.saturating_sub(sc);
-            let merge = room.min(hn);
-            *slot = Some((sid, sc + merge));
-            let left = hn - merge;
-            *held = if left == 0 { None } else { Some((hid, left)) };
-        }
-        (Some(s), Some(h)) => {
-            *slot = Some(h);
-            *held = Some(s);
-        }
-        (None, None) => {}
-    }
-}
-
-// ---- single-slot RMB ----------------------------------------
-
-fn slot_rmb_grid(
-    grid: &mut [Option<(BlockId, u8)>; 9],
-    held: &mut Option<(u16, u8)>,
-    idx: usize,
-) {
-    let Some(slot) = grid.get_mut(idx) else { return };
-    match (*slot, *held) {
-        (Some((b, c)), None) => {
-            let half = (c as u16).div_ceil(2) as u8;
-            let rem = c - half;
-            if half > 0 {
-                *held = Some((b.0, half));
+        Some(cur) => {
+            let pre_mismatch = slot
+                .as_ref()
+                .is_some_and(|st| !st.same_stackable(&cur));
+            if pre_mismatch {
+                // Swap wholesale (components travel both ways).
+                let existing = slot.take();
+                *slot = Some(cur);
+                *held = existing;
+                return;
             }
-            *slot = if rem == 0 { None } else { Some((b, rem)) };
+            let leftover = merge_into_stacks(slot, cur.clone());
+            *held = (leftover > 0).then(|| cur.with_count(leftover));
         }
-        (None, Some((hid, hn))) if hn > 0 => {
-            *slot = Some((BlockId(hid), 1));
-            let left = hn - 1;
-            *held = if left == 0 { None } else { Some((hid, left)) };
-        }
-        (Some((b, c)), Some((hid, hn))) if b.0 == hid && c < cap(hid) => {
-            *slot = Some((b, c + 1));
-            let left = hn.saturating_sub(1);
-            *held = if left == 0 { None } else { Some((hid, left)) };
-        }
-        _ => {}
     }
 }
 
-fn slot_rmb_inv(
-    inv: &mut [Option<(u16, u8)>],
-    held: &mut Option<(u16, u8)>,
-    idx: usize,
-) {
-    let Some(slot) = inv.get_mut(idx) else { return };
-    match (*slot, *held) {
-        (Some((id, c)), None) => {
-            let half = (c as u16).div_ceil(2) as u8;
-            let rem = c - half;
-            if half > 0 {
-                *held = Some((id, half));
-            }
-            *slot = if rem == 0 { None } else { Some((id, rem)) };
+/// RMB with/without a cursor stack on one slot: take half (rounded
+/// up) / place exactly one (empty or same-stackable below cap).
+fn cursor_rmb(slot: &mut Option<ItemStack>, held: &mut Option<ItemStack>) {
+    match held.take() {
+        None => {
+            let Some(count) = slot.as_ref().map(|st| st.count) else {
+                return;
+            };
+            let half = count.div_ceil(2);
+            *held = take_n_stacks(slot, half);
         }
-        (None, Some((hid, hn))) if hn > 0 => {
-            *slot = Some((hid, 1));
-            let left = hn - 1;
-            *held = if left == 0 { None } else { Some((hid, left)) };
+        Some(cur) => {
+            let one = cur.with_count(1);
+            let leftover = merge_into_stacks(slot, one);
+            let back = cur.count - 1 + leftover;
+            *held = (back > 0).then(|| cur.with_count(back));
         }
-        (Some((sid, sc)), Some((hid, hn))) if sid == hid && sc < cap(hid) => {
-            *slot = Some((sid, sc + 1));
-            let left = hn.saturating_sub(1);
-            *held = if left == 0 { None } else { Some((hid, left)) };
-        }
-        _ => {}
     }
 }
 
-// ---- shift-click quick-move ---------------------------------
-
-fn shift_grid_to_inv(
-    grid: &mut [Option<(BlockId, u8)>; 9],
-    inv: &mut [Option<(u16, u8)>],
-    idx: usize,
+/// Shift-click quick-move: the whole source stack into the other
+/// section (same-stackable top-ups first, then empties). Remainder
+/// stays in the source with its components.
+fn shift_move(
+    source: Option<&mut Option<ItemStack>>,
+    dest: &mut [Option<ItemStack>],
 ) {
-    let Some(slot) = grid.get_mut(idx) else { return };
-    let Some((b, c)) = slot.take() else { return };
-    let leftover = inv_insert(inv, b.0, c);
+    let Some(slot) = source else { return };
+    let Some(stack) = slot.take() else { return };
+    let leftover = drop_into_first_free_stacks(dest, stack.clone());
     if leftover > 0 {
-        *slot = Some((b, leftover));
+        *slot = Some(stack.with_count(leftover));
     }
-}
-
-fn shift_inv_to_grid(
-    inv: &mut [Option<(u16, u8)>],
-    grid: &mut [Option<(BlockId, u8)>; 9],
-    idx: usize,
-) {
-    let Some(slot) = inv.get_mut(idx) else { return };
-    let Some((id, c)) = slot.take() else { return };
-    let mut remaining = c;
-    // Pass 1: top up matching stacks.
-    let cap = cap(id);
-    for cell in grid.iter_mut() {
-        if remaining == 0 {
-            break;
-        }
-        if let Some((b, sc)) = cell.as_mut()
-            && b.0 == id
-            && *sc < cap
-        {
-            let room = cap - *sc;
-            let take = room.min(remaining);
-            *sc += take;
-            remaining -= take;
-        }
-    }
-    // Pass 2: claim empty cells.
-    for cell in grid.iter_mut() {
-        if remaining == 0 {
-            break;
-        }
-        if cell.is_none() {
-            let take = cap.min(remaining);
-            *cell = Some((BlockId(id), take));
-            remaining -= take;
-        }
-    }
-    if remaining > 0 {
-        *slot = Some((id, remaining));
-    }
-}
-
-/// Insert into the u16-inv (mirrors `inventory::inv_pickup_n_stacks`).
-/// Returns leftover.
-fn inv_insert(inv: &mut [Option<(u16, u8)>], id: u16, n: u8) -> u8 {
-    let cap = cap(id);
-    let mut remaining = n;
-    for slot in inv.iter_mut() {
-        if remaining == 0 {
-            return 0;
-        }
-        if let Some((sid, sc)) = slot.as_mut()
-            && *sid == id
-            && *sc < cap
-        {
-            let room = cap - *sc;
-            let take = room.min(remaining);
-            *sc += take;
-            remaining -= take;
-        }
-    }
-    for slot in inv.iter_mut() {
-        if remaining == 0 {
-            return 0;
-        }
-        if slot.is_none() {
-            let take = cap.min(remaining);
-            *slot = Some((id, take));
-            remaining -= take;
-        }
-    }
-    remaining
 }
 
 // ---- drag actions -------------------------------------------
 
 /// LMB-drag: distribute the held stack across the visited slots
 /// as evenly as possible (rounded down per slot, remainder back
-/// on the cursor). MC convention: same-item slots get the share
-/// merged on top of their existing count; empty slots become a
-/// fresh stack. Mismatched items are skipped (their slot doesn't
-/// receive a share + the share goes back on the cursor).
+/// on the cursor). MC convention: same-stackable slots get the
+/// share merged on top of their existing count; empty slots
+/// become a fresh stack (components cloned). Mismatched slots are
+/// skipped (their share goes back on the cursor).
 fn apply_drag_distribute(
-    grid: &mut [Option<(BlockId, u8)>; 9],
-    inv: &mut [Option<(u16, u8)>],
-    held: &mut Option<(u16, u8)>,
+    grid: &mut [Option<ItemStack>; 9],
+    inv: &mut [Option<ItemStack>],
+    held: &mut Option<ItemStack>,
     slots: &[SlotRef],
 ) {
-    let Some((hid, total)) = *held else { return };
+    let Some(cur) = held.clone() else { return };
     if slots.is_empty() {
         return;
     }
-    let per = total / slots.len() as u8;
+    let per = cur.count / slots.len() as u8;
     if per == 0 {
         return;
     }
     let mut placed: u16 = 0;
-    let cap = cap(hid);
     for sref in slots {
-        match sref {
-            SlotRef::Grid(i) => {
-                let Some(slot) = grid.get_mut(*i) else { continue };
-                match *slot {
-                    None => {
-                        let take = per.min(cap);
-                        *slot = Some((BlockId(hid), take));
-                        placed += take as u16;
-                    }
-                    Some((b, c)) if b.0 == hid && c < cap => {
-                        let room = cap - c;
-                        let take = per.min(room);
-                        *slot = Some((b, c + take));
-                        placed += take as u16;
-                    }
-                    _ => {}
-                }
-            }
-            SlotRef::Inv(i) => {
-                let Some(slot) = inv.get_mut(*i) else { continue };
-                match *slot {
-                    None => {
-                        let take = per.min(cap);
-                        *slot = Some((hid, take));
-                        placed += take as u16;
-                    }
-                    Some((sid, sc)) if sid == hid && sc < cap => {
-                        let room = cap - sc;
-                        let take = per.min(room);
-                        *slot = Some((sid, sc + take));
-                        placed += take as u16;
-                    }
-                    _ => {}
-                }
-            }
+        let Some(slot) = slot_mut(grid, inv, *sref) else {
+            continue;
+        };
+        // Only empty or same-stackable slots receive a share; the
+        // merge helper enforces the cap + rejects foreign slots.
+        if slot.as_ref().is_some_and(|st| !st.same_stackable(&cur)) {
+            continue;
         }
+        let leftover = merge_into_stacks(slot, cur.with_count(per));
+        placed += (per - leftover) as u16;
     }
-    let leftover = (total as u16).saturating_sub(placed) as u8;
-    *held = if leftover == 0 {
-        None
-    } else {
-        Some((hid, leftover))
-    };
+    let leftover = (cur.count as u16).saturating_sub(placed) as u8;
+    *held = (leftover > 0).then(|| cur.with_count(leftover));
 }
 
 /// RMB-drag: place exactly one item per visited slot. Mismatched
-/// items skipped; remainder back on the cursor.
+/// slots skipped; remainder back on the cursor.
 fn apply_drag_one_per_slot(
-    grid: &mut [Option<(BlockId, u8)>; 9],
-    inv: &mut [Option<(u16, u8)>],
-    held: &mut Option<(u16, u8)>,
+    grid: &mut [Option<ItemStack>; 9],
+    inv: &mut [Option<ItemStack>],
+    held: &mut Option<ItemStack>,
     slots: &[SlotRef],
 ) {
-    let Some((hid, total)) = *held else { return };
+    let Some(cur) = held.clone() else { return };
     if slots.is_empty() {
         return;
     }
-    let mut remaining = total;
-    let cap = cap(hid);
+    let mut remaining = cur.count;
     for sref in slots {
         if remaining == 0 {
             break;
         }
-        match sref {
-            SlotRef::Grid(i) => {
-                let Some(slot) = grid.get_mut(*i) else { continue };
-                match *slot {
-                    None => {
-                        *slot = Some((BlockId(hid), 1));
-                        remaining -= 1;
-                    }
-                    Some((b, c)) if b.0 == hid && c < cap => {
-                        *slot = Some((b, c + 1));
-                        remaining -= 1;
-                    }
-                    _ => {}
-                }
-            }
-            SlotRef::Inv(i) => {
-                let Some(slot) = inv.get_mut(*i) else { continue };
-                match *slot {
-                    None => {
-                        *slot = Some((hid, 1));
-                        remaining -= 1;
-                    }
-                    Some((sid, sc)) if sid == hid && sc < cap => {
-                        *slot = Some((sid, sc + 1));
-                        remaining -= 1;
-                    }
-                    _ => {}
-                }
-            }
+        let Some(slot) = slot_mut(grid, inv, *sref) else {
+            continue;
+        };
+        if slot.as_ref().is_some_and(|st| !st.same_stackable(&cur)) {
+            continue;
         }
+        let leftover = merge_into_stacks(slot, cur.with_count(1));
+        remaining -= 1 - leftover;
     }
-    *held = if remaining == 0 {
-        None
-    } else {
-        Some((hid, remaining))
-    };
+    *held = (remaining > 0).then(|| cur.with_count(remaining));
 }
 
 // ---- slot rendering ----------------------------------------
@@ -795,10 +626,13 @@ fn paint_cursor(
     paint_slot_inner(&layer, rect, Some((id, count)), atlas, uv_resolver);
 }
 
-/// Convert the BlockId-typed grid to plain u16 cells for the
-/// matcher (which is BlockId-agnostic).
-fn grid_as_u16(g: &[Option<(BlockId, u8)>; 9]) -> [Option<(u16, u8)>; 9] {
-    std::array::from_fn(|i| g[i].map(|(b, c)| (b.0, c)))
+/// Project the stack-typed grid to plain id + count cells for the
+/// matcher (recipes match on ids + counts; components never gate a
+/// recipe).
+pub(crate) fn grid_as_u16(
+    g: &[Option<ItemStack>; 9],
+) -> [Option<(u16, u8)>; 9] {
+    std::array::from_fn(|i| g[i].as_ref().map(|st| (st.id, st.count)))
 }
 
 /// W54.5 - Recipe book in a standalone egui::Window. Shows every
@@ -811,11 +645,11 @@ fn render_recipe_book_window(
     open: &mut bool,
     atlas_tex_id: Option<egui::TextureId>,
     icon_uv_resolver: &dyn Fn(u16) -> Option<[f32; 4]>,
-    inv_view: &mut [Option<(u16, u8)>],
-    grid: &mut [Option<(BlockId, u8)>; 9],
+    inv_view: &mut [Option<ItemStack>],
+    grid: &mut [Option<ItemStack>; 9],
 ) {
-    use crate::recipes::shaped::SHAPED_RECIPES;
     use crate::recipes::RECIPES;
+    use crate::recipes::shaped::SHAPED_RECIPES;
 
     // Search state persisted via egui memory.
     let search_id = egui::Id::new("crafting_panel_recipe_search");
@@ -904,10 +738,11 @@ fn render_recipe_book_window(
 }
 
 /// Predicate: does the player inv hold every input the recipe
-/// needs, in the right quantity?
+/// needs, in the right quantity? Id-keyed - components never gate
+/// a recipe.
 fn is_craftable_from(
     entry: &RecipeEntry,
-    inv: &[Option<(u16, u8)>],
+    inv: &[Option<ItemStack>],
 ) -> bool {
     let mut needed: Vec<(u16, u32)> = Vec::new();
     for id in entry.cells.iter().flatten() {
@@ -920,9 +755,9 @@ fn is_craftable_from(
     for (id, count) in &needed {
         let avail: u32 = inv
             .iter()
-            .filter_map(|s| s.as_ref())
-            .filter(|(sid, _)| sid == id)
-            .map(|(_, c)| *c as u32)
+            .flatten()
+            .filter(|st| st.id == *id)
+            .map(|st| st.count as u32)
             .sum();
         if avail < *count {
             return false;
@@ -941,8 +776,8 @@ fn draw_recipe_card(
     atlas_tex_id: Option<egui::TextureId>,
     icon_uv_resolver: &dyn Fn(u16) -> Option<[f32; 4]>,
     entry: &RecipeEntry,
-    inv_view: &mut [Option<(u16, u8)>],
-    grid: &mut [Option<(BlockId, u8)>; 9],
+    inv_view: &mut [Option<ItemStack>],
+    grid: &mut [Option<ItemStack>; 9],
 ) {
     let mut card_clicked = false;
     ui.horizontal(|ui| {
@@ -1048,17 +883,18 @@ fn recipe_entry_shaped(r: &crate::recipes::shaped::ShapedRecipe) -> RecipeEntry 
     }
 }
 
-/// W54.3 - autofill: for each non-empty cell in the recipe, find
-/// a matching item in the player inventory and move 1 into the
-/// matching grid cell. Bails (leaves grid + inv untouched) if any
+/// W54.3 - autofill: for each non-empty cell in the recipe, take
+/// 1 of the matching item from the player inventory into the
+/// matching grid cell (the taken single clones the source stack's
+/// components). Bails (leaves grid + inv untouched) if any
 /// required input is missing.
 fn autofill_grid_from_inv(
     entry: &RecipeEntry,
-    inv_view: &mut [Option<(u16, u8)>],
-    grid: &mut [Option<(BlockId, u8)>; 9],
+    inv_view: &mut [Option<ItemStack>],
+    grid: &mut [Option<ItemStack>; 9],
 ) {
-    // First sweep: check feasibility against a tally + a working
-    // copy of the inventory. Mismatch -> bail without side effects.
+    // First sweep: check feasibility against a tally. Mismatch ->
+    // bail without side effects.
     let mut needed: Vec<(u16, u32)> = Vec::new();
     for id in entry.cells.iter().flatten() {
         if let Some(t) = needed.iter_mut().find(|(b, _)| *b == *id) {
@@ -1070,19 +906,19 @@ fn autofill_grid_from_inv(
     for (id, count) in &needed {
         let available: u32 = inv_view
             .iter()
-            .filter_map(|s| s.as_ref())
-            .filter(|(sid, _)| *sid == *id)
-            .map(|(_, c)| *c as u32)
+            .flatten()
+            .filter(|st| st.id == *id)
+            .map(|st| st.count as u32)
             .sum();
         if available < *count {
             return; // not enough; abort.
         }
     }
     // Return whatever is already on the grid to the inventory so
-    // the autofill starts from a clean grid.
+    // the autofill starts from a clean grid (components ride back).
     for cell in grid.iter_mut() {
-        if let Some((b, c)) = cell.take() {
-            let _ = inv_insert(inv_view, b.0, c);
+        if let Some(st) = cell.take() {
+            let _ = drop_into_first_free_stacks(inv_view, st);
         }
     }
     // Second sweep: actually move 1 of each required input into
@@ -1090,12 +926,9 @@ fn autofill_grid_from_inv(
     for (idx, maybe_id) in entry.cells.iter().enumerate() {
         let Some(id) = maybe_id else { continue };
         if let Some(slot) = inv_view.iter_mut().find(|s| {
-            s.as_ref().is_some_and(|(sid, c)| sid == id && *c > 0)
+            s.as_ref().is_some_and(|st| st.id == *id && st.count > 0)
         }) {
-            let (sid, sc) = slot.unwrap();
-            let new_c = sc - 1;
-            *slot = if new_c == 0 { None } else { Some((sid, new_c)) };
-            grid[idx] = Some((BlockId(*id), 1));
+            grid[idx] = take_n_stacks(slot, 1);
         }
     }
 }

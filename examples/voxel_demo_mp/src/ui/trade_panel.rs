@@ -19,7 +19,9 @@ pub(crate) struct TradePanelInputs<'a> {
     /// W458: villager trade level (1..=5) - gates the offer tiers
     /// and names the window (Novice..Master).
     pub(crate) level: u8,
-    pub(crate) inv_view: &'a [Option<(u16, u8)>],
+    /// W469: read-only stack view of the player inventory (drives
+    /// the afford check only; the exchange applies in render.rs).
+    pub(crate) inv_view: &'a [Option<crate::item::ItemStack>],
     pub(crate) atlas_tex_id: Option<egui::TextureId>,
     pub(crate) icon_uv_resolver: &'a dyn Fn(u16) -> Option<[f32; 4]>,
     pub(crate) open_local: &'a mut bool,

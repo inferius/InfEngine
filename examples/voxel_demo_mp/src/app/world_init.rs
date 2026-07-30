@@ -13,6 +13,37 @@ impl Voxel {
         if self.world_loaded {
             return;
         }
+        // W469 (R39 dev-save policy): BEFORE any world state
+        // streams in, probe every save family's format version.
+        // A slot written by an incompatible development build
+        // refuses cleanly here - back to the menu with a visible
+        // notice, no partial state, and (crucially) no autosave
+        // ever runs against the old slot's files.
+        if matches!(self.net, NetRole::Server { .. } | NetRole::Offline)
+            && let Some(slug) = self.current_world_slug.clone()
+        {
+            match world_save::preflight::check_world_versions(&slug) {
+                Ok(None) => {}
+                Ok(Some(mismatch)) => {
+                    tracing::warn!(
+                        slug = %slug,
+                        family = mismatch.family,
+                        found = mismatch.found,
+                        expected = mismatch.expected,
+                        path = %mismatch.path.display(),
+                        "W469: refusing world load (unsupported save version)"
+                    );
+                    self.abort_world_entry(mismatch.notice_text());
+                    return;
+                }
+                Err(err) => {
+                    // A probe IO failure is not a version refusal -
+                    // log + continue; the deep load path surfaces
+                    // real errors through the same abort below.
+                    tracing::warn!(error = %err, "W469: save preflight failed");
+                }
+            }
+        }
         // W128: a dead audio system was previously a silent mystery
         // ("no sounds and no idea why"). Retry the init once on
         // world entry (the output device may have been busy at
@@ -98,6 +129,32 @@ impl Voxel {
             target_chunks,
             "voxel: entering world (async)"
         );
+    }
+
+    /// W469: abort a world entry BEFORE (or while) it loads: drop
+    /// any partially streamed state WITHOUT saving anything, stop
+    /// the workers, park the user back on the main menu and show
+    /// `notice` there. Used by the save-version preflight refusal
+    /// and the mid-load failure path - never by a healthy world
+    /// exit (that's `teardown_world`, which auto-saves).
+    pub(crate) fn abort_world_entry(&mut self, notice: String) {
+        self.reset_world();
+        self.mobs.clear();
+        self.remote_mobs.clear();
+        self.dropped_items.clear();
+        self.lighting = lighting::LightingState::new();
+        self.workers = None;
+        self.world_loaded = false;
+        self.load_state_applied = false;
+        self.preapplied_slug = None;
+        // Keep a more specific notice if the failing path already
+        // set one (load_server_state names the exact error).
+        if self.menu.notice.is_none() {
+            self.menu.notice = Some(notice);
+        }
+        self.menu.screen = menu::MenuScreen::Main;
+        self.menu.enter_main();
+        self.state = AppState::MainMenu;
     }
 
     /// W8.1: explicit world-teardown step. Auto-saves, drops the
@@ -362,5 +419,47 @@ impl Voxel {
                 0,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::*;
+
+    /// W469: a refused world load (R39 unsupported-save-version
+    /// path) must land the user on the MAIN MENU with a visible
+    /// notice and zero world state - never a panic, never a
+    /// half-loaded world that the autosave could stomp.
+    #[test]
+    fn abort_world_entry_returns_to_menu_with_notice() {
+        let mut v = Voxel::new();
+        v.state = AppState::Loading {
+            target_chunks: 4,
+            loaded_chunks: 1,
+            phase: LoadingPhase::GeneratingChunks,
+            started_at: std::time::Instant::now(),
+        };
+        v.menu.screen = menu::default_singleplayer();
+        v.abort_world_entry("save too new".to_string());
+        assert!(matches!(v.state, AppState::MainMenu));
+        assert!(matches!(v.menu.screen, menu::MenuScreen::Main));
+        assert_eq!(v.menu.notice.as_deref(), Some("save too new"));
+        assert!(!v.world_loaded);
+        assert!(v.workers.is_none());
+        assert_eq!(v.world.iter_chunks().count(), 0);
+    }
+
+    /// A more specific notice set by the failing path (e.g.
+    /// `load_server_state` naming the exact io error) survives the
+    /// abort - the generic fallback must not clobber it.
+    #[test]
+    fn abort_world_entry_keeps_existing_notice() {
+        let mut v = Voxel::new();
+        v.menu.notice = Some("players save has format_version 9".to_string());
+        v.abort_world_entry("generic fallback".to_string());
+        assert_eq!(
+            v.menu.notice.as_deref(),
+            Some("players save has format_version 9")
+        );
     }
 }

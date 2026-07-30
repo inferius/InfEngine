@@ -205,18 +205,28 @@ pub(crate) fn item_matches(inv_id: u16, want_id: u16) -> bool {
         .any(|&(a, b)| (inv_id == a || inv_id == b) && (want_id == a || want_id == b))
 }
 
-/// Count matching items across the inventory view.
-pub(crate) fn count_items(inv: &[Option<(u16, u8)>], want_id: u16) -> u32 {
+/// Count matching items across the stack-typed inventory view.
+/// Id-keyed - trade costs are plain materials, so per-stack
+/// components are irrelevant to affordability (W469).
+pub(crate) fn count_items(
+    inv: &[Option<crate::item::ItemStack>],
+    want_id: u16,
+) -> u32 {
     inv.iter()
         .flatten()
-        .filter(|(id, _)| item_matches(*id, want_id))
-        .map(|(_, c)| *c as u32)
+        .filter(|st| item_matches(st.id, want_id))
+        .map(|st| st.count as u32)
         .sum()
 }
 
 /// Remove `n` matching items from the view. Returns false (and
-/// leaves the view untouched) when there are not enough.
-pub(crate) fn take_items(inv: &mut [Option<(u16, u8)>], want_id: u16, n: u32) -> bool {
+/// leaves the view untouched) when there are not enough. Partially
+/// consumed stacks keep their components on the remainder (W469).
+pub(crate) fn take_items(
+    inv: &mut [Option<crate::item::ItemStack>],
+    want_id: u16,
+    n: u32,
+) -> bool {
     if count_items(inv, want_id) < n {
         return false;
     }
@@ -225,16 +235,16 @@ pub(crate) fn take_items(inv: &mut [Option<(u16, u8)>], want_id: u16, n: u32) ->
         if left == 0 {
             break;
         }
-        if let Some((id, count)) = slot {
-            if !item_matches(*id, want_id) {
+        if let Some(st) = slot {
+            if !item_matches(st.id, want_id) {
                 continue;
             }
-            let take = (*count as u32).min(left) as u8;
+            let take = (st.count as u32).min(left) as u8;
             left -= take as u32;
-            if take >= *count {
+            if take >= st.count {
                 *slot = None;
             } else {
-                *count -= take;
+                st.count -= take;
             }
         }
     }
@@ -367,11 +377,13 @@ mod tests {
 
     #[test]
     fn crop_family_pays_the_trade() {
-        // Block-form wheat (493) pays a wheat (337) trade.
-        let mut inv: Vec<Option<(u16, u8)>> = vec![Some((493, 25)), None];
+        // Block-form wheat (493) pays a wheat (337) trade. W469:
+        // the view is stack-typed; costs consume by id.
+        let mut inv: Vec<Option<crate::item::ItemStack>> =
+            vec![Some(crate::item::ItemStack::new(493, 25)), None];
         assert_eq!(count_items(&inv, 337), 25);
         assert!(take_items(&mut inv, 337, 20));
-        assert_eq!(inv[0], Some((493, 5)));
+        assert_eq!(inv[0], Some(crate::item::ItemStack::new(493, 5)));
         assert!(!take_items(&mut inv, 337, 6));
     }
 }

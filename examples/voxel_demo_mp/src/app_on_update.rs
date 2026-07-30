@@ -874,10 +874,12 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && let Some(held) = vx.inventory[vx.selected_slot].clone()
             && let Some((slot, _, _)) = crate::item::armor_props(held.id)
         {
+            // W469: store the STACK wholesale - equipping no longer
+            // strips components (a worn / future-enchanted piece
+            // keeps its state on the body and on the way back).
             let prev = vx.armor_slots[slot].take();
-            vx.armor_slots[slot] = Some((held.id, held.count));
-            vx.inventory[vx.selected_slot] =
-                prev.map(|(id, n)| crate::item::ItemStack::new(id, n));
+            vx.armor_slots[slot] = Some(held);
+            vx.inventory[vx.selected_slot] = prev;
             vx.rmb_pending = false;
             let p = [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z];
             vx.sfx_at("armor/equip", p, |_, _| {});
@@ -1490,9 +1492,26 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                         // Load persisted server state (edits, timers,
                         // containers, player). Clients skip - they sync via
                         // the catch-up broadcast on first heartbeat.
-                        if matches!(vx.net, NetRole::Server { .. } | NetRole::Offline) {
-                            vx.load_server_state();
-                        }
+                        // W469: a hard load failure (e.g. an unsupported
+                        // save version that slipped past the enter_world
+                        // preflight) ABORTS the entry back to the menu
+                        // with a notice - the old behaviour silently
+                        // played a regenerated world under the same slug
+                        // and let the autosave stomp the old files.
+                        let load_ok = if matches!(
+                            vx.net,
+                            NetRole::Server { .. } | NetRole::Offline
+                        ) {
+                            vx.load_server_state()
+                        } else {
+                            true
+                        };
+                        if !load_ok {
+                            vx.abort_world_entry(
+                                "Svet se nepodarilo nacist - navrat do menu."
+                                    .to_string(),
+                            );
+                        } else {
                         // W112: load_server_state may restore a player position
                         // saved before the world's vertical scale changed (sea
                         // level 12 -> 63 lifted the terrain), or any spot since
@@ -1538,6 +1557,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                                 "voxel: world loaded - entering Playing"
                             );
                         }
+                        } // W469: end of the load_ok branch.
                     } else {
                         vx.world_loaded = true;
                         vx.state = AppState::Playing;

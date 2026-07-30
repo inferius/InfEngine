@@ -416,11 +416,31 @@ pub(crate) fn peek_envelope_version(bytes: &[u8]) -> io::Result<u32> {
     Ok(u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]))
 }
 
+/// Human-readable family label for a `SaveKind` - used by the
+/// refuse-load message so the user sees "players file" instead of
+/// a debug enum dump.
+pub(crate) fn family_label(kind: SaveKind) -> &'static str {
+    match kind {
+        SaveKind::Meta => "meta.json",
+        SaveKind::WorldJson => "world.json",
+        SaveKind::Chunk => "chunk",
+        SaveKind::Player => "player",
+        SaveKind::Entities => "entities",
+        SaveKind::Timers => "timers",
+        SaveKind::Containers => "containers",
+    }
+}
+
 /// Drive the migration for a file once the caller has already peeked
 /// the disk version. If the disk version matches the target the input
 /// is passed through; otherwise the registry chain runs, or - if no
 /// chain reaches the target - the caller's load is refused with a
 /// `.error.<ts>` sidecar.
+///
+/// W469/R39 dev-save policy: DURING DEVELOPMENT format bumps do not
+/// ship migration arrows - an out-of-date file lands here and
+/// refuses with a message naming the family + found/expected
+/// versions. Real migration chains are release-time work.
 pub(crate) fn migrate_to(
     registry: &MigrationRegistry,
     kind: SaveKind,
@@ -466,8 +486,16 @@ fn refuse_with_error_sidecar(
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(&err_path, msg.as_bytes());
+    // W469: the returned error is what surfaces in logs + the UI
+    // notice, so it must be self-explanatory: family, found vs
+    // expected version, and the likely cause (a save written by an
+    // incompatible development build - the R39 policy skips dev
+    // migration arrows).
     Ok(io::Error::other(format!(
-        "format_version {disk} unsupported; see {}",
+        "{} save has format_version {disk} but this build expects \
+         {target} (world written by an incompatible development \
+         version); see {}",
+        family_label(kind),
         err_path.display()
     )))
 }

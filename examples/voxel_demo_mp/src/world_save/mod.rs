@@ -43,6 +43,7 @@ pub(crate) mod layout;
 pub(crate) mod meta;
 pub(crate) mod migrate;
 pub(crate) mod players;
+pub(crate) mod preflight;
 pub(crate) mod runtime;
 pub(crate) mod timers;
 pub(crate) mod world_json;

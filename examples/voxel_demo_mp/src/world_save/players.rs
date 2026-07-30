@@ -59,7 +59,15 @@ pub(crate) const PLAYER_MAGIC: &[u8; 4] = b"INFP";
 ///   count + components with damage/enchants/name) instead of
 ///   `(u16, u8)` tuples. Old v4 saves lift every slot with empty
 ///   components in `player_v4_to_v5`.
-pub(crate) const PLAYER_FORMAT_VERSION: u32 = 5;
+/// - v6: W469 - `armor` + `craft_grid` become `ItemStack` slots
+///   too (equipping / parking in the grid keeps components).
+///   Per the R39 dev-save policy there is NO 5 -> 6 migration
+///   arrow: during development a format bump simply REFUSES older
+///   files with a clear message (the pre-6 chain stays registered
+///   for the release-time migration work, but currently dead-ends
+///   at 5). Real cross-version compatibility is deferred to the
+///   final release.
+pub(crate) const PLAYER_FORMAT_VERSION: u32 = 6;
 
 /// Default zstd compression level. Matches `chunks.rs` - level 3 is
 /// the documented "balanced" setting from the design doc.
@@ -114,8 +122,10 @@ pub(crate) struct PlayerSave {
     /// runtime: 0..HOTBAR_SLOTS = hotbar row.
     pub inventory: Vec<Option<crate::item::ItemStack>>,
     /// 3x3 crafting grid contents. Empty / partially filled grid
-    /// preserves item placement across save/load.
-    pub craft_grid: Vec<Option<(u16, u8)>>,
+    /// preserves item placement across save/load. W469 (v6):
+    /// stack-typed so a worn tool parked in the grid keeps its
+    /// components across a reload.
+    pub craft_grid: Vec<Option<crate::item::ItemStack>>,
     /// Hotbar slot the player had selected on last save.
     pub selected_slot: u8,
     /// Current breath, in seconds (clamped to `AIR_MAX_DEFAULT` on
@@ -153,9 +163,9 @@ pub(crate) struct PlayerSave {
     /// W418: running XP point total. Part of the v4 payload (v4
     /// was minted the same day and never shipped without it).
     pub xp: u32,
-    /// W419: worn armor `[helmet, chest, legs, boots]` (same
-    /// same-day-v4 rationale as `xp`).
-    pub armor: Vec<Option<(u16, u8)>>,
+    /// W419: worn armor `[helmet, chest, legs, boots]`. W469 (v6):
+    /// stack-typed - an equipped piece's components persist.
+    pub armor: Vec<Option<crate::item::ItemStack>>,
 }
 
 /// Build a fresh `PlayerSave` for a brand-new player. `spawn` is a
@@ -583,6 +593,37 @@ struct PlayerSaveV4 {
     armor: Vec<Option<(u16, u8)>>,
 }
 
+/// W469: FROZEN v5 payload shape - `ItemStack` inventory but still
+/// tuple-typed craft grid + armor. The v4 -> v5 arrow encodes THIS
+/// (the live struct is v6 now); nothing decodes it in production -
+/// per the R39 dev-save policy there is no 5 -> 6 arrow, so a v5
+/// file refuses with the clean unsupported-version message. The
+/// shape is frozen anyway so the existing arrow keeps emitting
+/// byte-identical v5 output for the release-time migration chain.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct PlayerSaveV5 {
+    format_version: u32,
+    pos: [f32; 3],
+    yaw: f32,
+    pitch: f32,
+    inventory: Vec<Option<crate::item::ItemStack>>,
+    craft_grid: Vec<Option<(u16, u8)>>,
+    selected_slot: u8,
+    air: f32,
+    health: f32,
+    home_pos: Option<[f32; 3]>,
+    spawn_pos: Option<[f32; 3]>,
+    permission_level: u8,
+    play_time_seconds: u64,
+    last_dimension: String,
+    highlight_mode: u8,
+    game_mode: u8,
+    food: f32,
+    saturation: f32,
+    xp: u32,
+    armor: Vec<Option<(u16, u8)>>,
+}
+
 /// V1 -> V2 envelope migration. Decodes the v1 payload (no
 /// `highlight_mode` field), re-encodes it as a v2 payload with
 /// `highlight_mode = HighlightMode::Auto`. Matches the
@@ -833,6 +874,11 @@ pub(crate) fn player_v3_to_v4(bytes: &[u8]) -> io::Result<Vec<u8>> {
 /// persisted), so there is nothing to fold into `damage` here -
 /// lifted tools load fresh, exactly like every pre-W466 reload
 /// did. Mirrors the v3 -> v4 step.
+///
+/// W469/R39: the chain currently dead-ends at v5 (the live format
+/// is v6 with no 5 -> 6 arrow), so this step never fires in
+/// production - `migrate_to` refuses any pre-6 file up front. It
+/// stays registered + tested for the release-time migration work.
 pub(crate) fn player_v4_to_v5(bytes: &[u8]) -> io::Result<Vec<u8>> {
     if bytes.len() < 17 {
         return Err(invalid("player v4 envelope truncated"));
@@ -872,7 +918,9 @@ pub(crate) fn player_v4_to_v5(bytes: &[u8]) -> io::Result<Vec<u8>> {
     let (v4, _read) = bincode::serde::decode_from_slice::<PlayerSaveV4, _>(&raw_v4, cfg)
         .map_err(|err| invalid(format!("v4 payload decode failed: {err}")))?;
 
-    let v5 = PlayerSave {
+    // W469: emit the FROZEN v5 shape (the live PlayerSave is v6
+    // with ItemStack craft grid + armor).
+    let v5 = PlayerSaveV5 {
         format_version: 5,
         pos: v4.pos,
         yaw: v4.yaw,
@@ -1045,12 +1093,13 @@ mod tests {
     }
 
     #[test]
-    fn player_v1_to_v2_round_trip_through_write_read() {
-        // End-to-end: encode v1 bytes, write to disk under a
-        // tempdir, read with the production registry. The chain
-        // v1 -> v2 -> v3 (W8.2) runs through transparently; the
-        // loaded record reports the live envelope version + the
-        // documented defaults for both newly-introduced fields.
+    fn player_v1_refused_cleanly_under_dev_policy() {
+        // W469/R39: the registered chain dead-ends at v5 while the
+        // live format is v6 - a v1 file through the PRODUCTION
+        // reader must refuse with the clean unsupported-version
+        // message (naming family + found/expected versions), NOT
+        // half-migrate or panic. The pre-6 arrows stay covered by
+        // their per-step unit tests above.
         let v1 = PlayerSaveV1 {
             format_version: 1,
             pos: [0.5, 64.0, 0.5],
@@ -1072,14 +1121,15 @@ mod tests {
         let path = player_path_in_dir(dir.path(), "q2", "tester");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, &v1_bytes).unwrap();
-        let loaded = read_player_in_dir(dir.path(), "q2", "tester")
-            .expect("read ok")
-            .expect("save present");
-        assert_eq!(loaded.format_version, PLAYER_FORMAT_VERSION);
-        assert_eq!(loaded.highlight_mode, 0);
-        assert_eq!(loaded.last_dimension, "overworld");
-        // W8.2: chain ran through v3; game_mode defaults to Survival.
-        assert_eq!(loaded.game_mode, 0);
+        let err = read_player_in_dir(dir.path(), "q2", "tester")
+            .expect_err("v1 must refuse under the R39 dev policy");
+        let msg = err.to_string();
+        assert!(msg.contains("player"), "names the family: {msg}");
+        assert!(msg.contains('1'), "names the found version: {msg}");
+        assert!(
+            msg.contains(&PLAYER_FORMAT_VERSION.to_string()),
+            "names the expected version: {msg}"
+        );
     }
 
     /// Encode a `PlayerSaveV2`-shaped struct under a v2 envelope so
@@ -1266,8 +1316,10 @@ mod tests {
             COMP_NONE => out[17..].to_vec(),
             _ => decode_zstd(&out[17..], len).unwrap(),
         };
+        // W469: the arrow emits the FROZEN v5 shape (the live
+        // PlayerSave is v6 with stack craft grid + armor).
         let (v5, _read) =
-            bincode::serde::decode_from_slice::<PlayerSave, _>(&body, cfg)
+            bincode::serde::decode_from_slice::<PlayerSaveV5, _>(&body, cfg)
                 .unwrap();
         assert_eq!(v5.format_version, 5);
         assert_eq!(
@@ -1320,21 +1372,23 @@ mod tests {
     }
 
     #[test]
-    fn player_v2_to_v3_end_to_end_through_read() {
-        // Write a v2 envelope to disk, run the production reader,
-        // confirm the load lifts to v3 with Survival game_mode.
+    fn player_v2_refused_cleanly_under_dev_policy() {
+        // W469/R39: same as the v1 case - the production reader
+        // refuses every pre-6 version with the clean message.
         let v2 = sample_v2_payload();
         let v2_bytes = encode_v2_envelope(&v2);
         let dir = tempfile::tempdir().expect("tempdir");
         let path = player_path_in_dir(dir.path(), "w8", "alice");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, &v2_bytes).unwrap();
-        let loaded = read_player_in_dir(dir.path(), "w8", "alice")
-            .expect("read ok")
-            .expect("save present");
-        assert_eq!(loaded.format_version, PLAYER_FORMAT_VERSION);
-        assert_eq!(loaded.highlight_mode, v2.highlight_mode);
-        assert_eq!(loaded.game_mode, 0);
+        let err = read_player_in_dir(dir.path(), "w8", "alice")
+            .expect_err("v2 must refuse under the R39 dev policy");
+        let msg = err.to_string();
+        assert!(msg.contains("player"), "names the family: {msg}");
+        assert!(
+            msg.contains(&PLAYER_FORMAT_VERSION.to_string()),
+            "names the expected version: {msg}"
+        );
     }
 
     #[test]

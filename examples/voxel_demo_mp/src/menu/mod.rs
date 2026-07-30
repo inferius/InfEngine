@@ -327,6 +327,11 @@ pub(crate) struct Menu {
     /// re-enters the Main screen so the text doesn't flicker
     /// each frame.
     pub(crate) splash_text: Option<String>,
+    /// W469: pending user-visible notice shown as a modal window
+    /// over every menu screen until dismissed. Set by the runtime
+    /// when entering a world is refused (e.g. an incompatible
+    /// dev-save version under the R39 policy).
+    pub(crate) notice: Option<String>,
 }
 
 /// How often the menu re-scans the worlds dir + saved-servers
@@ -395,6 +400,7 @@ impl Menu {
             saved_servers: Vec::new(),
             saved_servers_at: None,
             splash_text: None,
+            notice: None,
         }
     }
 

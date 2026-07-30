@@ -2,7 +2,7 @@
 //!
 //! Owns the small but tricky pile of types + helpers that move
 //! `ItemStack`s around the client's 36-slot inventory grid + the
-//! (still tuple-shaped) 2x2 craft grid:
+//! 2x2 craft grid (stack-typed since W469):
 //!
 //! - `SlotKind` is the drag&drop payload + wire address - one of
 //!   36 inventory cells, one of 4 craft cells, or the single
@@ -249,8 +249,8 @@ pub(crate) fn inv_consume(
 /// rules come from the SHARED `item::stack::drag_stacks` helper -
 /// the same function the local `Voxel::apply_inv_action` uses - so
 /// the server's authoritative view can never drift from what the
-/// client UI predicts. Craft cells lift to plain stacks at this
-/// boundary (the craft grid stays tuple-shaped until its wave).
+/// client UI predicts. W469: craft cells are stack-typed too, so
+/// components ride through the server's craft grid unchanged.
 pub(crate) fn inv_apply_drag(
     inv: &mut ClientInv,
     from: SlotKind,
@@ -268,12 +268,7 @@ pub(crate) fn inv_apply_drag(
     let read = |inv: &ClientInv, slot: SlotKind| -> Option<ItemStack> {
         match slot {
             SlotKind::Inv(i) => inv.inventory.get(i).cloned().flatten(),
-            SlotKind::Craft(i) => inv
-                .craft_grid
-                .get(i)
-                .copied()
-                .flatten()
-                .map(|(b, c)| ItemStack::new(b.0, c)),
+            SlotKind::Craft(i) => inv.craft_grid.get(i).cloned().flatten(),
             SlotKind::CraftOut => match_recipe(&inv.craft_grid)
                 .map(|(b, c)| ItemStack::new(b.0, c)),
         }
@@ -287,7 +282,7 @@ pub(crate) fn inv_apply_drag(
             }
             SlotKind::Craft(i) => {
                 if i < inv.craft_grid.len() {
-                    inv.craft_grid[i] = val.map(|s| (BlockId(s.id), s.count));
+                    inv.craft_grid[i] = val;
                 }
             }
             SlotKind::CraftOut => {}
@@ -306,9 +301,9 @@ pub(crate) fn inv_apply_drag(
         });
         if to_stack.is_none() || fits_merge {
             for cell in inv.craft_grid.iter_mut() {
-                if let Some((_, c)) = cell.as_mut() {
-                    *c = c.saturating_sub(1);
-                    if *c == 0 {
+                if let Some(st) = cell.as_mut() {
+                    st.count = st.count.saturating_sub(1);
+                    if st.count == 0 {
                         *cell = None;
                     }
                 }
@@ -335,7 +330,7 @@ mod tests {
     fn empty_client_inv() -> ClientInv {
         ClientInv {
             inventory: std::array::from_fn(|_| None),
-            craft_grid: [None; 4],
+            craft_grid: std::array::from_fn(|_| None),
         }
     }
 

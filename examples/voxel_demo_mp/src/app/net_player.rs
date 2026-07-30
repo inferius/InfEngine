@@ -6,7 +6,14 @@ use crate::lighting::HaloLighting;
 impl Voxel {
     /// is fresh (no save yet) - in that case we just carry on with the
     /// procedurally generated world.
-    pub(crate) fn load_server_state(&mut self) {
+    ///
+    /// W469: returns `false` when the load FAILED hard (e.g. an
+    /// unsupported save version that slipped past the enter_world
+    /// preflight). The caller must then abort the world entry via
+    /// `abort_world_entry` - continuing used to silently play a
+    /// freshly regenerated world under the old slug, which the next
+    /// autosave would overwrite.
+    pub(crate) fn load_server_state(&mut self) -> bool {
         // First-run legacy migration: if the pre-A4 single-file save
         // is still in CWD + the new worlds tree is empty, create a
         // `worlds/legacy/` slot.
@@ -29,7 +36,13 @@ impl Voxel {
                 // mint the slot on the next save tick.
                 self.current_world_slug = Some(slug);
             }
-            Err(err) => warn!(error = %err, "world_save: load_world failed"),
+            Err(err) => {
+                warn!(error = %err, "world_save: load_world failed - aborting entry");
+                self.menu.notice = Some(format!(
+                    "Svet '{slug}' se nepodarilo nacist: {err}"
+                ));
+                return false;
+            }
         }
         // Phase L.7: lighting is never persisted - derive it from
         // the freshly-loaded block grid. After this every loaded
@@ -44,6 +57,7 @@ impl Voxel {
         // walk is gone - it was adding ~5-10 s of chunk-clone work
         // on top of an already-slow lighting BFS, pushing load time
         // past 90 s on 11k-chunk saves.
+        true
     }
 
     /// Raycast against every remote player's AABB. Returns the

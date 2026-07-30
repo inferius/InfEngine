@@ -657,12 +657,12 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let mut furnace_held_local = furnace_held_snapshot;
         // W50.3: 3x3 crafting table snapshot. Local copies that the
         // panel mutates inside the egui closure; reconciled with vx
-        // after the closure exits.
+        // after the closure exits. W469: stack-typed clones.
         let crafting_table_open_pos = vx.crafting_table_open;
         let mut crafting_table_open_local = crafting_table_open_pos.is_some();
-        let mut crafting_table_grid_local: [Option<(BlockId, u8)>; 9] =
-            vx.craft_grid_3x3;
-        let mut crafting_table_held_local = vx.crafting_table_held;
+        let mut crafting_table_grid_local: [Option<crate::item::ItemStack>; 9] =
+            vx.craft_grid_3x3.clone();
+        let mut crafting_table_held_local = vx.crafting_table_held.clone();
         // Set when the player clicks the 3x3 output slot.
         let mut crafting_table_take_output = false;
         // W171: stonecutter snapshot (client-side, like the crafting
@@ -711,12 +711,12 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let mut trade_buy: Option<usize> = None;
         let stonecutter_open_pos = vx.stonecutter_open;
         let mut stonecutter_open_local = stonecutter_open_pos.is_some();
-        let mut stonecutter_input_local = vx.stonecutter_input;
+        let mut stonecutter_input_local = vx.stonecutter_input.clone();
         let mut stonecutter_craft: Option<usize> = None;
         // W410: smithing snapshot (session UI, stonecutter pattern).
         let smithing_open_pos = vx.smithing_open;
         let mut smithing_open_local = smithing_open_pos.is_some();
-        let mut smithing_slots_local = vx.smithing_slots;
+        let mut smithing_slots_local = vx.smithing_slots.clone();
         let mut smithing_craft = false;
         // W50.5: brewing stand snapshot mirrors the chest/furnace
         // pattern - clone the live container so the panel paints
@@ -737,27 +737,21 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let mut brewing_held_local = brewing_held_snapshot;
         let mut brewing_grid_actions: Vec<(bool, container::ui::GridAction)> =
             Vec::new();
-        // Plain tuple projection of the inventory for the panels
-        // that are STILL tuple-shaped after W468: the 3x3 crafting
-        // table, stonecutter, smithing, and trades (each converts
-        // back through `write_tuple_preserving` post-egui so a
-        // count-only change keeps untouched components). Later
-        // waves lift those panels and retire this snapshot.
-        //
-        // W50.3: mutable so the 3x3 crafting table panel can
-        // apply player-inv clicks in place; render.rs copies the
-        // result back into vx.inventory after the egui closure
-        // when the crafting table was the active panel.
-        let mut inv_plain_snapshot: Vec<Option<(u16, u8)>> = vx
-            .inventory
-            .iter()
-            .map(|s| s.as_ref().map(|st| st.as_tuple()))
-            .collect();
-        // W467: stack-shaped inventory snapshot for the panels that
-        // are already stack-native (chest / furnace / brewing).
-        // Draw-only inside the egui closure; the post-egui applies
-        // mutate `vx.inventory` directly so components never take a
-        // tuple detour on those paths.
+        // W469: mutable STACK view of the inventory for the panels
+        // that apply player-inv clicks inline during the egui pass
+        // (3x3 crafting table + its recipe book, stonecutter,
+        // smithing - at most one can be open at a time, the open_X
+        // helpers close the rest). The owning panel's post-egui
+        // apply copies the view back into `vx.inventory` wholesale,
+        // so components ride through with no tuple detour (the old
+        // `inv_plain_snapshot` + `write_tuple_preserving` round
+        // trip is gone).
+        let mut inv_stacks_local: Vec<Option<crate::item::ItemStack>> =
+            vx.inventory.to_vec();
+        // W467: read-only stack snapshot for the panels that queue
+        // their mutations for a post-egui apply against
+        // `vx.inventory` directly (chest / furnace / brewing) and
+        // for the trade panel's afford check.
         let inv_stack_snapshot: Vec<Option<crate::item::ItemStack>> =
             vx.inventory.to_vec();
         let mp_role_label: Option<&'static str> = match &vx.net {
@@ -773,8 +767,9 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         } else {
             Vec::new()
         };
-        let craft_snapshot: [Option<SlotIcon>; 4] =
-            std::array::from_fn(|i| icon(vx.craft_grid[i]));
+        let craft_snapshot: [Option<SlotIcon>; 4] = std::array::from_fn(|i| {
+            icon(vx.craft_grid[i].as_ref().map(|st| (BlockId(st.id), st.count)))
+        });
         let craft_match: Option<(BlockId, u8, &'static str)> =
             match_recipe_named(&vx.craft_grid);
         let craft_output_snapshot = craft_match.map(|(b, c, _)| {
@@ -863,12 +858,13 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 .unwrap_or("Vanilla")
                 .to_string()
         };
-        // Split `&mut vx.menu` into two disjoint `&mut` borrows
-        // of `screen` + `options` so the dispatcher can take one
-        // while the `MenuContext` carries the other.
+        // Split `&mut vx.menu` into disjoint `&mut` borrows of
+        // `screen` + `options` (+ W469 `notice`) so the dispatcher
+        // can take one while the `MenuContext` carries the other.
         let menu::Menu {
             screen: menu_screen_ref,
             options: menu_options_ref,
+            notice: menu_notice_ref,
             ..
         } = &mut vx.menu;
         // W11.5: snapshot of every known player name + the local
@@ -982,6 +978,10 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             &mut menu_actions,
                         );
                     });
+                // W469: modal notice (e.g. refused world load due
+                // to an incompatible dev-save version) over every
+                // menu screen until the user dismisses it.
+                menu::shared::draw_notice(ctx, menu_notice_ref);
             }
             // L.3: loading screen. Same Area approach as the main
             // menu (CentralPanel causes a blank-frame artefact with
@@ -2471,7 +2471,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             ctx,
                             grid: &mut crafting_table_grid_local,
                             held: &mut crafting_table_held_local,
-                            inv_view: &mut inv_plain_snapshot,
+                            inv_view: &mut inv_stacks_local,
                             atlas_tex_id,
                             icon_uv_resolver: &icon_uv_resolver,
                             open_local: &mut crafting_table_open_local,
@@ -2486,7 +2486,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         ui::stonecutter_panel::StonecutterPanelInputs {
                             ctx,
                             input: &mut stonecutter_input_local,
-                            inv_view: &mut inv_plain_snapshot,
+                            inv_view: &mut inv_stacks_local,
                             atlas_tex_id,
                             icon_uv_resolver: &icon_uv_resolver,
                             open_local: &mut stonecutter_open_local,
@@ -2501,7 +2501,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         ui::smithing_panel::SmithingPanelInputs {
                             ctx,
                             slots: &mut smithing_slots_local,
-                            inv_view: &mut inv_plain_snapshot,
+                            inv_view: &mut inv_stacks_local,
                             atlas_tex_id,
                             icon_uv_resolver: &icon_uv_resolver,
                             open_local: &mut smithing_open_local,
@@ -2510,7 +2510,9 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     );
                 }
 
-                // W319: villager trade panel.
+                // W319: villager trade panel. Read-only view; the
+                // exchange applies straight on `vx.inventory` post-
+                // egui (W469).
                 if trade_open_local {
                     ui::trade_panel::render(
                         ui::trade_panel::TradePanelInputs {
@@ -2518,7 +2520,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             profession: trade_profession,
                             villager_id: trade_open_id.unwrap_or(0),
                             level: trade_level,
-                            inv_view: &inv_plain_snapshot,
+                            inv_view: &inv_stack_snapshot,
                             atlas_tex_id,
                             icon_uv_resolver: &icon_uv_resolver,
                             open_local: &mut trade_open_local,
@@ -3586,7 +3588,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         if furnace_open_pos.is_some() && !furnace_open_local {
             vx.close_furnace_ui();
         }
-        // W50.3: crafting-table panel apply.
+        // W50.3: crafting-table panel apply (W469: stack-native).
         if crafting_table_open_pos.is_some() {
             // 1. Sync grid + held back from the local mutations
             //    inside the egui closure.
@@ -3594,60 +3596,64 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             vx.crafting_table_held = crafting_table_held_local;
             // 2. Output click: consume 1 of every non-empty grid
             //    cell + push the resolved output onto the held
-            //    stack (or merge with existing held).
-            if crafting_table_take_output {
-                let grid_u16: [Option<(u16, u8)>; 9] =
-                    std::array::from_fn(|i| {
-                        vx.craft_grid_3x3[i].map(|(b, c)| (b.0, c))
-                    });
-                if let Some((out_id, out_n, _)) =
-                    crate::recipes::matcher::match_3x3(&grid_u16)
-                {
-                    // Merge / set held.
-                    let new_held = match vx.crafting_table_held {
-                        None => Some((out_id, out_n)),
-                        Some((hid, hn)) if hid == out_id => {
-                            let cap = inventory::STACK_MAX;
-                            let sum = (hn as u16) + (out_n as u16);
-                            if sum <= cap as u16 {
-                                Some((hid, sum as u8))
-                            } else {
-                                // Output doesn't fit - don't craft
-                                // (matches MC).
-                                Some((hid, hn))
-                            }
+            //    stack (or merge with existing held). Crafted
+            //    results are FRESH stacks (empty components); a
+            //    held stack merges only when `same_stackable`.
+            if crafting_table_take_output
+                && let Some((out_id, out_n, _)) =
+                    crate::recipes::matcher::match_3x3(
+                        &ui::crafting_panel::grid_as_u16(&vx.craft_grid_3x3),
+                    )
+            {
+                let fresh = crate::item::ItemStack::new(out_id, out_n);
+                let new_held = match &vx.crafting_table_held {
+                    None => Some(fresh),
+                    Some(h) if h.same_stackable(&fresh) => {
+                        let cap = crate::item::item_max_stack(out_id);
+                        let sum = (h.count as u16) + (out_n as u16);
+                        if sum <= cap as u16 {
+                            Some(h.with_count(sum as u8))
+                        } else {
+                            // Output doesn't fit - don't craft
+                            // (matches MC).
+                            Some(h.clone())
                         }
-                        Some(h) => Some(h), // different item held; skip
-                    };
-                    // Only consume inputs if the held merge
-                    // succeeded (i.e. we actually produced output).
-                    let consumed = match (vx.crafting_table_held, new_held) {
-                        (None, Some(_)) => true,
-                        (Some((_, before)), Some((_, after))) if after > before => true,
-                        _ => false,
-                    };
-                    if consumed {
-                        for cell in vx.craft_grid_3x3.iter_mut() {
-                            if let Some((b, c)) = *cell {
-                                let nc = c.saturating_sub(1);
-                                *cell = if nc == 0 { None } else { Some((b, nc)) };
-                            }
-                        }
-                        vx.crafting_table_held = new_held;
                     }
+                    // Different item (or components) held; skip.
+                    Some(h) => Some(h.clone()),
+                };
+                // Only consume inputs if the held merge succeeded
+                // (i.e. we actually produced output).
+                let consumed = match (&vx.crafting_table_held, &new_held) {
+                    (None, Some(_)) => true,
+                    (Some(before), Some(after))
+                        if after.count > before.count =>
+                    {
+                        true
+                    }
+                    _ => false,
+                };
+                if consumed {
+                    for cell in vx.craft_grid_3x3.iter_mut() {
+                        if let Some(st) = cell.as_mut() {
+                            st.count = st.count.saturating_sub(1);
+                            if st.count == 0 {
+                                *cell = None;
+                            }
+                        }
+                    }
+                    vx.crafting_table_held = new_held;
                 }
             }
-            // 3. Copy the mutated inv snapshot back into
-            //    vx.inventory (the panel's player-inv grid
-            //    operated directly on inv_plain_snapshot).
-            for (i, slot) in inv_plain_snapshot.iter().enumerate() {
+            // 3. Copy the mutated stack view back into
+            //    vx.inventory wholesale (the panel's player-inv
+            //    grid operated directly on inv_stacks_local, so
+            //    components already travelled with every move).
+            for (i, slot) in inv_stacks_local.iter().enumerate() {
                 if i >= vx.inventory.len() {
                     break;
                 }
-                crate::item::stack::write_tuple_preserving(
-                    &mut vx.inventory[i],
-                    *slot,
-                );
+                vx.inventory[i] = slot.clone();
             }
             // 4. Close-via-X: route through close_crafting_table_ui
             //    so the grid + held stack get returned to the inv
@@ -3657,46 +3663,40 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             }
         }
         // W319: trade apply - verify BOTH costs first, then pay and
-        // receive on the inv snapshot, copy back, sync close.
+        // receive. W469: straight against `vx.inventory` (the panel
+        // only reads a snapshot) - costs consume by id via the
+        // stack-typed `take_items`, the reward inserts as a FRESH
+        // stack; no tuple round trip.
         if trade_open_id.is_some() {
             if let Some(i) = trade_buy
                 && let Some(t) =
                     crate::trades::trades_for(trade_profession).nth(i)
             {
                 let can = crate::trades::count_items(
-                    &inv_plain_snapshot,
+                    &vx.inventory,
                     t.want,
                 ) >= t.want_n as u32
                     && t.want2.is_none_or(|(id2, n2)| {
-                        crate::trades::count_items(&inv_plain_snapshot, id2)
+                        crate::trades::count_items(&vx.inventory, id2)
                             >= n2 as u32
                     });
                 if can {
                     crate::trades::take_items(
-                        &mut inv_plain_snapshot,
+                        &mut vx.inventory,
                         t.want,
                         t.want_n as u32,
                     );
                     if let Some((id2, n2)) = t.want2 {
                         crate::trades::take_items(
-                            &mut inv_plain_snapshot,
+                            &mut vx.inventory,
                             id2,
                             n2 as u32,
                         );
                     }
                     ui::stonecutter_panel::give_to_inv(
-                        &mut inv_plain_snapshot,
-                        (t.give, t.give_n),
+                        &mut vx.inventory,
+                        crate::item::ItemStack::new(t.give, t.give_n),
                     );
-                    for (si, slot) in inv_plain_snapshot.iter().enumerate() {
-                        if si >= vx.inventory.len() {
-                            break;
-                        }
-                        crate::item::stack::write_tuple_preserving(
-                            &mut vx.inventory[si],
-                            *slot,
-                        );
-                    }
                     // W458/W459: villager XP per completed trade
                     // drives the Novice..Master tier unlocks (MC
                     // VillagerData thresholds); lives ON the mob so
@@ -3714,64 +3714,73 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 vx.trade_open = None;
             }
         }
-        // W171: stonecutter apply. Sync the input back, run the
-        // clicked cut (consume 1 input + add the output to the inv),
-        // copy the inv snapshot back, and on close return the input.
+        // W171: stonecutter apply (W469: stack-native). Sync the
+        // input back, run the clicked cut (consume 1 input + add a
+        // FRESH output stack to the local inv view), copy the view
+        // back wholesale, and on close return the input.
         if stonecutter_open_pos.is_some() {
             vx.stonecutter_input = stonecutter_input_local;
             if let Some(i) = stonecutter_craft
-                && let Some((in_id, in_n)) = vx.stonecutter_input
+                && let Some(in_st) = vx.stonecutter_input.clone()
             {
-                let cuts = crate::recipes::stonecutter::cuts_for(in_id);
+                let cuts = crate::recipes::stonecutter::cuts_for(in_st.id);
                 if let Some(cut) = cuts.get(i) {
                     ui::stonecutter_panel::give_to_inv(
-                        &mut inv_plain_snapshot,
-                        (cut.output, cut.count),
+                        &mut inv_stacks_local,
+                        crate::item::ItemStack::new(cut.output, cut.count),
                     );
-                    let n = in_n.saturating_sub(1);
+                    let n = in_st.count.saturating_sub(1);
                     vx.stonecutter_input =
-                        if n == 0 { None } else { Some((in_id, n)) };
+                        (n > 0).then(|| in_st.with_count(n));
                 }
             }
             // Close-via-X: return the remaining input to the inventory.
             if !stonecutter_open_local
                 && let Some(stack) = vx.stonecutter_input.take()
             {
-                ui::stonecutter_panel::give_to_inv(&mut inv_plain_snapshot, stack);
+                ui::stonecutter_panel::give_to_inv(&mut inv_stacks_local, stack);
             }
-            for (i, slot) in inv_plain_snapshot.iter().enumerate() {
+            for (i, slot) in inv_stacks_local.iter().enumerate() {
                 if i >= vx.inventory.len() {
                     break;
                 }
-                crate::item::stack::write_tuple_preserving(
-                    &mut vx.inventory[i],
-                    *slot,
-                );
+                vx.inventory[i] = slot.clone();
             }
             if !stonecutter_open_local {
                 vx.stonecutter_open = None;
             }
         }
-        // W410: smithing apply. Sync the slots back, run the clicked
-        // craft (consume one of each input + add the output), copy
-        // the inv snapshot back, and on close return the slots.
+        // W410: smithing apply (W469: stack-native). Sync the slots
+        // back, run the clicked craft (consume one of each input +
+        // add the output), copy the local inv view back wholesale,
+        // and on close return the slots.
         if smithing_open_pos.is_some() {
             vx.smithing_slots = smithing_slots_local;
             if smithing_craft
                 && let Some(r) = crate::recipes::smithing::smith_result(
-                    vx.smithing_slots[0].map(|(id, _)| id),
-                    vx.smithing_slots[1].map(|(id, _)| id),
-                    vx.smithing_slots[2].map(|(id, _)| id),
+                    vx.smithing_slots[0].as_ref().map(|st| st.id),
+                    vx.smithing_slots[1].as_ref().map(|st| st.id),
+                    vx.smithing_slots[2].as_ref().map(|st| st.id),
                 )
             {
+                // W469: the MC netherite upgrade KEEPS the base
+                // piece's per-stack state - clone the base's
+                // components (damage today, enchants later) onto
+                // the upgraded output.
+                let mut out = crate::item::ItemStack::new(r.output, 1);
+                if let Some(base) = vx.smithing_slots[1].as_ref() {
+                    out.components = base.components.clone();
+                }
                 ui::stonecutter_panel::give_to_inv(
-                    &mut inv_plain_snapshot,
-                    (r.output, 1),
+                    &mut inv_stacks_local,
+                    out,
                 );
                 for slot in vx.smithing_slots.iter_mut() {
-                    if let Some((id, n)) = *slot {
-                        let n = n.saturating_sub(1);
-                        *slot = if n == 0 { None } else { Some((id, n)) };
+                    if let Some(st) = slot.as_mut() {
+                        st.count = st.count.saturating_sub(1);
+                        if st.count == 0 {
+                            *slot = None;
+                        }
                     }
                 }
             }
@@ -3780,20 +3789,17 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 for slot in vx.smithing_slots.iter_mut() {
                     if let Some(stack) = slot.take() {
                         ui::stonecutter_panel::give_to_inv(
-                            &mut inv_plain_snapshot,
+                            &mut inv_stacks_local,
                             stack,
                         );
                     }
                 }
             }
-            for (i, slot) in inv_plain_snapshot.iter().enumerate() {
+            for (i, slot) in inv_stacks_local.iter().enumerate() {
                 if i >= vx.inventory.len() {
                     break;
                 }
-                crate::item::stack::write_tuple_preserving(
-                    &mut vx.inventory[i],
-                    *slot,
-                );
+                vx.inventory[i] = slot.clone();
             }
             if !smithing_open_local {
                 vx.smithing_open = None;
@@ -3980,21 +3986,23 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             && let Some(recipe) = RECIPES.get(idx)
         {
             // Inventory of (slot_idx, original_stack) we may
-            // have to refund on failure.
+            // have to refund on failure. W469: the grid takes a
+            // SLICE of the source stack (components cloned), so
+            // the fill is lossless for worn/named ingredients.
             let mut taken: Vec<(usize, crate::item::ItemStack)> = Vec::new();
-            let mut placed: [Option<(BlockId, u8)>; 4] = [None; 4];
+            let mut placed: [Option<crate::item::ItemStack>; 4] =
+                std::array::from_fn(|_| None);
             let mut ok = true;
             for (i, (bid, n)) in recipe.inputs.iter().enumerate() {
                 if i >= 4 {
                     break;
                 }
                 let need = *n;
-                let target = BlockId(*bid);
-                // Look for a slot that has the needed block.
+                // Look for a slot that has the needed item id.
                 let mut found_slot: Option<usize> = None;
                 for (si, slot) in vx.inventory.iter().enumerate() {
                     if let Some(st) = slot
-                        && st.id == target.0
+                        && st.id == *bid
                         && st.count >= need
                     {
                         found_slot = Some(si);
@@ -4006,17 +4014,12 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         let original = vx.inventory[si]
                             .clone()
                             .expect("verified above");
-                        taken.push((si, original.clone()));
                         let remaining =
                             original.count.saturating_sub(need);
-                        vx.inventory[si] = if remaining == 0 {
-                            None
-                        } else {
-                            let mut kept = original;
-                            kept.count = remaining;
-                            Some(kept)
-                        };
-                        placed[i] = Some((target, need));
+                        vx.inventory[si] = (remaining > 0)
+                            .then(|| original.with_count(remaining));
+                        placed[i] = Some(original.with_count(need));
+                        taken.push((si, original));
                     }
                     None => {
                         ok = false;
@@ -4026,16 +4029,18 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             }
             if ok {
                 // Return whatever was in the craft grid before
-                // the auto-fill so it's not silently lost.
-                let returns: Vec<(BlockId, u8)> = vx
+                // the auto-fill so it's not silently lost
+                // (components ride back).
+                let returns: Vec<crate::item::ItemStack> = vx
                     .craft_grid
                     .iter_mut()
                     .filter_map(|s| s.take())
                     .collect();
-                for (b, c) in returns {
-                    for _ in 0..c {
-                        vx.pickup(b);
-                    }
+                for st in returns {
+                    let _ = crate::item::stack::drop_into_first_free_stacks(
+                        &mut vx.inventory,
+                        st,
+                    );
                 }
                 vx.craft_grid = placed;
             } else {

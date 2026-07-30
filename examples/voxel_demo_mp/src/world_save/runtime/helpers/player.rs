@@ -1,8 +1,6 @@
 //! Player pose + inventory save / apply. Builds `PlayerSave` from
 //! the live host state and writes it back on load.
 
-use infengine_voxel::BlockId;
-
 use crate::ui::HighlightMode;
 use crate::{DAY_LENGTH_S, PLAYER_MAX_HEALTH, Voxel};
 
@@ -19,14 +17,13 @@ pub(in crate::world_save::runtime) fn build_player_save(voxel: &Voxel) -> Player
     // The runtime craft grid is 2x2 (4 slots) but the save schema
     // budgets a 3x3 grid (9 slots) so Phase D's larger grid lands
     // without bumping the format. Pad the unused slots with `None`.
-    let mut craft: Vec<Option<(u16, u8)>> = vec![None; 9];
+    // W469: cells persist as full stacks (components included).
+    let mut craft: Vec<Option<crate::item::ItemStack>> = vec![None; 9];
     for (i, slot) in voxel.craft_grid.iter().enumerate() {
         if i >= craft.len() {
             break;
         }
-        if let Some((b, c)) = slot {
-            craft[i] = Some((b.0, *c));
-        }
+        craft[i] = slot.clone();
     }
     PlayerSave {
         format_version: PLAYER_FORMAT_VERSION,
@@ -56,7 +53,7 @@ pub(in crate::world_save::runtime) fn build_player_save(voxel: &Voxel) -> Player
         saturation: voxel.player_food.saturation,
         // W418: XP total.
         xp: voxel.player_xp,
-        // W419: worn armor.
+        // W419: worn armor (W469: full stacks - components persist).
         armor: voxel.armor_slots.to_vec(),
     }
 }
@@ -77,12 +74,12 @@ pub(in crate::world_save::runtime) fn apply_player_save(voxel: &mut Voxel, save:
         voxel.inventory[i] = slot.clone();
     }
     // Craft grid is 2x2 in the runtime, 3x3 in the save - only the
-    // first 4 slots round-trip.
+    // first 4 slots round-trip. W469: full stacks.
     for (i, slot) in save.craft_grid.iter().enumerate() {
         if i >= voxel.craft_grid.len() {
             break;
         }
-        voxel.craft_grid[i] = slot.map(|(b, c)| (BlockId(b), c));
+        voxel.craft_grid[i] = slot.clone();
     }
     voxel.selected_slot = (save.selected_slot as usize).min(voxel.inventory.len() - 1);
     voxel.player_air = save.air;
@@ -105,10 +102,10 @@ pub(in crate::world_save::runtime) fn apply_player_save(voxel: &mut Voxel, save:
     // W418: XP total.
     voxel.player_xp = save.xp;
     // W419: worn armor (tolerates short vecs from hand-edited
-    // files).
-    voxel.armor_slots = [None; 4];
+    // files). W469: full stacks.
+    voxel.armor_slots = std::array::from_fn(|_| None);
     for (i, slot) in save.armor.iter().take(4).enumerate() {
-        voxel.armor_slots[i] = *slot;
+        voxel.armor_slots[i] = slot.clone();
     }
     // W10.1: keep the cached ability bundle in lockstep with
     // `game_mode`. Without this the fly / invuln / instabuild

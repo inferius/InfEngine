@@ -385,7 +385,10 @@ pub(crate) struct Voxel {
     /// `xp::level_progress`).
     pub(crate) player_xp: u32,
     /// W419: worn armor `[helmet, chestplate, leggings, boots]`.
-    pub(crate) armor_slots: [Option<(u16, u8)>; 4],
+    /// W469: full `ItemStack`s - equipping no longer strips the
+    /// piece's components (damage / future enchants survive the
+    /// hand -> body -> hand round trip).
+    pub(crate) armor_slots: [Option<crate::item::ItemStack>; 4],
     /// `true` for the last frame's "are we actually sprinting"
     /// state - used by the FOV lerp.
     pub(crate) sprinting: bool,
@@ -439,10 +442,10 @@ pub(crate) struct Voxel {
     /// folded into `ItemStack.components.damage` (counting UP
     /// from 0), so wear travels with the stack through drags and
     /// the player save with no side bookkeeping. W467 lifted the
-    /// container family and W468 lifted drops + the net wire, so
-    /// components now survive end to end; only the craft grids,
-    /// stonecutter / smithing inputs, armor slots and trades still
-    /// convert to `(u16, u8)` tuples at their boundaries.
+    /// container family, W468 lifted drops + the net wire, and
+    /// W469 lifted the last holdouts (craft grids, stonecutter /
+    /// smithing inputs, armor slots, trades) - components survive
+    /// end to end with no tuple detours left.
     pub(crate) inventory: [Option<crate::item::ItemStack>; INVENTORY_SLOTS],
     pub(crate) selected_slot: usize,
     /// True when the inventory overlay is up. Pauses player input
@@ -455,8 +458,10 @@ pub(crate) struct Voxel {
     pub(crate) mp_menu_open: bool,
     /// 2x2 crafting grid laid out row-major (idx = row*2 + col).
     /// Drained on a successful craft. Only relevant while the
-    /// inventory overlay is open.
-    pub(crate) craft_grid: [Option<(BlockId, u8)>; 4],
+    /// inventory overlay is open. W469: stack-typed - a worn tool
+    /// parked in a craft cell keeps its components; recipe
+    /// matching stays id + count based.
+    pub(crate) craft_grid: [Option<crate::item::ItemStack>; 4],
     /// Accumulated mouse-wheel ticks since the last tick consume; the
     /// sign drives slot selection.
     pub(crate) wheel_accum: f32,
@@ -899,11 +904,11 @@ pub(crate) struct Voxel {
     /// W50.3: 3x3 crafting grid, row-major (idx = row*3 + col).
     /// Cleared when the player ESCs out / breaks the table - the
     /// table panel's "close" handler drops the contents back into
-    /// inventory.
-    pub(crate) craft_grid_3x3: [Option<(BlockId, u8)>; 9],
+    /// inventory. W469: stack-typed (see `craft_grid`).
+    pub(crate) craft_grid_3x3: [Option<crate::item::ItemStack>; 9],
     /// W50.3: cursor-held stack while the crafting table UI is open.
-    /// Mirrors `chest_held` / `furnace_held`.
-    pub(crate) crafting_table_held: Option<(u16, u8)>,
+    /// Mirrors `chest_held` / `furnace_held` (stack-typed W469).
+    pub(crate) crafting_table_held: Option<crate::item::ItemStack>,
     /// W171: open stonecutter block + its single input stack. Output
     /// is taken straight into the inventory (no floating cursor) so
     /// the interaction stays simple: click an inventory item to load
@@ -926,13 +931,16 @@ pub(crate) struct Voxel {
     /// follow-up (MobSave field).
     pub(crate) mob_professions:
         std::collections::HashMap<u32, &'static str>,
-    pub(crate) stonecutter_input: Option<(u16, u8)>,
+    /// W171: stonecutter input stack (W469: stack-typed).
+    pub(crate) stonecutter_input: Option<crate::item::ItemStack>,
     /// W410: open smithing table position. Session-only UI (the
     /// upgrade is an inventory transform; nothing persists in the
     /// world), exactly the stonecutter pattern.
     pub(crate) smithing_open: Option<[i32; 3]>,
-    /// W410: smithing slots [template, base, addition].
-    pub(crate) smithing_slots: [Option<(u16, u8)>; 3],
+    /// W410: smithing slots [template, base, addition] (W469:
+    /// stack-typed - the base piece's components ride into the
+    /// upgrade output).
+    pub(crate) smithing_slots: [Option<crate::item::ItemStack>; 3],
     /// W50.5: per-brewing-stand 5-slot container state, keyed by
     /// world voxel coords. Parallel to `furnaces`. Inserted on
     /// place, removed on break (drops fall as item entities).

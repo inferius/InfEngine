@@ -148,12 +148,12 @@ impl Voxel {
         // W50.3: crafting_table is client-side only; drop its
         // grid contents on world reset too.
         self.crafting_table_open = None;
-        self.craft_grid_3x3 = [None; 9];
+        self.craft_grid_3x3 = std::array::from_fn(|_| None);
         self.crafting_table_held = None;
         // W171: stonecutter is client-side; drop its input on reset.
         self.stonecutter_open = None;
         self.smithing_open = None;
-        self.smithing_slots = [None; 3];
+        self.smithing_slots = std::array::from_fn(|_| None);
         self.trade_open = None;
         self.save_fixups_pending = false;
         self.mob_paths.clear();
@@ -223,34 +223,34 @@ impl Voxel {
     /// held stack back into the inventory; on overflow the rest
     /// falls as item entities at the table position. No network
     /// notify because crafting_table is client-side state.
+    /// W469: stack-native return - components ride back into the
+    /// inventory (and onto the floor when full).
     pub(crate) fn close_crafting_table_ui(&mut self) {
         let pos = self.crafting_table_open.take();
         // Collect grid + held leftovers first so the iterator
-        // borrow ends before we hit `spawn_drop` (which needs a
+        // borrow ends before we hit `spawn_stack` (which needs a
         // fresh `&mut self`).
-        let mut overflow: Vec<(BlockId, u8)> = Vec::new();
-        for cell in self.craft_grid_3x3.iter_mut() {
-            if let Some((b, c)) = cell.take()
-                && !crate::inventory::inv_pickup_n_stacks(&mut self.inventory, b, c)
-            {
-                overflow.push((b, c));
+        let mut overflow: Vec<crate::item::ItemStack> = Vec::new();
+        let mut returns: Vec<crate::item::ItemStack> = self
+            .craft_grid_3x3
+            .iter_mut()
+            .filter_map(|c| c.take())
+            .collect();
+        if let Some(st) = self.crafting_table_held.take() {
+            returns.push(st);
+        }
+        for st in returns {
+            let left = crate::item::stack::drop_into_first_free_stacks(
+                &mut self.inventory,
+                st.clone(),
+            );
+            if left > 0 {
+                overflow.push(st.with_count(left));
             }
         }
-        if let Some((id, c)) = self.crafting_table_held.take()
-            && !crate::inventory::inv_pickup_n_stacks(
-                &mut self.inventory,
-                BlockId(id),
-                c,
-            )
-        {
-            overflow.push((BlockId(id), c));
-        }
         if let Some(p) = pos {
-            for (b, _c) in overflow {
-                // spawn_drop emits a single drop entity per call;
-                // dropping multiple of the same item is fine because
-                // each drop accumulates on pickup.
-                self.spawn_drop(b, p);
+            for st in overflow {
+                crate::drops::spawn_stack(self, st, p);
             }
         }
     }
@@ -261,11 +261,16 @@ impl Voxel {
     /// reconciled in `ui::render`).
     pub(crate) fn close_stonecutter_ui(&mut self) {
         let pos = self.stonecutter_open.take();
-        if let Some((id, c)) = self.stonecutter_input.take()
-            && !crate::inventory::inv_pickup_n_stacks(&mut self.inventory, BlockId(id), c)
-            && let Some(p) = pos
-        {
-            self.spawn_drop(BlockId(id), p);
+        if let Some(st) = self.stonecutter_input.take() {
+            let left = crate::item::stack::drop_into_first_free_stacks(
+                &mut self.inventory,
+                st.clone(),
+            );
+            if left > 0
+                && let Some(p) = pos
+            {
+                crate::drops::spawn_stack(self, st.with_count(left), p);
+            }
         }
     }
 
@@ -274,14 +279,15 @@ impl Voxel {
     pub(crate) fn close_smithing_ui(&mut self) {
         let pos = self.smithing_open.take();
         let slots = std::mem::take(&mut self.smithing_slots);
-        for (id, c) in slots.into_iter().flatten() {
-            if !crate::inventory::inv_pickup_n_stacks(
+        for st in slots.into_iter().flatten() {
+            let left = crate::item::stack::drop_into_first_free_stacks(
                 &mut self.inventory,
-                BlockId(id),
-                c,
-            ) && let Some(p) = pos
+                st.clone(),
+            );
+            if left > 0
+                && let Some(p) = pos
             {
-                self.spawn_drop(BlockId(id), p);
+                crate::drops::spawn_stack(self, st.with_count(left), p);
             }
         }
     }

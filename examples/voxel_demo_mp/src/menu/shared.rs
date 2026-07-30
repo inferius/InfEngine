@@ -223,6 +223,36 @@ pub(crate) fn footer_version(ctx: &egui::Context, version: &str) {
         });
 }
 
+/// W469: modal notice window shown over the menu while
+/// `notice` holds a message (e.g. a world refused for an
+/// incompatible save version). "OK" dismisses; the caller keeps
+/// the `Option` on `Menu::notice` so the window survives screen
+/// switches until acknowledged.
+pub(crate) fn draw_notice(ctx: &egui::Context, notice: &mut Option<String>) {
+    let Some(text) = notice.clone() else { return };
+    let mut dismiss = false;
+    egui::Window::new("Upozorneni")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, -40.0])
+        .show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(
+                RichText::new(text)
+                    .color(Color32::from_rgb(255, 200, 160)),
+            );
+            ui.add_space(8.0);
+            ui.vertical_centered(|ui| {
+                if ui.button("OK").clicked() {
+                    dismiss = true;
+                }
+            });
+        });
+    if dismiss {
+        *notice = None;
+    }
+}
+
 /// Format a `chrono::DateTime<Utc>` as `dd.MM.yy HH:mm` in local
 /// time. Falls back to the raw RFC3339 string if the conversion
 /// fails (won't happen in practice; the `chrono` API is total).

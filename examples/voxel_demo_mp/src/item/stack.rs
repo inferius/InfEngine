@@ -6,12 +6,14 @@
 //! `Option<ItemStack>` slots; W467 pushed the stack type into the
 //! container family (chests / furnaces / brewing stands); W468
 //! carried it through drops, the entities save, and the net wire
-//! (inventory snapshots, container state, per-viewer cursors), so
-//! the arithmetic helpers below are stack-typed end to end. What
-//! still moves plain `(u16, u8)` tuples - the craft grids +
-//! `crafting_table_held`, stonecutter / smithing inputs,
-//! `armor_slots`, trades - converts at the boundary via
-//! `from_tuple` / `as_tuple` until their own waves.
+//! (inventory snapshots, container state, per-viewer cursors);
+//! W469 lifted the last holdouts (craft grids + panel cursors,
+//! stonecutter / smithing inputs, armor slots, trades), so every
+//! live item-storage surface is stack-typed. `(u16, u8)` tuples
+//! survive only as id + count PROJECTIONS at read-only edges
+//! (recipe matching, fuel gates, icon painting), in FROZEN legacy
+//! save shapes, and in the `ChestAct` wire enum's slot indices -
+//! none of them stores items.
 
 use serde::{Deserialize, Serialize};
 
@@ -74,9 +76,9 @@ impl ItemStack {
     }
 
     /// Lift a plain `(id, count)` tuple into a stack with empty
-    /// components. The boundary conversion for the consumers that
-    /// still move tuples (craft grids, stonecutter / smithing,
-    /// trades, legacy save shapes).
+    /// components. W469: only the FROZEN legacy save shapes still
+    /// need this (migration arrows + the retired `PersistedInv`) -
+    /// live storage is stack-typed everywhere.
     pub(crate) fn from_tuple((id, count): (u16, u8)) -> Self {
         Self::new(id, count)
     }
@@ -108,11 +110,11 @@ impl ItemStack {
 
 /// Write a plain `(id, count)` tuple back into a stack slot,
 /// PRESERVING the slot's existing components when the id is
-/// unchanged. The W466 snapshot write-back rule: UI panels + net
-/// snapshots move tuples, so a count-only change (take 3 cobble)
-/// must not strip the damage off an untouched tool sitting in the
-/// same slot. When the id changed or the slot emptied, the tuple
-/// wins wholesale (fresh components).
+/// unchanged. W469: the last consumer is the creative-tab hotbar
+/// deposit (which shuffles fresh max-stacks through a tuple view);
+/// a count-only change there must not strip the damage off an
+/// untouched tool sitting in the same slot. When the id changed or
+/// the slot emptied, the tuple wins wholesale (fresh components).
 pub(crate) fn write_tuple_preserving(
     slot: &mut Option<ItemStack>,
     tuple: Option<(u16, u8)>,

@@ -215,8 +215,12 @@ pub(crate) enum BackTo {
 /// Inspect the 2x2 crafting grid and return the recipe output
 /// if every input is satisfied. The grid is shapeless: order
 /// doesn't matter. Returns `None` when no recipe matches or
-/// any required stack is short.
-pub(crate) fn match_recipe(grid: &[Option<(BlockId, u8)>; 4]) -> Option<(BlockId, u8)> {
+/// any required stack is short. W469: the grid holds stacks;
+/// matching stays id + count based (components are irrelevant
+/// to what a recipe accepts).
+pub(crate) fn match_recipe(
+    grid: &[Option<crate::item::ItemStack>; 4],
+) -> Option<(BlockId, u8)> {
     match_recipe_named(grid).map(|(b, c, _)| (b, c))
 }
 
@@ -224,16 +228,16 @@ pub(crate) fn match_recipe(grid: &[Option<(BlockId, u8)>; 4]) -> Option<(BlockId
 /// recipe's human-readable name. Used by the UI to display
 /// the result name as a tooltip on the output slot.
 pub(crate) fn match_recipe_named(
-    grid: &[Option<(BlockId, u8)>; 4],
+    grid: &[Option<crate::item::ItemStack>; 4],
 ) -> Option<(BlockId, u8, &'static str)> {
-    // Aggregate the grid into a (block, count) tally so order
+    // Aggregate the grid into an (id, count) tally so order
     // doesn't matter for shapeless matching.
     let mut tally: Vec<(u16, u8)> = Vec::with_capacity(4);
-    for (b, c) in grid.iter().flatten() {
-        if let Some(slot) = tally.iter_mut().find(|(bb, _)| *bb == b.0) {
-            slot.1 = slot.1.saturating_add(*c);
+    for st in grid.iter().flatten() {
+        if let Some(slot) = tally.iter_mut().find(|(bb, _)| *bb == st.id) {
+            slot.1 = slot.1.saturating_add(st.count);
         } else {
-            tally.push((b.0, *c));
+            tally.push((st.id, st.count));
         }
     }
     for recipe in RECIPES {
