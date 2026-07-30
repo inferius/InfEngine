@@ -3,10 +3,12 @@
 //! Slot layout (locked to MC's order so future save-compat is
 //! straightforward):
 //! - slot 0: ingredient (single item consumed per batch).
-//! - slot 1: fuel (blaze powder). For the demo this slot is
-//!   advisory only - the tick burns time without consuming fuel
-//!   so the player can experiment without grinding nether
-//!   trips first. A future wave can gate the tick on slot 1.
+//! - slot 1: fuel. W471.1: accepts BLAZE POWDER only (MC
+//!   `BrewingStandMenu.FuelSlot.mayPlaceItem` via the
+//!   `ItemTags.BREWING_FUEL` tag, whose 26.1.2 data contains
+//!   exactly `minecraft:blaze_powder`). The tick still burns time
+//!   without consuming fuel - gating the tick on slot 1 remains a
+//!   follow-up.
 //! - slots 2..=4: base bottles. The transform runs in parallel
 //!   on each non-empty matching bottle.
 //!
@@ -48,11 +50,17 @@ pub(crate) fn accept_ingredient(id: u16) -> bool {
     BREWING_RECIPES.iter().any(|r| r.ingredient == id)
 }
 
-/// Accept-filter: fuel slot. Demo accepts any item (the tick
-/// ignores fuel for now; this leaves the slot usable as a real
-/// blaze-powder gate in a follow-up).
-pub(crate) fn accept_fuel(_id: u16) -> bool {
-    true
+/// Blaze powder item id (`ITEM_TYPES` row 320) - the sole member
+/// of the MC `ItemTags.BREWING_FUEL` tag in the 26.1.2 data.
+pub(crate) const BLAZE_POWDER_ITEM: u16 = 320;
+
+/// Accept-filter: fuel slot. W471.1: blaze powder ONLY, matching
+/// `BrewingStandMenu.FuelSlot.mayPlaceItem`. Also fixes the W470
+/// shift-click routing regression: `BREWING_CFG` tries the fuel
+/// slot FIRST (source order), so an accept-anything predicate
+/// routed every quick-move into fuel.
+pub(crate) fn accept_fuel(id: u16) -> bool {
+    id == BLAZE_POWDER_ITEM
 }
 
 /// Accept-filter: bottle slots. Allows any item that appears as
@@ -223,6 +231,84 @@ mod tests {
         let c = new_brewing_stand();
         assert_eq!(c.len(), BREWING_SLOTS);
         assert!(c.is_empty());
+    }
+
+    /// W471.1: fuel slot takes blaze powder only (the MC
+    /// `brewing_fuel` item tag), and the const stays pinned to the
+    /// registry row of that name.
+    #[test]
+    fn fuel_slot_accepts_blaze_powder_only() {
+        assert_eq!(
+            crate::item::item_type(BLAZE_POWDER_ITEM).map(|it| it.name),
+            Some("blaze_powder"),
+            "BLAZE_POWDER_ITEM const must track the registry row"
+        );
+        assert!(accept_fuel(BLAZE_POWDER_ITEM));
+        assert!(!accept_fuel(1)); // stone
+        assert!(!accept_fuel(BREWING_RECIPES[0].ingredient));
+        assert!(!accept_fuel(BREWING_RECIPES[0].base));
+        // The minted stand carries the predicate on slot 1.
+        let c = new_brewing_stand();
+        assert!(c.accepts(SLOT_FUEL, BLAZE_POWDER_ITEM));
+        assert!(!c.accepts(SLOT_FUEL, 1));
+    }
+
+    /// W471.1: `BREWING_CFG` FirstAccepting routing with the real
+    /// accept set - the fuel-first priority no longer swallows
+    /// every shift-click: fuel goes to slot 1, an ingredient to
+    /// slot 0, a bottle base to slot 2, and an item nothing
+    /// accepts falls back to the hotbar<->main move (container
+    /// untouched).
+    #[test]
+    fn quick_move_routes_by_accept_not_fuel_first() {
+        use crate::container::screen::{
+            self, BREWING_CFG, INVENTORY_SLOTS,
+        };
+        use crate::container::ui::GridAction;
+        let recipe = &BREWING_RECIPES[0];
+        let mut stand = new_brewing_stand();
+        let mut inv: Vec<Option<ItemStack>> = vec![None; INVENTORY_SLOTS];
+        let mut cursor: Option<ItemStack> = None;
+        // Hotbar 0: blaze powder; 1: ingredient; 2: base bottle;
+        // 3: stone (accepted nowhere).
+        inv[0] = Some(ItemStack::new(BLAZE_POWDER_ITEM, 4));
+        inv[1] = Some(ItemStack::new(recipe.ingredient, 2));
+        inv[2] = Some(ItemStack::new(recipe.base, 1));
+        inv[3] = Some(ItemStack::new(1, 8));
+        for slot in 0..4 {
+            screen::apply_grid_action(
+                &mut stand,
+                &mut inv,
+                &mut cursor,
+                true,
+                GridAction::Transfer(slot),
+                &BREWING_CFG,
+                false,
+            );
+        }
+        assert_eq!(
+            stand.slot(SLOT_FUEL),
+            Some(ItemStack::new(BLAZE_POWDER_ITEM, 4)),
+            "blaze powder must land in the fuel slot"
+        );
+        assert_eq!(
+            stand.slot(SLOT_INGREDIENT),
+            Some(ItemStack::new(recipe.ingredient, 2)),
+            "ingredient must land in the ingredient slot"
+        );
+        assert_eq!(
+            stand.slot(SLOT_BOTTLE_0),
+            Some(ItemStack::new(recipe.base, 1)),
+            "base must land in the first bottle slot"
+        );
+        // Stone: no container slot accepts -> hotbar->main
+        // fallback inside the player inventory.
+        assert!(inv[3].is_none(), "stone must leave the hotbar");
+        assert_eq!(
+            inv[crate::container::screen::HOTBAR_SLOTS],
+            Some(ItemStack::new(1, 8)),
+            "stone must land in the first main row slot"
+        );
     }
 
     #[test]
