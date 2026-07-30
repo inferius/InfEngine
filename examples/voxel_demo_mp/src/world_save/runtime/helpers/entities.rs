@@ -46,11 +46,14 @@ pub(in crate::world_save::runtime) fn build_dimension_entities_from(
     let mut anchors: Vec<[i32; 3]> =
         structure_mob_anchors.iter().copied().collect();
     anchors.sort();
+    // W468 (v6): the drop's full stack persists - a merged
+    // 30-cobble pile or a worn tool survives reload (pre-v6 saved
+    // one bare block id and reloaded everything at count 1).
     let drop_saves: Vec<DropSave> = drops
         .iter()
         .map(|d| DropSave {
             id: d.id,
-            block: d.block,
+            stack: d.stack.clone(),
             pos: d.pos,
             vel: d.vel,
             age: d.age,
@@ -125,17 +128,17 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
     voxel.structure_mob_anchors =
         entities.structure_mob_anchors.iter().copied().collect();
     for d in entities.drops {
-        // Older saves don't carry the Q.5 fields; rehydrate as if
-        // freshly spawned (count = 1, pickup-delay already
-        // expired) so loading doesn't reset the pickup gate.
+        // W468: the saved stack rehydrates wholesale (count +
+        // components). The tick clocks re-derive from the float
+        // age; pickup-delay restarts expired so loading doesn't
+        // reset the pickup gate.
         let age_ticks = (d.age * 20.0).max(0.0) as u32;
         voxel.dropped_items.push(DropItem {
             id: d.id,
-            block: d.block,
+            stack: d.stack,
             pos: d.pos,
             vel: d.vel,
             age: d.age,
-            count: 1,
             age_ticks,
             pickup_delay_ticks: 0,
         });
@@ -169,4 +172,65 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
     voxel.next_cart_id = entities
         .next_cart_id
         .max(voxel.carts.iter().map(|c| c.id).max().unwrap_or(0) + 1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// W468: the full runtime round trip - a merged, worn drop
+    /// (damage 20, count 5) builds into the save bundle, survives
+    /// the disk envelope, and applies back with both intact
+    /// (pre-v6 the count collapsed to 1 and components did not
+    /// exist on drops at all).
+    #[test]
+    fn drop_stack_survives_save_and_reload() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut worn = crate::item::ItemStack::new(48, 5);
+        worn.components.damage = 20;
+        let drop = DropItem {
+            id: 7,
+            stack: worn.clone(),
+            pos: [1.5, 65.0, 2.5],
+            vel: [0.0; 3],
+            age: 3.0,
+            age_ticks: 60,
+            pickup_delay_ticks: 0,
+        };
+        let anchors: std::collections::HashSet<[i32; 3]> =
+            Default::default();
+        let bundle = build_dimension_entities_from(
+            &[],
+            std::slice::from_ref(&drop),
+            &[],
+            1,
+            8,
+            1,
+            &anchors,
+        );
+        assert_eq!(bundle.drops.len(), 1);
+        assert_eq!(bundle.drops[0].stack, worn);
+
+        crate::world_save::entities::write_entities_in_dir(
+            tmp.path(),
+            "slot",
+            "overworld",
+            &bundle,
+        )
+        .unwrap();
+        let loaded = crate::world_save::entities::read_entities_in_dir(
+            tmp.path(),
+            "slot",
+            "overworld",
+        )
+        .unwrap()
+        .expect("entities file exists");
+        assert_eq!(loaded, bundle);
+
+        let mut v = crate::Voxel::new();
+        apply_dimension_entities(&mut v, loaded);
+        assert_eq!(v.dropped_items.len(), 1);
+        assert_eq!(v.dropped_items[0].stack, worn, "count + damage intact");
+        assert_eq!(v.dropped_items[0].id, 7);
+    }
 }

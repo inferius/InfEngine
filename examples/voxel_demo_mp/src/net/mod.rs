@@ -26,7 +26,8 @@ use infengine_voxel::BlockId;
 use serde::{Deserialize, Serialize};
 
 use crate::block::BUCKET_WATER_ID;
-use crate::inventory::inv_pickup;
+use crate::inventory::inv_pickup_n_stacks;
+use crate::item::ItemStack;
 use crate::{HOTBAR_SLOTS, INVENTORY_SLOTS, PLAYER_MAX_HEALTH, SplitMode};
 
 /// One block-edit travelling over the wire. Sent as
@@ -69,11 +70,15 @@ pub(crate) struct PlayerRemoveMsg {
 /// server is authoritative; every break / place / drag-and-drop /
 /// craft action on the server resolves to a fresh snapshot, sent
 /// back to the originating client via `vx.inv`.
+///
+/// W468: the 36 main slots carry full `ItemStack`s so components
+/// (damage / enchants / name) survive the round trip. The craft
+/// grid stays tuple-shaped until its own wave.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct InvSnapshotMsg {
     /// Main 36-slot inventory grid (Vec to keep bincode varlen-
     /// friendly; we always send exactly INVENTORY_SLOTS entries).
-    pub(crate) inventory: Vec<Option<(u16, u8)>>,
+    pub(crate) inventory: Vec<Option<ItemStack>>,
     /// 2x2 crafting grid (always 4 entries).
     pub(crate) craft: Vec<Option<(u16, u8)>>,
 }
@@ -235,17 +240,18 @@ pub(crate) struct ChestOpenMsg {
 
 /// W5.3a: host -> client (snapshot). Full chest contents at `pos`.
 /// Sent on open + on every mutation while the client is registered
-/// as the viewer.
+/// as the viewer. W468: slots + cursor carry full `ItemStack`s so
+/// components survive a remote container session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ChestStateMsg {
     pub(crate) pos: [i32; 3],
-    pub(crate) slots: Vec<Option<(u16, u8)>>,
-    /// Cursor-held stack on the host's behalf for this viewer.
-    /// `None` means the client's cursor should be empty. Mirrors
-    /// the host's `chest_held` field; on every host-side mutation
-    /// the snapshot bundles the new cursor state so the client
+    pub(crate) slots: Vec<Option<ItemStack>>,
+    /// Cursor-held stack the host tracks for this viewer (W468:
+    /// per-viewer authoritative cursor). `None` means the client's
+    /// cursor should be empty. On every host-side mutation the
+    /// snapshot bundles the new cursor state so the client
     /// re-renders without a separate round-trip.
-    pub(crate) cursor: Option<(u16, u8)>,
+    pub(crate) cursor: Option<ItemStack>,
 }
 
 /// W5.3a: client -> host. Replay one GridAction against the
@@ -290,15 +296,16 @@ pub(crate) struct FurnaceOpenMsg {
 
 /// W5.3b: host -> client. Furnace contents + the runtime triple
 /// (fuel + cook progress) so the client renders live bars.
-/// Throttled to ~5 Hz while open on the host side.
+/// Throttled to ~5 Hz while open on the host side. W468: slots +
+/// cursor are stack-native (see `ChestStateMsg`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct FurnaceStateMsg {
     pub(crate) pos: [i32; 3],
-    pub(crate) slots: Vec<Option<(u16, u8)>>,
+    pub(crate) slots: Vec<Option<ItemStack>>,
     pub(crate) fuel_left_ms: u32,
     pub(crate) fuel_full_ms: u32,
     pub(crate) cook_progress_ms: u32,
-    pub(crate) cursor: Option<(u16, u8)>,
+    pub(crate) cursor: Option<ItemStack>,
 }
 
 /// W5.3b: client -> host. Mirror of `ChestActMsg` for furnaces.
@@ -344,11 +351,12 @@ impl ChestAct {
 
 /// Net wire message for a fresh drop the host wants every peer
 /// to render. Sent on spawn; clients append to their local
-/// `dropped_items` mirror.
-#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+/// `dropped_items` mirror. W468: carries the full stack so peers
+/// render (and a future remote-pickup path credits) the real item.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DropSpawnMsg {
     pub(crate) id: u32,
-    pub(crate) block: u16,
+    pub(crate) stack: ItemStack,
     pub(crate) pos: [f32; 3],
 }
 
@@ -432,10 +440,13 @@ pub(crate) struct PersistedInv {
 impl PersistedInv {
     pub(crate) fn from_client_inv(inv: &ClientInv) -> Self {
         Self {
+            // Legacy disk shape stays tuple-typed - project the
+            // live stacks down (components don't fit the frozen
+            // format; the modern player-save path carries them).
             inventory: inv
                 .inventory
                 .iter()
-                .map(|s| s.map(|(b, c)| (b.0, c)))
+                .map(|s| s.as_ref().map(|st| st.as_tuple()))
                 .collect(),
             craft: inv
                 .craft_grid
@@ -445,11 +456,12 @@ impl PersistedInv {
         }
     }
     pub(crate) fn into_client_inv(self) -> ClientInv {
-        let mut inventory: [Option<(BlockId, u8)>; INVENTORY_SLOTS] = [None; INVENTORY_SLOTS];
+        let mut inventory: [Option<ItemStack>; INVENTORY_SLOTS] =
+            std::array::from_fn(|_| None);
         let mut craft_grid: [Option<(BlockId, u8)>; 4] = [None; 4];
         for (i, s) in self.inventory.into_iter().enumerate() {
             if i < inventory.len() {
-                inventory[i] = s.map(|(b, c)| (BlockId(b), c));
+                inventory[i] = s.map(ItemStack::from_tuple);
             }
         }
         for (i, s) in self.craft.into_iter().enumerate() {
@@ -507,10 +519,13 @@ impl NetRole {
     }
 }
 
-/// Server-side per-client inventory state.
+/// Server-side per-client inventory state. W468: the 36 main slots
+/// hold full `ItemStack`s (components ride through every container
+/// act / drag / loot credit); the craft grid stays tuple-shaped
+/// until its own wave.
 #[derive(Debug, Clone)]
 pub(crate) struct ClientInv {
-    pub(crate) inventory: [Option<(BlockId, u8)>; INVENTORY_SLOTS],
+    pub(crate) inventory: [Option<ItemStack>; INVENTORY_SLOTS],
     pub(crate) craft_grid: [Option<(BlockId, u8)>; 4],
 }
 
@@ -519,8 +534,8 @@ impl ClientInv {
     /// bundle: 4 wood tools + small block stacks so the player
     /// can immediately mine across every category.
     pub(crate) fn starter() -> Self {
-        let mut inv: [Option<(BlockId, u8)>; INVENTORY_SLOTS] =
-            [None; INVENTORY_SLOTS];
+        let mut inv: [Option<ItemStack>; INVENTORY_SLOTS] =
+            std::array::from_fn(|_| None);
         let seed: &[(u16, u8)] = &[
             (16, 1),
             (23, 1),
@@ -539,7 +554,7 @@ impl ClientInv {
         // hotbar.
         for (i, (bid, count)) in seed.iter().enumerate() {
             if i < HOTBAR_SLOTS {
-                inv[i] = Some((BlockId(*bid), *count));
+                inv[i] = Some(ItemStack::new(*bid, *count));
             }
         }
         Self {
@@ -551,11 +566,7 @@ impl ClientInv {
     /// Encode as a wire snapshot for the `vx.inv` message.
     pub(crate) fn to_snapshot(&self) -> InvSnapshotMsg {
         InvSnapshotMsg {
-            inventory: self
-                .inventory
-                .iter()
-                .map(|s| s.map(|(b, c)| (b.0, c)))
-                .collect(),
+            inventory: self.inventory.to_vec(),
             craft: self
                 .craft_grid
                 .iter()
@@ -1140,7 +1151,7 @@ pub(crate) fn process_server_inbox(
                     && let Some(recipe_inputs) = recipes_lookup(idx as usize)
                     && let Some(inv) = inventories.get_mut(&client_id)
                 {
-                    let mut taken: Vec<(usize, (BlockId, u8))> = Vec::new();
+                    let mut taken: Vec<(usize, ItemStack)> = Vec::new();
                     let mut placed: [Option<(BlockId, u8)>; 4] = [None; 4];
                     let mut ok = true;
                     for (i, (bid, n)) in recipe_inputs.iter().enumerate() {
@@ -1148,12 +1159,16 @@ pub(crate) fn process_server_inbox(
                             break;
                         }
                         let need = *n;
-                        let target = BlockId(*bid);
+                        // W468: only PLAIN stacks feed the craft
+                        // grid - the grid is tuple-shaped, so
+                        // pulling from a worn/named stack would
+                        // silently strip its components.
                         let mut found: Option<usize> = None;
                         for (si, slot) in inv.inventory.iter().enumerate() {
-                            if let Some((b, c)) = slot
-                                && *b == target
-                                && *c >= need
+                            if let Some(st) = slot
+                                && st.id == *bid
+                                && st.count >= need
+                                && st.components.is_empty()
                             {
                                 found = Some(si);
                                 break;
@@ -1161,17 +1176,18 @@ pub(crate) fn process_server_inbox(
                         }
                         match found {
                             Some(si) => {
-                                let original =
-                                    inv.inventory[si].expect("verified");
-                                taken.push((si, original));
+                                let original = inv.inventory[si]
+                                    .clone()
+                                    .expect("verified");
                                 let remaining =
-                                    original.1.saturating_sub(need);
+                                    original.count.saturating_sub(need);
                                 inv.inventory[si] = if remaining == 0 {
                                     None
                                 } else {
-                                    Some((original.0, remaining))
+                                    Some(original.with_count(remaining))
                                 };
-                                placed[i] = Some((target, need));
+                                taken.push((si, original));
+                                placed[i] = Some((BlockId(*bid), need));
                             }
                             None => {
                                 ok = false;
@@ -1180,19 +1196,19 @@ pub(crate) fn process_server_inbox(
                         }
                     }
                     if ok {
-                        // Return any existing
-                        // craft-grid stacks to the
-                        // inventory via inv_pickup
-                        // before overwriting.
+                        // Return any existing craft-grid stacks to
+                        // the inventory before overwriting.
                         let returns: Vec<(BlockId, u8)> = inv
                             .craft_grid
                             .iter_mut()
                             .filter_map(|s| s.take())
                             .collect();
                         for (b, c) in returns {
-                            for _ in 0..c {
-                                inv_pickup(&mut inv.inventory, b);
-                            }
+                            let _ = inv_pickup_n_stacks(
+                                &mut inv.inventory,
+                                b,
+                                c,
+                            );
                         }
                         inv.craft_grid = placed;
                     } else {

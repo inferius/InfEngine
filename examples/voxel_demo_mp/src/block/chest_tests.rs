@@ -192,33 +192,33 @@ fn drain_drops_empty_chest_yields_no_drops() {
 }
 
 #[test]
-fn drain_drops_expands_each_stack_to_per_item_drops() {
+fn drain_drops_spills_one_full_stack_per_slot() {
+    // W468: break spill keeps stacks whole - one drop per
+    // occupied slot, counts intact.
     let mut chest = new_chest();
     chest.set_slot(0, Some(ItemStack::new(1, 3)));
     chest.set_slot(5, Some(ItemStack::new(2, 1)));
     chest.set_slot(26, Some(ItemStack::new(1, 2)));
     let drops = drain_drops(&chest);
-    // 3 + 1 + 2 = 6 drops total.
-    assert_eq!(drops.len(), 6);
-    // 5 of id 1 + 1 of id 2.
-    let ones = drops.iter().filter(|d| **d == 1).count();
-    let twos = drops.iter().filter(|d| **d == 2).count();
-    assert_eq!(ones, 5);
-    assert_eq!(twos, 1);
+    assert_eq!(drops.len(), 3);
+    assert_eq!(drops[0], ItemStack::new(1, 3));
+    assert_eq!(drops[1], ItemStack::new(2, 1));
+    assert_eq!(drops[2], ItemStack::new(1, 2));
 }
 
 #[test]
 fn recover_held_no_stack_no_drops() {
     let mut chest = new_chest();
-    let drops = recover_held_on_close(Some(&mut chest), None);
-    assert!(drops.is_empty());
+    let leftover = recover_held_on_close(Some(&mut chest), None);
+    assert!(leftover.is_none());
 }
 
 #[test]
 fn recover_held_lands_in_empty_chest() {
     let mut chest = new_chest();
-    let drops = recover_held_on_close(Some(&mut chest), Some(ItemStack::new(1, 9)));
-    assert!(drops.is_empty(), "empty chest should absorb the stack");
+    let leftover =
+        recover_held_on_close(Some(&mut chest), Some(ItemStack::new(1, 9)));
+    assert!(leftover.is_none(), "empty chest should absorb the stack");
     assert_eq!(chest.slot(0), Some(ItemStack::new(1, 9)));
 }
 
@@ -226,21 +226,22 @@ fn recover_held_lands_in_empty_chest() {
 fn recover_held_overflow_falls_as_drops() {
     // 27 slots * 64 stack of stone = 1728 capacity. Pre-fill
     // every slot so nothing fits, then drop a held stack of
-    // 3 -> the entire held stack returns as floor drops.
+    // 3 -> the entire held stack returns as one floor drop.
     let mut chest = new_chest();
     for i in 0..CHEST_SLOTS {
         chest.set_slot(i, Some(ItemStack::new(1, 64)));
     }
-    let drops = recover_held_on_close(Some(&mut chest), Some(ItemStack::new(1, 3)));
-    assert_eq!(drops, vec![1, 1, 1]);
+    let leftover =
+        recover_held_on_close(Some(&mut chest), Some(ItemStack::new(1, 3)));
+    assert_eq!(leftover, Some(ItemStack::new(1, 3)));
 }
 
 #[test]
 fn recover_held_no_chest_dumps_everything_as_drops() {
     // Chest was already broken / gone (None) - the entire
     // held stack lands on the floor.
-    let drops = recover_held_on_close(None, Some(ItemStack::new(5, 4)));
-    assert_eq!(drops, vec![5, 5, 5, 5]);
+    let leftover = recover_held_on_close(None, Some(ItemStack::new(5, 4)));
+    assert_eq!(leftover, Some(ItemStack::new(5, 4)));
 }
 
 // ---------------------------------------------------------------
@@ -329,8 +330,8 @@ fn recover_held_keeps_components_in_chest() {
     // Closing the UI with a worn tool on the cursor drops it back
     // into the chest with its damage intact.
     let mut chest = new_chest();
-    let drops = recover_held_on_close(Some(&mut chest), Some(worn(48, 1, 9)));
-    assert!(drops.is_empty());
+    let leftover = recover_held_on_close(Some(&mut chest), Some(worn(48, 1, 9)));
+    assert!(leftover.is_none());
     assert_eq!(chest.slot(0), Some(worn(48, 1, 9)));
 }
 
@@ -338,32 +339,36 @@ fn recover_held_keeps_components_in_chest() {
 fn recover_held_partial_overflow_splits() {
     // Chest has room for 4 more stone (slot 0 has 60 of 64,
     // rest are full of a different id). Held 10 stone ->
-    // 4 absorbed, 6 returned as drops.
+    // 4 absorbed, 6 returned as one leftover drop stack.
     let mut chest = new_chest();
     chest.set_slot(0, Some(ItemStack::new(1, 60)));
     for i in 1..CHEST_SLOTS {
         chest.set_slot(i, Some(ItemStack::new(2, 64)));
     }
-    let drops = recover_held_on_close(Some(&mut chest), Some(ItemStack::new(1, 10)));
-    assert_eq!(drops.len(), 6);
-    assert!(drops.iter().all(|d| *d == 1));
+    let leftover =
+        recover_held_on_close(Some(&mut chest), Some(ItemStack::new(1, 10)));
+    assert_eq!(leftover, Some(ItemStack::new(1, 6)));
     assert_eq!(chest.slot(0), Some(ItemStack::new(1, 64)));
 }
 
 #[test]
 fn place_then_break_drops_contents() {
     // Mimic the world place->fill->break flow: mint a chest,
-    // fill some slots, drain - the resulting drop list should
-    // match the filled contents (per-item).
+    // fill some slots, drain - the resulting drop list matches
+    // the filled contents (W468: one full stack per slot).
     let mut chest = new_chest();
     // Three slots filled: 4 stone, 1 sword, 2 stone.
     chest.set_slot(2, Some(ItemStack::new(1, 4)));
     chest.set_slot(7, Some(ItemStack::new(23, 1)));
     chest.set_slot(20, Some(ItemStack::new(1, 2)));
     let drops = drain_drops(&chest);
-    assert_eq!(drops.len(), 7);
-    // One sword in the result.
-    assert!(drops.contains(&23));
-    // 6 stone copies.
-    assert_eq!(drops.iter().filter(|d| **d == 1).count(), 6);
+    assert_eq!(drops.len(), 3);
+    assert!(drops.contains(&ItemStack::new(23, 1)));
+    // 6 stone total across the two stone stacks.
+    let stone: u32 = drops
+        .iter()
+        .filter(|d| d.id == 1)
+        .map(|d| d.count as u32)
+        .sum();
+    assert_eq!(stone, 6);
 }

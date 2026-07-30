@@ -156,8 +156,8 @@ pub(crate) fn place_furnace(
 }
 
 /// Drain the furnace at `pos` for break-drops: removes it from
-/// both `furnaces` and `runtimes`, returns the per-item drop list
-/// for the 3 slots.
+/// both `furnaces` and `runtimes`, returns the full-stack drop
+/// list for the 3 slots.
 ///
 /// Mirrors `chest::drain_drops` but operates against the runtime
 /// map directly - chest break is currently a `.remove()` followed
@@ -170,7 +170,7 @@ pub(crate) fn break_furnace(
     furnaces: &mut HashMap<[i32; 3], Container>,
     runtimes: &mut HashMap<[i32; 3], FurnaceRuntime>,
     pos: [i32; 3],
-) -> Vec<u16> {
+) -> Vec<crate::item::ItemStack> {
     runtimes.remove(&pos);
     let Some(furnace) = furnaces.remove(&pos) else {
         return Vec::new();
@@ -178,21 +178,12 @@ pub(crate) fn break_furnace(
     drain_drops(&furnace)
 }
 
-/// Flatten a furnace's slot contents into a per-item drop list.
-/// Each slot expands to `count` copies of its id. Output slot
-/// included - the player gets back any already-cooked output the
-/// furnace held at break time.
-///
-/// W468 carries components through drops; until then this edge
-/// flattens to bare ids (same loss as pre-W467, no regression).
-pub(crate) fn drain_drops(furnace: &Container) -> Vec<u16> {
-    let mut out: Vec<u16> = Vec::new();
-    for st in furnace.slots().iter().flatten() {
-        for _ in 0..st.count {
-            out.push(st.id);
-        }
-    }
-    out
+/// Collect a furnace's slot contents into the break-drop list.
+/// W468: one FULL stack per occupied slot (counts + components
+/// spill intact). Output slot included - the player gets back any
+/// already-cooked output the furnace held at break time.
+pub(crate) fn drain_drops(furnace: &Container) -> Vec<crate::item::ItemStack> {
+    furnace.slots().iter().flatten().cloned().collect()
 }
 
 /// Advance every active furnace by `dt_ms` of wall-clock time.
@@ -436,27 +427,22 @@ pub(crate) fn apply_catch_up_output(
 }
 
 /// Recover a cursor-held stack into the furnace when the UI
-/// closes. Returns the per-item leftover Vec the caller spawns as
-/// floor drops at the furnace position. Mirrors
-/// `chest::recover_held_on_close` but operates against the furnace
-/// container - same accept filters apply, so a held stack of the
-/// wrong type for the input slot may end up leftover even when
-/// other slots are technically empty. The leftover flattens to
-/// bare ids (drop path stays tuple-shaped until W468).
+/// closes. Returns the leftover stack (components intact - W468)
+/// the caller spawns as a floor drop at the furnace position.
+/// Mirrors `chest::recover_held_on_close` but operates against the
+/// furnace container - same accept filters apply, so a held stack
+/// of the wrong type for the input slot may end up leftover even
+/// when other slots are technically empty.
 pub(crate) fn recover_held_on_close(
     furnace: Option<&mut Container>,
     held: Option<crate::item::ItemStack>,
-) -> Vec<u16> {
-    let Some(stack) = held else {
-        return Vec::new();
-    };
-    let id = stack.id;
-    let count = stack.count;
+) -> Option<crate::item::ItemStack> {
+    let stack = held?;
     let leftover = match furnace {
-        Some(c) => c.insert(stack),
-        None => count,
+        Some(c) => c.insert(stack.clone()),
+        None => stack.count,
     };
-    (0..leftover).map(|_| id).collect()
+    (leftover > 0).then(|| stack.with_count(leftover))
 }
 
 #[cfg(test)]

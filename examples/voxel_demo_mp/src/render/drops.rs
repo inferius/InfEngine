@@ -32,7 +32,7 @@ pub(crate) fn draw(
     let chest_y = player_pos.y - PLAYER_HEIGHT * 0.4;
     for drop in dropped_items.iter() {
         let bob = (drop.age * 2.4).sin() * 0.08;
-        let block = BlockId(drop.block);
+        let block = BlockId(drop.stack.id);
         let color = registry.get(block).map(|d| d.color).unwrap_or([0.75, 0.55, 0.30]);
         // Magnet attract: scale shrinks + spin speeds up + drop
         // leans along the player delta inside DROP_ATTRACT_RADIUS.

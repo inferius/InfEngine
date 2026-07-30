@@ -84,26 +84,18 @@ pub(crate) fn place_brewing_stand(
     runtimes.entry(pos).or_default();
 }
 
-/// Remove the stand at `pos` for break-drops. Returns the per-
-/// item drop list (one entry per (id, count) slot).
+/// Remove the stand at `pos` for break-drops. W468: returns one
+/// FULL stack per occupied slot (counts + components intact).
 pub(crate) fn break_brewing_stand(
     stands: &mut HashMap<[i32; 3], Container>,
     runtimes: &mut HashMap<[i32; 3], BrewingRuntime>,
     pos: [i32; 3],
-) -> Vec<u16> {
+) -> Vec<crate::item::ItemStack> {
     runtimes.remove(&pos);
     let Some(stand) = stands.remove(&pos) else {
         return Vec::new();
     };
-    // W468 carries components through drops; until then the spill
-    // edge flattens to bare ids (same loss as pre-W467).
-    let mut out: Vec<u16> = Vec::new();
-    for st in stand.slots().iter().flatten() {
-        for _ in 0..st.count {
-            out.push(st.id);
-        }
-    }
-    out
+    stand.slots().iter().flatten().cloned().collect()
 }
 
 /// Advance every active brewing stand by `dt_ms`.
@@ -206,23 +198,18 @@ pub(crate) fn step_one_stand(
 }
 
 /// Recover the held cursor stack into the stand when the UI
-/// closes. Returns the per-item leftover the caller spawns as
-/// floor drops (id-shaped until W468 carries components through
-/// drops).
+/// closes. Returns the leftover stack (components intact - W468)
+/// the caller spawns as a floor drop at the stand position.
 pub(crate) fn recover_held_on_close(
     stand: Option<&mut Container>,
     held: Option<crate::item::ItemStack>,
-) -> Vec<u16> {
-    let Some(stack) = held else {
-        return Vec::new();
-    };
-    let id = stack.id;
-    let count = stack.count;
+) -> Option<crate::item::ItemStack> {
+    let stack = held?;
     let leftover = match stand {
-        Some(c) => c.insert(stack),
-        None => count,
+        Some(c) => c.insert(stack.clone()),
+        None => stack.count,
     };
-    (0..leftover).map(|_| id).collect()
+    (leftover > 0).then(|| stack.with_count(leftover))
 }
 
 #[cfg(test)]
@@ -317,8 +304,10 @@ mod tests {
         stand.set_slot(SLOT_INGREDIENT, Some(ItemStack::new(recipe.ingredient, 2)));
         stand.set_slot(SLOT_BOTTLE_0, Some(ItemStack::new(recipe.base, 3)));
         let drops = break_brewing_stand(&mut stands, &mut runtimes, pos);
-        // 2 ingredients + 3 bottles = 5 drops.
-        assert_eq!(drops.len(), 5);
+        // W468: one full stack per occupied slot, counts intact.
+        assert_eq!(drops.len(), 2);
+        assert!(drops.contains(&ItemStack::new(recipe.ingredient, 2)));
+        assert!(drops.contains(&ItemStack::new(recipe.base, 3)));
         assert!(!stands.contains_key(&pos));
         assert!(!runtimes.contains_key(&pos));
     }

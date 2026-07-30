@@ -195,21 +195,25 @@ impl Voxel {
             // W126: MC chest-close thunk.
             let spos = [p[0] as f32 + 0.5, p[1] as f32 + 0.5, p[2] as f32 + 0.5];
             self.sfx_at("container/chest/close", spos, |_, _| {});
-            let leftovers = block::chest::recover_held_on_close(
-                self.chests.get_mut(&p),
-                held,
-            );
-            for id in leftovers {
-                self.spawn_drop(BlockId(id), p);
-            }
-            // W5.3a: notify the host we're no longer viewing this
-            // chest. Host clears the viewer registration so further
-            // mutations stop fanning out a state snapshot to us.
             if let NetRole::Client { client, .. } = &mut self.net {
+                // W468: the HOST owns this viewer's cursor - on
+                // close it returns the held stack to our inventory
+                // (or spills it at the chest) and ships fresh
+                // vx.inv / vx.drop_spawn messages. The local
+                // optimistic held just clears; recovering it into
+                // the mirror chest here would double the item.
                 let cfg = bincode::config::standard();
                 let msg = crate::net::ChestCloseMsg { pos: p };
                 if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                     let _ = client.send_bytes("vx.chest_close", buf);
+                }
+            } else {
+                let leftover = block::chest::recover_held_on_close(
+                    self.chests.get_mut(&p),
+                    held,
+                );
+                if let Some(stack) = leftover {
+                    crate::drops::spawn_stack(self, stack, p);
                 }
             }
         }
@@ -283,18 +287,18 @@ impl Voxel {
     }
 
     /// W50.5: close the brewing stand UI. Returns the held stack
-    /// into the stand (filtered by accept) + falls back to floor
-    /// drops at the stand position on overflow.
+    /// into the stand (filtered by accept) + falls back to a floor
+    /// drop at the stand position on overflow (components intact).
     pub(crate) fn close_brewing_ui(&mut self) {
         let pos = self.brewing_open.take();
         let held = self.brewing_held.take();
         if let Some(p) = pos {
-            let leftovers = block::brewing::recover_held_on_close(
+            let leftover = block::brewing::recover_held_on_close(
                 self.brewing_stands.get_mut(&p),
                 held,
             );
-            for id in leftovers {
-                self.spawn_drop(BlockId(id), p);
+            if let Some(stack) = leftover {
+                crate::drops::spawn_stack(self, stack, p);
             }
         }
     }
@@ -302,26 +306,28 @@ impl Voxel {
     /// Close the furnace UI. Mirrors `close_chest_ui` but routes
     /// the held-stack recovery through `block::furnace`; the
     /// furnace's accept filters mean a held stack of the wrong
-    /// type for input / fuel falls as floor drops.
+    /// type for input / fuel falls as a floor drop.
     pub(crate) fn close_furnace_ui(&mut self) {
         let pos = self.furnace_open.take();
         let held = self.furnace_held.take();
         if let Some(p) = pos {
-            let leftovers = block::furnace::recover_held_on_close(
-                self.furnaces.get_mut(&p),
-                held,
-            );
-            // W5.3b: notify the host so the viewer registration
-            // clears + state broadcasts stop.
             if let NetRole::Client { client, .. } = &mut self.net {
+                // W468: host-authoritative held return (see
+                // `close_chest_ui`). Notify so the viewer
+                // registration clears + state broadcasts stop.
                 let cfg = bincode::config::standard();
                 let msg = crate::net::FurnaceCloseMsg { pos: p };
                 if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                     let _ = client.send_bytes("vx.furnace_close", buf);
                 }
-            }
-            for id in leftovers {
-                self.spawn_drop(BlockId(id), p);
+            } else {
+                let leftover = block::furnace::recover_held_on_close(
+                    self.furnaces.get_mut(&p),
+                    held,
+                );
+                if let Some(stack) = leftover {
+                    crate::drops::spawn_stack(self, stack, p);
+                }
             }
         }
     }

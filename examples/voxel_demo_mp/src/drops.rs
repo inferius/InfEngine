@@ -12,8 +12,8 @@
 //! touching the simulation code. The shipped defaults mirror MC:
 //! drops can't be picked up for the first 10 ticks (0.5 s at 20
 //! Hz), despawn after 6000 ticks (5 minutes), magnet toward the
-//! player inside 1.5 blocks, and merge same-id stacks within
-//! 0.5 blocks (capped at the per-block max stack size).
+//! player inside 1.5 blocks, and merge `same_stackable` stacks
+//! within 0.5 blocks (capped at the per-item max stack size).
 //!
 //! State lives on `Voxel`: `dropped_items: Vec<DropItem>` (the
 //! host-authoritative list, mirrored on clients for rendering)
@@ -21,7 +21,7 @@
 
 use infengine_voxel::BlockId;
 
-use crate::inventory::STACK_MAX;
+use crate::item::{ItemStack, item_max_stack};
 use crate::liquid::liquid_for;
 use crate::net::{DropSpawnMsg, NetRole};
 use crate::{PLAYER_HEIGHT, Voxel};
@@ -75,11 +75,21 @@ pub(crate) const TICK_DT_SECS: f32 = 1.0 / 20.0;
 /// gentle sine wave, magnetise toward the player when close, and
 /// pop into the inventory once `pickup_delay_ticks` is depleted.
 /// Authoritative on the host; clients receive `vx.drop_spawn` +
-/// `vx.drop_pickup` updates from the server.
-#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
+/// `vx.drop_remove` updates from the server.
+///
+/// W468: the drop carries a full `ItemStack` (id + count +
+/// components), so a worn / enchanted / named item on the ground
+/// keeps its state through merge, pickup, save and the net wire.
+/// Not `Copy` any more - `ItemStack` owns heap data.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DropItem {
     pub(crate) id: u32,
-    pub(crate) block: u16,
+    /// The item stack this drop represents. `stack.count` is the
+    /// visual stack size; the merge pass (`merge_stacks_pass_near`)
+    /// folds `same_stackable` drops together up to the item's max
+    /// stack so the player sees one entity instead of a cloud of
+    /// singletons.
+    pub(crate) stack: ItemStack,
     /// Centre of the drop in world coords; `pos[1]` is the body
     /// origin (not eye height like the player).
     pub(crate) pos: [f32; 3],
@@ -89,11 +99,6 @@ pub(crate) struct DropItem {
     /// Seconds since spawn. Drives both the despawn timer and
     /// the bob phase.
     pub(crate) age: f32,
-    /// Stack count this drop represents. New drops mint at `1`;
-    /// the merge pass (`maybe_merge_stacks`) can roll same-id
-    /// drops together up to `STACK_MAX` so the player sees one
-    /// visual entity instead of a cloud of singletons.
-    pub(crate) count: u8,
     /// Total ticks since spawn (20 Hz logical clock). Bumped by
     /// `dt -> ticks` rounding each frame. Drives the lifetime
     /// despawn at `PickupConfig::lifetime_ticks`.
@@ -134,16 +139,26 @@ pub(crate) const DROP_PICKUP_DELAY_SEC: f32 = 0.5;
 #[allow(dead_code)]
 pub(crate) const DROP_MAGNET_STRENGTH: f32 = 14.0;
 
-/// Spawn a fresh drop entity at the voxel centre. Host-only
-/// path: assigns a new id, appends to `dropped_items`, and
-/// broadcasts a `vx.drop_spawn` so every connected peer renders
-/// it. Caller passes the source `block` (whatever was just
-/// broken or washed) - air drops are skipped.
+/// Spawn a fresh single-item drop of `block` at the voxel centre.
+/// Thin wrapper over `spawn_stack` for the many plain-block
+/// callers (mining, liquid wash, mob loot spill). Air is skipped.
 pub(crate) fn spawn(voxel: &mut Voxel, block: BlockId, pos: [i32; 3]) {
+    if block.is_air() {
+        return;
+    }
+    spawn_stack(voxel, ItemStack::new(block.0, 1), pos);
+}
+
+/// Spawn a drop entity carrying the FULL `stack` (count +
+/// components) at the voxel centre. Host-only path: assigns a new
+/// id, appends to `dropped_items`, and broadcasts a
+/// `vx.drop_spawn` so every connected peer renders it. Empty /
+/// air stacks are skipped.
+pub(crate) fn spawn_stack(voxel: &mut Voxel, stack: ItemStack, pos: [i32; 3]) {
     if matches!(voxel.net, NetRole::Client { .. }) {
         return;
     }
-    if block.is_air() {
+    if stack.id == 0 || stack.count == 0 {
         return;
     }
     let id = voxel.next_drop_id;
@@ -156,7 +171,7 @@ pub(crate) fn spawn(voxel: &mut Voxel, block: BlockId, pos: [i32; 3]) {
     let cfg = PickupConfig::DEFAULT;
     let drop = DropItem {
         id,
-        block: block.0,
+        stack,
         pos: [
             pos[0] as f32 + 0.5,
             pos[1] as f32 + 0.4,
@@ -164,23 +179,26 @@ pub(crate) fn spawn(voxel: &mut Voxel, block: BlockId, pos: [i32; 3]) {
         ],
         vel: [kick_x, 2.0, kick_z],
         age: 0.0,
-        count: 1,
         age_ticks: 0,
         pickup_delay_ticks: cfg.pickup_delay_ticks,
     };
-    voxel.dropped_items.push(drop);
     if let NetRole::Server { server, .. } = &mut voxel.net {
         let cfg = bincode::config::standard();
         let msg = DropSpawnMsg {
             id: drop.id,
-            block: drop.block,
+            stack: drop.stack.clone(),
             pos: drop.pos,
         };
-        if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
+        if let Ok(buf) = bincode::serde::encode_to_vec(&msg, cfg) {
             server.broadcast_bytes("vx.drop_spawn", buf);
         }
     }
+    voxel.dropped_items.push(drop);
 }
+
+/// One picked-up stack + the drop's last position (used for the
+/// leftover re-spill when the inventory has no room).
+pub(crate) type PickedStack = (ItemStack, [f32; 3]);
 
 /// Fraction of the remaining player-distance the magnet closes
 /// per logical tick once the drop is inside `magnet_range`.
@@ -274,7 +292,10 @@ pub(crate) fn merge_stacks_pass_near(
                         if j <= i || dead[j] || dead[i] {
                             continue;
                         }
-                        if drops[i].block != drops[j].block {
+                        // W468: `same_stackable` is the only merge
+                        // rule - two differently-worn drops of the
+                        // same item never fold together.
+                        if !drops[i].stack.same_stackable(&drops[j].stack) {
                             continue;
                         }
                         let ddx = drops[i].pos[0] - drops[j].pos[0];
@@ -283,10 +304,11 @@ pub(crate) fn merge_stacks_pass_near(
                         if ddx * ddx + ddy * ddy + ddz * ddz > r2 {
                             continue;
                         }
-                        let combined =
-                            drops[i].count as u16 + drops[j].count as u16;
-                        if combined <= STACK_MAX as u16 {
-                            drops[i].count = combined as u8;
+                        let cap = item_max_stack(drops[i].stack.id) as u16;
+                        let combined = drops[i].stack.count as u16
+                            + drops[j].stack.count as u16;
+                        if combined <= cap {
+                            drops[i].stack.count = combined as u8;
                             removed.push(drops[j].id);
                             dead[j] = true;
                         }
@@ -315,7 +337,7 @@ pub(crate) fn maybe_merge_stacks(
     let r2 = cfg.merge_radius * cfg.merge_radius;
     for i in 0..drops.len() {
         for j in (i + 1)..drops.len() {
-            if drops[i].block != drops[j].block {
+            if !drops[i].stack.same_stackable(&drops[j].stack) {
                 continue;
             }
             let dx = drops[i].pos[0] - drops[j].pos[0];
@@ -324,11 +346,13 @@ pub(crate) fn maybe_merge_stacks(
             if dx * dx + dy * dy + dz * dz > r2 {
                 continue;
             }
-            let combined = drops[i].count as u16 + drops[j].count as u16;
-            if combined > STACK_MAX as u16 {
+            let cap = item_max_stack(drops[i].stack.id) as u16;
+            let combined =
+                drops[i].stack.count as u16 + drops[j].stack.count as u16;
+            if combined > cap {
                 continue;
             }
-            drops[i].count = combined as u8;
+            drops[i].stack.count = combined as u8;
             let removed_id = drops[j].id;
             drops.swap_remove(j);
             return Some(removed_id);
@@ -340,12 +364,14 @@ pub(crate) fn maybe_merge_stacks(
 /// One 20 Hz logical step over every drop. Increments `age_ticks`,
 /// decrements `pickup_delay_ticks`, runs the magnet lerp, queues
 /// despawns at lifetime + pickups inside `DROP_COLLECT_RADIUS`,
-/// and folds same-id stacks. Pure on the drops + the player
-/// position so tests can drive integer ticks without a renderer.
+/// and folds `same_stackable` stacks. Pure on the drops + the
+/// player position so tests can drive integer ticks without a
+/// renderer.
 ///
 /// Returns `(picked, despawned, merged)` where:
-/// - `picked` lists `(block_id, count)` pairs the caller should
-///   feed into `pickup` (1 push per stack item).
+/// - `picked` lists the full `ItemStack`s (components intact) the
+///   caller should insert into the inventory, with the drop's last
+///   position for leftover re-spill.
 /// - `despawned` lists drop ids that hit lifetime.
 /// - `merged` lists drop ids that were merged-away.
 ///
@@ -356,8 +382,8 @@ pub(crate) fn step_logical_tick(
     player_pos: glam::Vec3,
     cfg: &PickupConfig,
     server_role: bool,
-) -> (Vec<(u16, u8)>, Vec<u32>, Vec<u32>) {
-    let mut picked_meta: Vec<(usize, (u16, u8))> = Vec::new();
+) -> (Vec<PickedStack>, Vec<u32>, Vec<u32>) {
+    let mut picked_meta: Vec<(usize, PickedStack)> = Vec::new();
     let mut despawn_idx: Vec<usize> = Vec::new();
 
     // Merge pass first so the per-tick magnet lerp acts on the
@@ -413,7 +439,7 @@ pub(crate) fn step_logical_tick(
         let dist = d2.sqrt();
 
         if dist <= DROP_COLLECT_RADIUS {
-            picked_meta.push((i, (drop.block, drop.count)));
+            picked_meta.push((i, (drop.stack.clone(), drop.pos)));
             continue;
         }
         if dist <= cfg.magnet_range && dist > 1e-3 {
@@ -445,7 +471,8 @@ pub(crate) fn step_logical_tick(
             despawned_ids.push(removed.id);
         }
     }
-    let picks: Vec<(u16, u8)> = picked_meta.into_iter().map(|(_, p)| p).collect();
+    let picks: Vec<PickedStack> =
+        picked_meta.into_iter().map(|(_, p)| p).collect();
     (picks, despawned_ids, merged_ids)
 }
 
@@ -510,7 +537,7 @@ pub(crate) fn tick_physics(voxel: &mut Voxel, dt: f32) {
     // frames, debugger pauses); the while-loop catches up.
     voxel.drop_tick_accum += dt;
     let server_role = matches!(voxel.net, NetRole::Server { .. } | NetRole::Offline);
-    let mut all_picks: Vec<(u16, u8)> = Vec::new();
+    let mut all_picks: Vec<PickedStack> = Vec::new();
     let mut all_removed: Vec<u32> = Vec::new();
     while voxel.drop_tick_accum >= TICK_DT_SECS {
         voxel.drop_tick_accum -= TICK_DT_SECS;
@@ -525,13 +552,26 @@ pub(crate) fn tick_physics(voxel: &mut Voxel, dt: f32) {
         all_removed.extend(merged);
     }
 
-    for (block, count) in all_picks {
-        // Pickup expands a stack of `count` into `count` calls so
-        // the existing slot-merge logic handles overflow into a
-        // second slot cleanly when the receiving stack is full.
-        let b = BlockId(block);
-        for _ in 0..count {
-            voxel.pickup(b);
+    for (stack, pos) in all_picks {
+        // W468: the drop's ACTUAL stack goes into the inventory -
+        // `same_stackable` merge, empty slot adopts components
+        // wholesale. Whatever doesn't fit (full inventory)
+        // re-spills as a fresh drop at the pickup spot instead of
+        // vanishing (the pre-W468 expand-to-singles path silently
+        // lost the surplus).
+        let leftover = voxel.pickup_stack(stack.clone());
+        if leftover > 0 {
+            let v = [
+                pos[0].floor() as i32,
+                pos[1].floor() as i32,
+                pos[2].floor() as i32,
+            ];
+            spawn_stack(voxel, stack.with_count(leftover), v);
+            // Longer re-pickup delay so a full inventory doesn't
+            // churn a pick/re-spill cycle every 10 ticks.
+            if let Some(d) = voxel.dropped_items.last_mut() {
+                d.pickup_delay_ticks = cfg.pickup_delay_ticks * 4;
+            }
         }
     }
     if !all_removed.is_empty()
@@ -555,11 +595,10 @@ mod tests {
         let cfg = PickupConfig::DEFAULT;
         DropItem {
             id,
-            block,
+            stack: ItemStack::new(block, 1),
             pos,
             vel: [0.0; 3],
             age: 0.0,
-            count: 1,
             age_ticks: 0,
             pickup_delay_ticks: cfg.pickup_delay_ticks,
         }
@@ -570,7 +609,7 @@ mod tests {
         player: Vec3,
         cfg: &PickupConfig,
         ticks: u32,
-    ) -> (Vec<(u16, u8)>, Vec<u32>, Vec<u32>) {
+    ) -> (Vec<PickedStack>, Vec<u32>, Vec<u32>) {
         let mut all_picks = Vec::new();
         let mut all_despawn = Vec::new();
         let mut all_merged = Vec::new();
@@ -606,7 +645,8 @@ mod tests {
         }
         // The next tick the gate opens and the drop pops.
         let (picks, _, _) = step_logical_tick(&mut drops, player, &cfg, true);
-        assert_eq!(picks, vec![(7, 1)]);
+        assert_eq!(picks.len(), 1);
+        assert_eq!(picks[0].0, ItemStack::new(7, 1));
         assert!(drops.is_empty());
     }
 
@@ -699,8 +739,38 @@ mod tests {
         let (_, _, merged) =
             step_logical_tick(&mut drops, Vec3::new(5.0, 0.0, 5.0), &cfg, true);
         assert_eq!(drops.len(), 1);
-        assert_eq!(drops[0].count, 2);
+        assert_eq!(drops[0].stack.count, 2);
         assert_eq!(merged.len(), 1);
+    }
+
+    /// W468: two drops of the same item with DIFFERENT components
+    /// (one worn, one fresh) must NOT merge; two equally-worn drops
+    /// merge and keep the shared damage value.
+    #[test]
+    fn ground_merge_respects_same_stackable() {
+        let cfg = PickupConfig::DEFAULT;
+        let mut worn_a = mint_drop(1, 7, [0.0, 0.0, 0.0]);
+        worn_a.stack.components.damage = 5;
+        let fresh = mint_drop(2, 7, [0.1, 0.0, 0.0]);
+        let mut drops = vec![worn_a, fresh];
+        let (_, _, merged) =
+            step_logical_tick(&mut drops, Vec3::new(5.0, 0.0, 5.0), &cfg, true);
+        assert_eq!(drops.len(), 2, "worn + fresh stay separate");
+        assert!(merged.is_empty());
+
+        // Equal damage on both sides: merge fires and the merged
+        // stack keeps the components.
+        let mut worn_b = mint_drop(3, 7, [0.0, 0.0, 0.0]);
+        worn_b.stack.components.damage = 5;
+        let mut worn_c = mint_drop(4, 7, [0.1, 0.0, 0.0]);
+        worn_c.stack.components.damage = 5;
+        let mut drops = vec![worn_b, worn_c];
+        let (_, _, merged) =
+            step_logical_tick(&mut drops, Vec3::new(5.0, 0.0, 5.0), &cfg, true);
+        assert_eq!(drops.len(), 1);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(drops[0].stack.count, 2);
+        assert_eq!(drops[0].stack.components.damage, 5);
     }
 
     /// W351: SLEEPING far drops skip the merge sweep entirely - a
@@ -736,18 +806,18 @@ mod tests {
             true,
         );
         assert_eq!(drops.len(), 2);
-        assert_eq!(drops[0].count, 1);
-        assert_eq!(drops[1].count, 1);
+        assert_eq!(drops[0].stack.count, 1);
+        assert_eq!(drops[1].stack.count, 1);
     }
 
     #[test]
     fn merge_respects_stack_max() {
-        // 33 + 33 = 66 > STACK_MAX = 64; merge must refuse.
+        // 33 + 33 = 66 > max stack 64; merge must refuse.
         let cfg = PickupConfig::DEFAULT;
         let mut a = mint_drop(1, 7, [0.0, 0.0, 0.0]);
         let mut b = mint_drop(2, 7, [0.1, 0.0, 0.0]);
-        a.count = 33;
-        b.count = 33;
+        a.stack.count = 33;
+        b.stack.count = 33;
         let mut drops = vec![a, b];
         let merged = maybe_merge_stacks(&mut drops, &cfg);
         assert!(merged.is_none());
@@ -807,11 +877,10 @@ mod w326_tests {
         let cfg = PickupConfig::DEFAULT;
         DropItem {
             id,
-            block,
+            stack: ItemStack::new(block, 1),
             pos,
             vel: [0.0; 3],
             age: 0.0,
-            count: 1,
             age_ticks: 0,
             pickup_delay_ticks: cfg.pickup_delay_ticks,
         }
@@ -839,11 +908,14 @@ mod w326_tests {
         assert_eq!(removed.len(), 2001, "2 per triplet + the boundary pair");
         assert_eq!(drops.len(), 1001);
         assert!(
-            drops.iter().filter(|d| d.block == 1).all(|d| d.count == 3),
+            drops
+                .iter()
+                .filter(|d| d.stack.id == 1)
+                .all(|d| d.stack.count == 3),
             "each triplet collapses into one stack of 3",
         );
-        let pair = drops.iter().find(|d| d.block == 2).unwrap();
-        assert_eq!(pair.count, 2, "cross-cell pair merged");
+        let pair = drops.iter().find(|d| d.stack.id == 2).unwrap();
+        assert_eq!(pair.stack.count, 2, "cross-cell pair merged");
     }
 
     /// Stacks at the cap must NOT merge (same rule as the old sweep).
@@ -851,7 +923,7 @@ mod w326_tests {
     fn w326_merge_respects_stack_cap() {
         let cfg = PickupConfig::DEFAULT;
         let mut a = mint(1, 1, [0.0, 0.0, 0.0]);
-        a.count = STACK_MAX;
+        a.stack.count = STACK_MAX;
         let b = mint(2, 1, [0.1, 0.0, 0.0]);
         let mut drops = vec![a, b];
         let removed = merge_stacks_pass(&mut drops, &cfg);

@@ -320,6 +320,7 @@ impl Voxel {
             chest_open: None,
             chest_viewers: HashMap::new(),
             furnace_viewers: HashMap::new(),
+            container_cursors: HashMap::new(),
             furnace_state_last_sent_ms: HashMap::new(),
             chest_held: None,
             furnaces: HashMap::new(),

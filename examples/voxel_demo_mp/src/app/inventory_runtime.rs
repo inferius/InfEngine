@@ -52,11 +52,15 @@ impl Voxel {
         }
     }
 
-    /// Register a successful pickup for the floating "+1 wood"
-    /// toast HUD. Collapses adjacent picks of the same block into
-    /// a single entry so spamming the same stack doesn't bury the
-    /// HUD in a wall of one-liners.
-    pub(crate) fn note_pickup(&mut self, block: BlockId) {
+    /// Register a successful pickup of `n` items for the floating
+    /// "+N wood" toast HUD. Collapses adjacent picks of the same
+    /// block into a single entry so spamming the same stack doesn't
+    /// bury the HUD in a wall of one-liners. W468: takes the whole
+    /// landed count in one call (stack pickups arrive as one event).
+    pub(crate) fn note_pickup(&mut self, block: BlockId, n: u8) {
+        if n == 0 {
+            return;
+        }
         let now = std::time::Instant::now();
         // W123: MC pickup pop (entity.item.pickup), rate-limited so a
         // mass vacuum doesn't machine-gun; variants shuffle per fire.
@@ -74,10 +78,10 @@ impl Voxel {
             && now.duration_since(last.0).as_secs_f32() < 1.5
         {
             last.0 = now;
-            last.2 = last.2.saturating_add(1);
+            last.2 = last.2.saturating_add(n);
             return;
         }
-        self.pickup_toasts.push((now, block, 1));
+        self.pickup_toasts.push((now, block, n));
         // Cap the buffer so a long mining session doesn't grow
         // unbounded. Oldest entries are the first to roll off the
         // top of the HUD anyway.
@@ -203,83 +207,15 @@ impl Voxel {
                     }
                     return;
                 }
-                // Partial move (`SplitMode::Half` or `One`).
-                // `All` falls through to the whole-stack swap path.
-                let take = match split {
-                    SplitMode::All => 0u8,
-                    SplitMode::Half => (from_stack.count as u16).div_ceil(2) as u8,
-                    SplitMode::One => 1u8,
-                };
-                if take > 0 {
-                    let take = take.max(1).min(from_stack.count);
-                    let rem = from_stack.count - take;
-                    match to_stack {
-                        Some(ts) if ts.same_stackable(&from_stack) => {
-                            let merge = (STACK_MAX - ts.count).min(take);
-                            let leftover = take - merge;
-                            let mut merged = ts;
-                            merged.count += merge;
-                            self.slot_write(to, Some(merged));
-                            // Any leftover from the take goes back
-                            // into the source slot.
-                            let back = rem + leftover;
-                            self.slot_write(
-                                from,
-                                (back > 0).then(|| {
-                                    let mut s = from_stack.clone();
-                                    s.count = back;
-                                    s
-                                }),
-                            );
-                        }
-                        None => {
-                            let mut moved = from_stack.clone();
-                            moved.count = take;
-                            self.slot_write(to, Some(moved));
-                            self.slot_write(
-                                from,
-                                (rem > 0).then(|| {
-                                    let mut s = from_stack.clone();
-                                    s.count = rem;
-                                    s
-                                }),
-                            );
-                        }
-                        Some(_) => {
-                            // Target occupied by a different block
-                            // (or same id with different
-                            // components): a split into an
-                            // unrelated slot would either swap
-                            // (loses semantics) or refuse. We
-                            // refuse.
-                        }
-                    }
-                    return;
-                }
-                // Standard whole-stack drag between two real slots.
-                match to_stack {
-                    Some(ts) if ts.same_stackable(&from_stack) => {
-                        // Same stack (id + components) -> merge.
-                        let take = (STACK_MAX - ts.count).min(from_stack.count);
-                        let rem = from_stack.count - take;
-                        let mut merged = ts;
-                        merged.count += take;
-                        self.slot_write(to, Some(merged));
-                        self.slot_write(
-                            from,
-                            (rem > 0).then(|| {
-                                let mut s = from_stack.clone();
-                                s.count = rem;
-                                s
-                            }),
-                        );
-                    }
-                    _ => {
-                        // Different stacks (or empty target) ->
-                        // swap. Components travel with each stack.
-                        self.slot_write(to, Some(from_stack));
-                        self.slot_write(from, to_stack);
-                    }
+                // W468: the split/merge/swap rules live in the
+                // shared `drag_stacks` helper - the server-side
+                // `inv_apply_drag` routes through the SAME function
+                // so local prediction and authority never drift.
+                if let Some((new_from, new_to)) =
+                    crate::inventory::drag_stacks(from_stack, to_stack, split)
+                {
+                    self.slot_write(to, new_to);
+                    self.slot_write(from, new_from);
                 }
             }
         }

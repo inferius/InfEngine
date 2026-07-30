@@ -3,12 +3,15 @@
 //! W466 adds the MC-style `ItemStack` model: `id + count +
 //! components` where `components` carries per-stack state (damage,
 //! future enchants / custom names). The player inventory holds
-//! `Option<ItemStack>` slots; W467 pushes the stack type into the
-//! container family (chests / furnaces / brewing stands), so the
-//! arithmetic helpers below are stack-typed. What still moves plain
-//! `(u16, u8)` tuples - drops, net messages, trades, the craft
-//! grids - converts at the boundary via `from_tuple` / `as_tuple`
-//! until the W468 wave carries components through those edges too.
+//! `Option<ItemStack>` slots; W467 pushed the stack type into the
+//! container family (chests / furnaces / brewing stands); W468
+//! carried it through drops, the entities save, and the net wire
+//! (inventory snapshots, container state, per-viewer cursors), so
+//! the arithmetic helpers below are stack-typed end to end. What
+//! still moves plain `(u16, u8)` tuples - the craft grids +
+//! `crafting_table_held`, stonecutter / smithing inputs,
+//! `armor_slots`, trades - converts at the boundary via
+//! `from_tuple` / `as_tuple` until their own waves.
 
 use serde::{Deserialize, Serialize};
 
@@ -71,8 +74,9 @@ impl ItemStack {
     }
 
     /// Lift a plain `(id, count)` tuple into a stack with empty
-    /// components. The boundary conversion for drops / net
-    /// messages that still move tuples (W468 scope).
+    /// components. The boundary conversion for the consumers that
+    /// still move tuples (craft grids, stonecutter / smithing,
+    /// trades, legacy save shapes).
     pub(crate) fn from_tuple((id, count): (u16, u8)) -> Self {
         Self::new(id, count)
     }

@@ -55,7 +55,12 @@ pub(crate) const ENTITIES_MAGIC: &[u8; 4] = b"INFE";
 ///   reload as non-despawning; babies keep growing).
 /// - v5 (W459): adds per-mob `trade_xp` (villager levelling
 ///   survives reload). Migration in `entities_v4_to_v5`.
-pub(crate) const ENTITIES_FORMAT_VERSION: u32 = 5;
+/// - v6 (W468): `DropSave` carries a full `ItemStack` (count +
+///   components) instead of a bare block id - stack sizes and
+///   damage/enchants/name survive reload (pre-v6 saves collapsed
+///   every drop to count 1 on load). Migration in
+///   `entities_v5_to_v6`.
+pub(crate) const ENTITIES_FORMAT_VERSION: u32 = 6;
 
 /// Default zstd compression level. Matches `chunks.rs` + `players.rs` -
 /// level 3 is the documented "balanced" setting from the design doc.
@@ -185,14 +190,18 @@ pub(crate) struct MobSave {
 /// One persistent dropped-item entry. Despawn timers live on the
 /// runtime side; here we just store the age so the dispatcher can
 /// re-derive remaining time on reload.
+///
+/// W468 (v6): carries the runtime's full `ItemStack` (id + count +
+/// components) - a merged 30-cobble drop or a worn tool on the
+/// ground survives reload intact. Pre-v6 saves stored one bare
+/// block id per drop and reloaded everything at count 1.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct DropSave {
     /// Stable per-save drop id. Allocated from
     /// `DimensionEntities::next_drop_id`.
     pub id: u32,
-    /// Block id stored as raw `u16` so the schema does not pull in
-    /// `infengine_voxel`. Caller maps to `BlockId` at the edge.
-    pub block: u16,
+    /// The full stack this drop represents.
+    pub stack: crate::item::ItemStack,
     /// World-space position `[x, y, z]`.
     pub pos: [f32; 3],
     /// World-space velocity `[vx, vy, vz]`.
@@ -422,6 +431,35 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 // Migration: v1 -> v2 (W137 - adds `carts` + `next_cart_id`).
 // ---------------------------------------------------------------
 
+/// W468: the v1..v5 on-disk drop shape (bare block id, no count /
+/// components), frozen so every older arrow keeps decoding and
+/// re-encoding true legacy bytes while the live `DropSave` carries
+/// a full `ItemStack`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct DropSaveV5 {
+    id: u32,
+    block: u16,
+    pos: [f32; 3],
+    vel: [f32; 3],
+    age: f32,
+}
+
+impl DropSaveV5 {
+    /// Lift to the current shape. Legacy saves stored one entry
+    /// per drop entity with no count, and the old apply reloaded
+    /// each at count 1 with empty components - the lift mirrors
+    /// that exactly so a migrated save reloads identically.
+    fn lift(self) -> DropSave {
+        DropSave {
+            id: self.id,
+            stack: crate::item::ItemStack::new(self.block, 1),
+            pos: self.pos,
+            vel: self.vel,
+            age: self.age,
+        }
+    }
+}
+
 /// Frozen snapshot of the v1 payload shape (mobs + drops only).
 /// Kept private to the migration arrow so the live struct can keep
 /// evolving without poisoning old decodes.
@@ -430,7 +468,7 @@ struct DimensionEntitiesV1 {
     #[allow(dead_code)]
     format_version: u32,
     mobs: Vec<MobSaveV2>,
-    drops: Vec<DropSave>,
+    drops: Vec<DropSaveV5>,
     next_mob_id: u32,
     next_drop_id: u32,
 }
@@ -452,7 +490,7 @@ struct MobSaveV2 {
 struct DimensionEntitiesV2 {
     format_version: u32,
     mobs: Vec<MobSaveV2>,
-    drops: Vec<DropSave>,
+    drops: Vec<DropSaveV5>,
     next_mob_id: u32,
     next_drop_id: u32,
     carts: Vec<CartSave>,
@@ -497,7 +535,7 @@ struct MobSaveV3 {
 struct DimensionEntitiesV3 {
     format_version: u32,
     mobs: Vec<MobSaveV3>,
-    drops: Vec<DropSave>,
+    drops: Vec<DropSaveV5>,
     next_mob_id: u32,
     next_drop_id: u32,
     carts: Vec<CartSave>,
@@ -547,7 +585,7 @@ struct MobSaveV4 {
 struct DimensionEntitiesV4 {
     format_version: u32,
     mobs: Vec<MobSaveV4>,
-    drops: Vec<DropSave>,
+    drops: Vec<DropSaveV5>,
     next_mob_id: u32,
     next_drop_id: u32,
     carts: Vec<CartSave>,
@@ -556,9 +594,9 @@ struct DimensionEntitiesV4 {
 }
 
 impl MobSaveV4 {
-    /// Lift to the current shape with the v5 defaults.
-    fn lift(self) -> MobSave {
-        MobSave {
+    /// Lift to the FROZEN v5 shape with the v5 defaults.
+    fn lift(self) -> MobSaveV5 {
+        MobSaveV5 {
             id: self.id,
             kind: self.kind,
             pos: self.pos,
@@ -573,6 +611,59 @@ impl MobSaveV4 {
             trade_xp: 0,
         }
     }
+}
+
+/// W468: the v5 on-disk mob shape, frozen even though v6 does not
+/// change mobs - future `MobSave` growth must never poison the
+/// 4 -> 5 / 5 -> 6 arrows (the W459 entities lesson).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct MobSaveV5 {
+    id: u32,
+    kind: u8,
+    pos: [f32; 3],
+    yaw: f32,
+    vel: [f32; 3],
+    health: f32,
+    age_seconds: f32,
+    persistent: bool,
+    baby_left: f32,
+    tamed: bool,
+    temper: u8,
+    trade_xp: u32,
+}
+
+impl MobSaveV5 {
+    /// Lift to the current shape (field-identical today; the copy
+    /// keeps the arrow byte-frozen when `MobSave` grows).
+    fn lift(self) -> MobSave {
+        MobSave {
+            id: self.id,
+            kind: self.kind,
+            pos: self.pos,
+            yaw: self.yaw,
+            vel: self.vel,
+            health: self.health,
+            age_seconds: self.age_seconds,
+            persistent: self.persistent,
+            baby_left: self.baby_left,
+            tamed: self.tamed,
+            temper: self.temper,
+            trade_xp: self.trade_xp,
+        }
+    }
+}
+
+/// W468: the v5 on-disk dimension shape (tuple-era drops).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct DimensionEntitiesV5 {
+    format_version: u32,
+    mobs: Vec<MobSaveV5>,
+    drops: Vec<DropSaveV5>,
+    next_mob_id: u32,
+    next_drop_id: u32,
+    carts: Vec<CartSave>,
+    next_cart_id: u32,
+    structure_mob_anchors: Vec<[i32; 3]>,
 }
 
 /// One-step v1 -> v2 migration arrow: decode the v1 envelope,
@@ -811,7 +902,8 @@ pub(crate) fn entities_v4_to_v5(bytes: &[u8]) -> io::Result<Vec<u8>> {
     let cfg = bincode::config::standard();
     let (v4, _read) = bincode::serde::decode_from_slice::<DimensionEntitiesV4, _>(&raw_v4, cfg)
         .map_err(|err| invalid(format!("entities v4 payload decode failed: {err}")))?;
-    let v5 = DimensionEntities {
+    // W468: emit the FROZEN v5 shape (the live struct is v6 now).
+    let v5 = DimensionEntitiesV5 {
         format_version: 5,
         mobs: v4.mobs.into_iter().map(MobSaveV4::lift).collect(),
         drops: v4.drops,
@@ -834,6 +926,72 @@ pub(crate) fn entities_v4_to_v5(bytes: &[u8]) -> io::Result<Vec<u8>> {
     out.push(kind_v5);
     out.extend_from_slice(&uncompressed_len_v5.to_le_bytes());
     out.extend_from_slice(&body_v5);
+    Ok(out)
+}
+
+/// W468: one-step v5 -> v6 migration arrow - lifts every drop's
+/// bare block id into an `ItemStack` with count 1 and empty
+/// components (exactly what the old load path reconstructed), and
+/// copies mobs across the frozen v5 shape unchanged. Same envelope
+/// handling as the earlier arrows.
+pub(crate) fn entities_v5_to_v6(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < 17 {
+        return Err(invalid("entities v5 envelope truncated"));
+    }
+    if &bytes[..4] != ENTITIES_MAGIC {
+        return Err(invalid("entities v5 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 5 {
+        return Err(invalid(format!(
+            "entities_v5_to_v6 expected v5, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+    let raw_v5: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("entities v5 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown entities v5 compression kind {other} during migration"
+            )));
+        }
+    };
+    let cfg = bincode::config::standard();
+    let (v5, _read) = bincode::serde::decode_from_slice::<DimensionEntitiesV5, _>(&raw_v5, cfg)
+        .map_err(|err| invalid(format!("entities v5 payload decode failed: {err}")))?;
+    let v6 = DimensionEntities {
+        format_version: 6,
+        mobs: v5.mobs.into_iter().map(MobSaveV5::lift).collect(),
+        drops: v5.drops.into_iter().map(DropSaveV5::lift).collect(),
+        next_mob_id: v5.next_mob_id,
+        next_drop_id: v5.next_drop_id,
+        carts: v5.carts,
+        next_cart_id: v5.next_cart_id,
+        structure_mob_anchors: v5.structure_mob_anchors,
+    };
+    let raw_v6 = bincode::serde::encode_to_vec(&v6, cfg)
+        .map_err(|err| invalid(format!("entities v6 payload encode failed: {err}")))?;
+    let uncompressed_len_v6 = raw_v6.len() as u64;
+    let (kind_v6, body_v6): (u8, Vec<u8>) = match zstd::encode_all(&raw_v6[..], ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < raw_v6.len() => (COMP_ZSTD, compressed),
+        _ => (COMP_NONE, raw_v6),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v6.len() + 17);
+    out.extend_from_slice(ENTITIES_MAGIC);
+    out.extend_from_slice(&6u32.to_le_bytes());
+    out.push(kind_v6);
+    out.extend_from_slice(&uncompressed_len_v6.to_le_bytes());
+    out.extend_from_slice(&body_v6);
     Ok(out)
 }
 
@@ -987,7 +1145,8 @@ mod tests {
             COMP_NONE => out[17..].to_vec(),
             _ => decode_zstd(&out[17..], len).unwrap(),
         };
-        let (v5, _) = bincode::serde::decode_from_slice::<DimensionEntities, _>(
+        // W468: the arrow emits the FROZEN v5 shape now.
+        let (v5, _) = bincode::serde::decode_from_slice::<DimensionEntitiesV5, _>(
             &body, cfg,
         )
         .unwrap();
@@ -997,6 +1156,101 @@ mod tests {
         assert!(v5.mobs[0].tamed, "v4 fields carry through");
         assert_eq!(v5.mobs[0].temper, 40);
         assert_eq!(v5.structure_mob_anchors, vec![[7, 8, 9]]);
+    }
+
+    /// W468: a hand-built FROZEN v5 envelope lifts through the
+    /// 5 -> 6 arrow - drops gain `ItemStack::new(block, 1)` (the
+    /// exact shape the old load path reconstructed), mob fields
+    /// (trade_xp included) carry through untouched.
+    #[test]
+    fn entities_v5_to_v6_lifts_drops_to_stacks() {
+        let cfg = bincode::config::standard();
+        let v5 = DimensionEntitiesV5 {
+            format_version: 5,
+            mobs: vec![MobSaveV5 {
+                id: 3,
+                kind: 11,
+                pos: [1.0, 64.0, 1.0],
+                yaw: 0.0,
+                vel: [0.0; 3],
+                health: 20.0,
+                age_seconds: 0.0,
+                persistent: true,
+                baby_left: 0.0,
+                tamed: false,
+                temper: 0,
+                trade_xp: 77,
+            }],
+            drops: vec![DropSaveV5 {
+                id: 9,
+                block: 17,
+                pos: [2.5, 65.0, 2.5],
+                vel: [0.0, 0.1, 0.0],
+                age: 4.0,
+            }],
+            next_mob_id: 4,
+            next_drop_id: 10,
+            carts: Vec::new(),
+            next_cart_id: 1,
+            structure_mob_anchors: vec![[4, 5, 6]],
+        };
+        let raw = bincode::serde::encode_to_vec(&v5, cfg).unwrap();
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(ENTITIES_MAGIC);
+        bytes.extend_from_slice(&5u32.to_le_bytes());
+        bytes.push(COMP_NONE);
+        bytes.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&raw);
+        let out = entities_v5_to_v6(&bytes).expect("arrow lifts");
+        assert_eq!(u32::from_le_bytes([out[4], out[5], out[6], out[7]]), 6);
+        let kind = out[8];
+        let len = u64::from_le_bytes(out[9..17].try_into().unwrap()) as usize;
+        let body: Vec<u8> = match kind {
+            COMP_NONE => out[17..].to_vec(),
+            _ => decode_zstd(&out[17..], len).unwrap(),
+        };
+        let (v6, _) = bincode::serde::decode_from_slice::<DimensionEntities, _>(
+            &body, cfg,
+        )
+        .unwrap();
+        assert_eq!(v6.format_version, 6);
+        assert_eq!(v6.drops.len(), 1);
+        assert_eq!(v6.drops[0].id, 9);
+        assert_eq!(v6.drops[0].stack, crate::item::ItemStack::new(17, 1));
+        assert_eq!(v6.drops[0].age, 4.0);
+        assert_eq!(v6.mobs.len(), 1);
+        assert_eq!(v6.mobs[0].trade_xp, 77, "v5 mob fields carry through");
+        assert_eq!(v6.structure_mob_anchors, vec![[4, 5, 6]]);
+        assert_eq!(v6.next_drop_id, 10);
+    }
+
+    /// W468: the 5 -> 6 arrow refuses input tagged with any other
+    /// envelope version.
+    #[test]
+    fn entities_v5_to_v6_rejects_wrong_version() {
+        let cfg = bincode::config::standard();
+        let v5 = DimensionEntitiesV5 {
+            format_version: 5,
+            mobs: Vec::new(),
+            drops: Vec::new(),
+            next_mob_id: 0,
+            next_drop_id: 0,
+            carts: Vec::new(),
+            next_cart_id: 0,
+            structure_mob_anchors: Vec::new(),
+        };
+        let raw = bincode::serde::encode_to_vec(&v5, cfg).unwrap();
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(ENTITIES_MAGIC);
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.push(COMP_NONE);
+        bytes.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&raw);
+        let err = entities_v5_to_v6(&bytes).expect_err("must refuse v4 input");
+        assert!(
+            err.to_string().contains("expected v5"),
+            "error names the version mismatch, got: {err}"
+        );
     }
 
     #[test]
@@ -1020,7 +1274,7 @@ mod tests {
         struct V1Out {
             format_version: u32,
             mobs: Vec<MobSaveV2>,
-            drops: Vec<DropSave>,
+            drops: Vec<DropSaveV5>,
             next_mob_id: u32,
             next_drop_id: u32,
         }

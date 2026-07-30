@@ -155,6 +155,11 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         let mut furnace_opens_outer: Vec<(u32, net::FurnaceOpenMsg)> = Vec::new();
         let mut furnace_acts_outer: Vec<(u32, net::FurnaceActMsg)> = Vec::new();
         let mut furnace_closes_outer: Vec<(u32, net::FurnaceCloseMsg)> = Vec::new();
+        // W468: container-cursor stacks of disconnected viewers
+        // that didn't fit back into their inventory. Spawned as
+        // floor drops after the `&mut vx.net` borrow releases.
+        let mut disconnect_spills: Vec<([i32; 3], crate::item::ItemStack)> =
+            Vec::new();
         let cfg = bincode::config::standard();
         match &mut vx.net {
             NetRole::Offline => return,
@@ -261,6 +266,51 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         .cloned()
                         .or_else(|| server.client_name(*id))
                         .unwrap_or_else(|| format!("p{id}"));
+                    // W468: a viewer that disconnects mid-container
+                    // gets its authoritative cursor back into the
+                    // inventory BEFORE that inventory is persisted;
+                    // what doesn't fit spills at the container (or
+                    // the last known pose as a fallback).
+                    let spill_pos: Option<[i32; 3]> = vx
+                        .chest_viewers
+                        .iter()
+                        .find(|(_, v)| **v == *id)
+                        .map(|(p, _)| *p)
+                        .or_else(|| {
+                            vx.furnace_viewers
+                                .iter()
+                                .find(|(_, v)| **v == *id)
+                                .map(|(p, _)| *p)
+                        });
+                    vx.chest_viewers.retain(|_, v| *v != *id);
+                    vx.furnace_viewers.retain(|_, v| *v != *id);
+                    if let Some(held) =
+                        vx.container_cursors.remove(id).flatten()
+                    {
+                        let mut leftover = held.count;
+                        if let Some(inv) = inventories.get_mut(id) {
+                            leftover =
+                                crate::item::stack::drop_into_first_free_stacks(
+                                    &mut inv.inventory,
+                                    held.clone(),
+                                );
+                        }
+                        if leftover > 0 {
+                            let pos = spill_pos.or_else(|| {
+                                poses.get(id).map(|p| {
+                                    [
+                                        p.pos[0].floor() as i32,
+                                        p.pos[1].floor() as i32,
+                                        p.pos[2].floor() as i32,
+                                    ]
+                                })
+                            });
+                            if let Some(pos) = pos {
+                                disconnect_spills
+                                    .push((pos, held.with_count(leftover)));
+                            }
+                        }
+                    }
                     poses.remove(id);
                     if let Some(inv) = inventories.remove(id)
                         && let Some(name) = server.client_name(*id)
@@ -446,7 +496,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         let broken = vx.world.get(voxel);
                         if broken != BlockId::AIR
                             && let Some(inv) = inventories.get_mut(&cid)
-                            && inv_pickup(&mut inv.inventory, broken)
+                            && crate::inventory::inv_pickup(&mut inv.inventory, broken)
                         {
                             pending_inv_sends.insert(cid);
                         }
@@ -685,15 +735,11 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
             for st in vx.inventory.iter().flatten() {
                 *pre.entry(st.id).or_insert(0) += st.count as u32;
             }
-            for (i, s) in snap.inventory.iter().enumerate() {
+            // W468: the wire snapshot is stack-native - adopt the
+            // authoritative slots wholesale, components included.
+            for (i, s) in snap.inventory.into_iter().enumerate() {
                 if i < vx.inventory.len() {
-                    // W466: the wire snapshot is tuple-shaped; a
-                    // same-id write keeps the local stack's
-                    // components (damage) intact.
-                    crate::item::stack::write_tuple_preserving(
-                        &mut vx.inventory[i],
-                        *s,
-                    );
+                    vx.inventory[i] = s;
                 }
             }
             for (i, s) in snap.craft.iter().enumerate() {
@@ -887,15 +933,15 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         }
         for m in drop_spawns {
             // Q.5: clients mirror the spawn but pickup is
-            // host-authoritative, so the count + pickup-delay
-            // here are decorative on the client side.
+            // host-authoritative, so the pickup-delay here is
+            // decorative. W468: the message carries the full stack
+            // so the mirror renders the real item.
             vx.dropped_items.push(DropItem {
                 id: m.id,
-                block: m.block,
+                stack: m.stack,
                 pos: m.pos,
                 vel: [0.0, 2.0, 0.0],
                 age: 0.0,
-                count: 1,
                 age_ticks: 0,
                 pickup_delay_ticks: drops::PickupConfig::DEFAULT.pickup_delay_ticks,
             });
@@ -1037,6 +1083,12 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                 vx.sfx_at(&key, mob.pos, |_, _| {});
             }
         }
+        // W468: spill container-cursor stacks of viewers that
+        // disconnected this tick (whatever didn't fit back into
+        // their inventory).
+        for (pos, stack) in disconnect_spills {
+            crate::drops::spawn_stack(vx, stack, pos);
+        }
         // W5.3a/b: apply queued chest + furnace messages. Each
         // open registers the sender as the viewer + ships an
         // immediate state snapshot. Each act mutates the live
@@ -1052,30 +1104,19 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         // W5.3a/b: client-side - apply incoming state snapshots
         // from the host. Each snapshot overwrites the local
         // chest/furnace contents so the open UI mirrors the
-        // authoritative state. The `chest_held` cursor mirrors the
-        // host-tracked value (always None for Wave 5; the host
-        // doesn't yet track per-viewer cursors).
-        // W468: the state messages are tuple-shaped. Write each
-        // tuple through `write_tuple_preserving` against the
-        // EXISTING local container so a count-only change from the
-        // host never strips the components of an untouched local
-        // stack (mirror containers normally have no components
-        // until the schema carries them, but the preserve rule
-        // costs nothing and protects host-migrated saves).
+        // authoritative state. W468: the messages are stack-native
+        // - slots and the per-viewer cursor adopt wholesale,
+        // components included.
         for state in chest_state_updates {
             let c = vx
                 .chests
                 .entry(state.pos)
                 .or_insert_with(block::chest::new_chest);
             for i in 0..c.len() {
-                let tuple = state.slots.get(i).copied().flatten();
-                let mut cur = c.slot(i);
-                crate::item::stack::write_tuple_preserving(&mut cur, tuple);
-                c.set_slot(i, cur);
+                c.set_slot(i, state.slots.get(i).cloned().flatten());
             }
             if vx.chest_open == Some(state.pos) {
-                vx.chest_held =
-                    state.cursor.map(crate::item::ItemStack::from_tuple);
+                vx.chest_held = state.cursor;
             }
         }
         for state in furnace_state_updates {
@@ -1084,10 +1125,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                 .entry(state.pos)
                 .or_insert_with(block::furnace::new_furnace);
             for i in 0..f.len() {
-                let tuple = state.slots.get(i).copied().flatten();
-                let mut cur = f.slot(i);
-                crate::item::stack::write_tuple_preserving(&mut cur, tuple);
-                f.set_slot(i, cur);
+                f.set_slot(i, state.slots.get(i).cloned().flatten());
             }
             vx.furnace_runtimes.insert(
                 state.pos,
@@ -1098,8 +1136,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                 },
             );
             if vx.furnace_open == Some(state.pos) {
-                vx.furnace_held =
-                    state.cursor.map(crate::item::ItemStack::from_tuple);
+                vx.furnace_held = state.cursor;
             }
         }
         // Removals: clean up local mob bookkeeping mirroring what

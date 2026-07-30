@@ -117,30 +117,31 @@ impl Voxel {
         if block == BlockId::AIR {
             return;
         }
-        // First pass: top up an existing stack. W466: only plain
-        // (default-component) stacks accept the merge - a fresh
-        // pickup must not inherit a worn tool's damage.
-        for slot in self.inventory.iter_mut() {
-            if let Some(st) = slot.as_mut()
-                && st.id == block.0
-                && st.components.is_empty()
-                && st.count < STACK_MAX
-            {
-                st.count += 1;
-                self.note_pickup(block);
-                return;
-            }
+        let _ = self.pickup_stack(crate::item::ItemStack::new(block.0, 1));
+    }
+
+    /// W468: insert a FULL stack (count + components) into the
+    /// inventory - `same_stackable` merge first, then empty slots
+    /// adopt the stack wholesale (components included). Returns the
+    /// leftover count that didn't fit (0 = everything landed); the
+    /// caller decides whether to re-spill it as a drop.
+    pub(crate) fn pickup_stack(
+        &mut self,
+        stack: crate::item::ItemStack,
+    ) -> u8 {
+        if stack.id == 0 || stack.count == 0 {
+            return 0;
         }
-        // Second pass: claim an empty slot. Prefer hotbar first so
-        // freshly mined blocks become hot-keyable immediately.
-        // W466: a fresh stack has damage 0 = full durability, so
-        // the old MAX_USES durability mint is implicit now.
-        for slot in self.inventory.iter_mut() {
-            if slot.is_none() {
-                *slot = Some(crate::item::ItemStack::new(block.0, 1));
-                self.note_pickup(block);
-                return;
-            }
+        let block = BlockId(stack.id);
+        let incoming = stack.count;
+        let leftover = crate::item::stack::drop_into_first_free_stacks(
+            &mut self.inventory,
+            stack,
+        );
+        let landed = incoming - leftover;
+        if landed > 0 {
+            self.note_pickup(block, landed);
         }
+        leftover
     }
 }

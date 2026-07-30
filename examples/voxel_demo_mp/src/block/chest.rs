@@ -13,8 +13,9 @@
 //! full stacks - components (damage / enchants / name) travel with
 //! every take / place / transfer, and merging anywhere requires
 //! `same_stackable` (a worn tool never count-merges into a fresh
-//! one). Only the break/spill edge still flattens to bare item ids
-//! because the drop-entity path is tuple-shaped until W468.
+//! one). W468 closed the last edge: the break/spill path emits
+//! full stacks too, so a worn tool spilled from a broken chest
+//! lands on the floor still worn.
 
 #![allow(dead_code)]
 
@@ -78,49 +79,33 @@ pub(crate) fn partner_for(
     None
 }
 
-/// Flatten a chest's contents into the per-item drop list emitted
-/// on break. Each slot expands to `count` copies of its id so the
-/// caller can spawn one drop entity per item - matching the rest
-/// of the game's "one drop per item" convention. Returns an empty
-/// vec for an empty chest.
-///
-/// W468 carries components through drops; until then this edge
-/// flattens to bare ids exactly like before W467 (a spilled worn
-/// tool respawns fresh - no regression, same loss as today).
-pub(crate) fn drain_drops(chest: &Container) -> Vec<u16> {
-    let mut out: Vec<u16> = Vec::new();
-    for st in chest.slots().iter().flatten() {
-        for _ in 0..st.count {
-            out.push(st.id);
-        }
-    }
-    out
+/// Collect a chest's contents into the drop list emitted on break.
+/// W468: one FULL stack per occupied slot - counts + components
+/// spill intact (the caller spawns each via `drops::spawn_stack`).
+/// Returns an empty vec for an empty chest.
+pub(crate) fn drain_drops(chest: &Container) -> Vec<ItemStack> {
+    chest.slots().iter().flatten().cloned().collect()
 }
 
 /// Recover a cursor-held stack into the chest when the UI closes.
-/// Returns the per-item leftover Vec the caller should spawn as
-/// floor drops at the chest position - any item the chest couldn't
-/// absorb (e.g. full chest, missing chest) lands here. The part
-/// that DOES land keeps the held stack's components; the spilled
-/// leftover flattens to ids (drop path is tuple-shaped until W468).
+/// Returns the leftover stack the caller should spawn as a floor
+/// drop at the chest position - whatever the chest couldn't absorb
+/// (e.g. full chest, missing chest). Both the recovered part and
+/// the spilled leftover keep the held stack's components (W468).
 ///
 /// Pulled out as a free fn so the close path stays trivially
 /// testable; the runtime caller wraps it with the chest lookup +
-/// the drop spawn loop.
+/// the drop spawn.
 pub(crate) fn recover_held_on_close(
     chest: Option<&mut Container>,
     held: Option<ItemStack>,
-) -> Vec<u16> {
-    let Some(stack) = held else {
-        return Vec::new();
-    };
-    let id = stack.id;
-    let count = stack.count;
+) -> Option<ItemStack> {
+    let stack = held?;
     let leftover = match chest {
-        Some(c) => c.insert(stack),
-        None => count,
+        Some(c) => c.insert(stack.clone()),
+        None => stack.count,
     };
-    (0..leftover).map(|_| id).collect()
+    (leftover > 0).then(|| stack.with_count(leftover))
 }
 
 /// Apply one `GridAction` against the chest container. Returns the

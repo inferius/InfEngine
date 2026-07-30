@@ -290,6 +290,16 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         5,
         super::entities::entities_v4_to_v5,
     );
+    // W468: entities v5 -> v6 lifts every drop's bare block id
+    // into an `ItemStack` (count 1, empty components - the exact
+    // shape the old load path reconstructed). Stack sizes +
+    // components persist from the first v6 save on.
+    reg.register(
+        SaveKind::Entities,
+        5,
+        6,
+        super::entities::entities_v5_to_v6,
+    );
     // W138: containers v3 -> v4 adds doors / chest facings /
     // brewing stands / levers-on (the runtime block-state maps
     // that were never persisted - reloaded doors rendered open-

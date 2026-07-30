@@ -737,9 +737,12 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let mut brewing_held_local = brewing_held_snapshot;
         let mut brewing_grid_actions: Vec<(bool, container::ui::GridAction)> =
             Vec::new();
-        // Plain inventory snapshot as Option<(u16,u8)> for the
-        // chest-UI's player-side grid - independent of the
-        // existing DnD widget snapshot which carries icon meta.
+        // Plain tuple projection of the inventory for the panels
+        // that are STILL tuple-shaped after W468: the 3x3 crafting
+        // table, stonecutter, smithing, and trades (each converts
+        // back through `write_tuple_preserving` post-egui so a
+        // count-only change keeps untouched components). Later
+        // waves lift those panels and retire this snapshot.
         //
         // W50.3: mutable so the 3x3 crafting table panel can
         // apply player-inv clicks in place; render.rs copies the

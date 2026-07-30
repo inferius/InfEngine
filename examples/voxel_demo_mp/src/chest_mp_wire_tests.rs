@@ -13,7 +13,6 @@ use crate::net::{
     FurnaceCloseMsg, FurnaceOpenMsg, FurnaceStateMsg,
 };
 use crate::Voxel;
-use infengine_voxel::BlockId;
 
 use crate::item::ItemStack;
 
@@ -145,18 +144,22 @@ fn furnace_state_throttle_simulates_5hz_under_high_freq_calls() {
 #[test]
 fn chest_state_msg_round_trips() {
     // Wire-level: encode + decode a ChestStateMsg through bincode
-    // and verify the slots + cursor survive.
+    // and verify the stack-native slots + cursor survive - W468:
+    // components included.
     let cfg = bincode::config::standard();
+    let mut worn = ItemStack::new(7, 1);
+    worn.components.damage = 13;
     let original = ChestStateMsg {
         pos: [5, 10, 15],
-        slots: vec![Some((BlockId(1).0, 32)), None, Some((BlockId(7).0, 1))],
-        cursor: Some((BlockId(3).0, 12)),
+        slots: vec![Some(ItemStack::new(1, 32)), None, Some(worn.clone())],
+        cursor: Some(ItemStack::new(3, 12)),
     };
     let buf = bincode::serde::encode_to_vec(&original, cfg).expect("encode");
     let (decoded, _): (ChestStateMsg, _) =
         bincode::serde::decode_from_slice(&buf, cfg).expect("decode");
     assert_eq!(decoded.pos, original.pos);
     assert_eq!(decoded.slots, original.slots);
+    assert_eq!(decoded.slots[2].as_ref().unwrap().components.damage, 13);
     assert_eq!(decoded.cursor, original.cursor);
 }
 
@@ -165,7 +168,7 @@ fn furnace_state_msg_round_trips() {
     let cfg = bincode::config::standard();
     let original = FurnaceStateMsg {
         pos: [0, 0, 0],
-        slots: vec![Some((BlockId(2).0, 8)), None, None],
+        slots: vec![Some(ItemStack::new(2, 8)), None, None],
         fuel_left_ms: 1234,
         fuel_full_ms: 5000,
         cook_progress_ms: 333,
@@ -178,6 +181,86 @@ fn furnace_state_msg_round_trips() {
     assert_eq!(decoded.slots, original.slots);
     assert_eq!(decoded.fuel_left_ms, 1234);
     assert_eq!(decoded.cook_progress_ms, 333);
+}
+
+/// W468: the per-viewer cursor keeps a remote take -> place-elsewhere
+/// of a WORN item lossless: after Take the stack sits on the host's
+/// per-client cursor (not a discarded temporary), after Place it
+/// lands in the target slot with its damage intact - nothing
+/// duplicated, nothing lost.
+#[test]
+fn remote_take_then_place_preserves_worn_stack() {
+    let mut v = Voxel::new();
+    let pos = [3, 8, 3];
+    let mut worn = ItemStack::new(48, 1);
+    worn.components.damage = 21;
+    v.apply_chest_open_msgs(&[(7, ChestOpenMsg { pos })]);
+    if let Some(c) = v.chests.get_mut(&pos) {
+        c.set_slot(0, Some(worn.clone()));
+    }
+    // Take: the worn stack moves onto the viewer's cursor.
+    v.apply_chest_act_msgs(&[(
+        7,
+        ChestActMsg {
+            pos,
+            player_side: false,
+            action: ChestAct::Take(0),
+        },
+    )]);
+    assert_eq!(v.chests.get(&pos).unwrap().slot(0), None);
+    assert_eq!(
+        v.container_cursors.get(&7).cloned().flatten(),
+        Some(worn.clone()),
+        "taken stack lives on the per-viewer cursor"
+    );
+    // Place elsewhere: cursor empties, slot 5 holds the worn stack.
+    v.apply_chest_act_msgs(&[(
+        7,
+        ChestActMsg {
+            pos,
+            player_side: false,
+            action: ChestAct::Place(5),
+        },
+    )]);
+    assert_eq!(v.container_cursors.get(&7).cloned().flatten(), None);
+    let chest = v.chests.get(&pos).unwrap();
+    assert_eq!(chest.slot(5), Some(worn));
+    // Nothing duplicated: exactly one occupied slot.
+    let occupied = chest.slots().iter().flatten().count();
+    assert_eq!(occupied, 1);
+}
+
+/// W468: closing the container recovers the viewer's cursor - with
+/// no per-client inventory registered (offline harness) the held
+/// stack spills as a floor drop at the chest instead of vanishing.
+#[test]
+fn viewer_close_recovers_cursor_stack() {
+    let mut v = Voxel::new();
+    let pos = [1, 8, 1];
+    let mut worn = ItemStack::new(48, 1);
+    worn.components.damage = 5;
+    v.apply_chest_open_msgs(&[(4, ChestOpenMsg { pos })]);
+    if let Some(c) = v.chests.get_mut(&pos) {
+        c.set_slot(2, Some(worn.clone()));
+    }
+    v.apply_chest_act_msgs(&[(
+        4,
+        ChestActMsg {
+            pos,
+            player_side: false,
+            action: ChestAct::Take(2),
+        },
+    )]);
+    assert!(v.container_cursors.get(&4).cloned().flatten().is_some());
+    v.apply_chest_close_msgs(&[(4, ChestCloseMsg { pos })]);
+    assert!(
+        v.container_cursors.get(&4).cloned().flatten().is_none(),
+        "cursor cleared on close"
+    );
+    // No inventory to return into (offline harness): the stack
+    // spilled as a drop at the chest, components intact.
+    assert_eq!(v.dropped_items.len(), 1);
+    assert_eq!(v.dropped_items[0].stack, worn);
 }
 
 #[test]

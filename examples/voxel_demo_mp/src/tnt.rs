@@ -279,7 +279,7 @@ mod tests {
             t.fuse,
         );
         assert!(
-            !v.dropped_items.iter().any(|d| d.block == TNT_ID),
+            !v.dropped_items.iter().any(|d| d.stack.id == TNT_ID),
             "no TNT item drop from the blast",
         );
     }

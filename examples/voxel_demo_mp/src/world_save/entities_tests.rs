@@ -92,7 +92,9 @@ fn sample_cow(id: u32) -> MobSave {
 fn sample_drop(id: u32, block: u16) -> DropSave {
     DropSave {
         id,
-        block,
+        // W468 (v6): drops persist a full stack; the samples stay
+        // plain singletons like the tuple-era fixtures.
+        stack: crate::item::ItemStack::new(block, 1),
         pos: [id as f32 * 0.5, 65.0, id as f32 * -0.25],
         vel: [0.0, 0.1, 0.0],
         age: id as f32 * 1.5,
@@ -167,7 +169,7 @@ fn entities_roundtrip_with_drops() {
     let loaded = read_entities_in_dir(tmp.path(), SLUG, DIM).unwrap().unwrap();
     assert_eq!(loaded, original);
     assert_eq!(loaded.drops.len(), 5);
-    assert_eq!(loaded.drops[2].block, BLOCK_LOG);
+    assert_eq!(loaded.drops[2].stack.id, BLOCK_LOG);
     assert_eq!(loaded.next_drop_id, 5);
 }
 

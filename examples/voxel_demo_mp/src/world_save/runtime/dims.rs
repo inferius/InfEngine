@@ -515,14 +515,14 @@ fn load_parked_dim(voxel: &mut Voxel, slug: &str, dim: &str) -> io::Result<usize
             ents.structure_mob_anchors.iter().copied().collect();
     }
     for d in ents.drops {
+        // W468: full stack rehydrates (count + components).
         let age_ticks = (d.age * 20.0).max(0.0) as u32;
         parked.drops.push(DropItem {
             id: d.id,
-            block: d.block,
+            stack: d.stack,
             pos: d.pos,
             vel: d.vel,
             age: d.age,
-            count: 1,
             age_ticks,
             pickup_delay_ticks: 0,
         });

@@ -438,11 +438,11 @@ pub(crate) struct Voxel {
     /// W466: the former W5.2b parallel `item_durability` map is
     /// folded into `ItemStack.components.damage` (counting UP
     /// from 0), so wear travels with the stack through drags and
-    /// the player save with no side bookkeeping. Everything
-    /// outside this inventory core (containers, drops, net
-    /// messages) still moves `(u16, u8)` tuples until W467/W468 -
-    /// components drop at those boundaries exactly like the old
-    /// map did.
+    /// the player save with no side bookkeeping. W467 lifted the
+    /// container family and W468 lifted drops + the net wire, so
+    /// components now survive end to end; only the craft grids,
+    /// stonecutter / smithing inputs, armor slots and trades still
+    /// convert to `(u16, u8)` tuples at their boundaries.
     pub(crate) inventory: [Option<crate::item::ItemStack>; INVENTORY_SLOTS],
     pub(crate) selected_slot: usize,
     /// True when the inventory overlay is up. Pauses player input
@@ -837,6 +837,14 @@ pub(crate) struct Voxel {
     /// W5.3b: mirror of `chest_viewers` for furnaces. Same single-
     /// viewer contract.
     pub(crate) furnace_viewers: HashMap<[i32; 3], u32>,
+    /// W468: host-side authoritative cursor per REMOTE viewer,
+    /// keyed by client id (a client has at most one container UI
+    /// open). Container acts apply against this cursor and every
+    /// state snapshot bundles it back, so a remote Take can no
+    /// longer evaporate the taken stack. Close / disconnect
+    /// returns the held stack to the client's inventory (spilling
+    /// at the container on overflow). Empty on clients + offline.
+    pub(crate) container_cursors: HashMap<u32, Option<crate::item::ItemStack>>,
     /// W5.3b: per-viewer throttle timestamps for furnace state
     /// snapshots. Keyed by chest/furnace pos. Furnaces tick fast
     /// (cook progress changes every frame), so we cap broadcast

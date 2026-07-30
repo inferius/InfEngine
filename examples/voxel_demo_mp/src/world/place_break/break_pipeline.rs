@@ -393,15 +393,17 @@ pub(crate) fn apply_block_break(
         }
         // Chest break: drain contents as drops, drop the container.
         // W169/W170/W172: barrel + ender chest + hopper share the
-        // chest store.
+        // chest store. W468: each occupied slot spills as ONE drop
+        // carrying its full stack (count + components) instead of
+        // exploding into per-item singletons.
         if (broken.0 == CHEST_ID
             || broken.0 == crate::block::BARREL_ID
             || broken.0 == crate::block::ENDER_CHEST_ID
             || broken.0 == crate::block::HOPPER_ID)
             && let Some(chest_inv) = vx.chests.remove(&voxel)
         {
-            for id in block::chest::drain_drops(&chest_inv) {
-                vx.spawn_drop(BlockId(id), voxel);
+            for stack in block::chest::drain_drops(&chest_inv) {
+                crate::drops::spawn_stack(vx, stack, voxel);
             }
             // W126: drop the render state with the chest.
             vx.chest_facing.remove(&voxel);
@@ -415,8 +417,8 @@ pub(crate) fn apply_block_break(
                 &mut vx.furnace_runtimes,
                 voxel,
             );
-            for id in drops {
-                vx.spawn_drop(BlockId(id), voxel);
+            for stack in drops {
+                crate::drops::spawn_stack(vx, stack, voxel);
             }
         }
         // Cascade: dislodge any F_NO_PLACE decoration whose support
