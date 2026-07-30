@@ -40,16 +40,28 @@ pub(crate) struct EditMsg {
     pub(crate) block: u16,
 }
 
+/// W471: `PlayerMsg.sel` sentinel - the sender is in a mode where
+/// held-item wear does not apply (creative / instabuild), or the
+/// pose is a server-side placeholder. The server skips durability
+/// wear for poses carrying this value.
+pub(crate) const SEL_NONE: u8 = 255;
+
 /// Player pose snapshot. Sent every tick:
 /// - client -> server as a single-player update (`id` ignored).
 /// - server -> all clients as a per-player broadcast (with the
 ///   originator's `id`).
+///
+/// W471: `sel` carries the sender's selected hotbar slot (or
+/// `SEL_NONE` under instabuild) so the server can apply tool /
+/// weapon durability wear to the authoritative `ClientInv` copy
+/// when it validates the sender's breaks and melee hits.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(crate) struct PlayerMsg {
     pub(crate) id: u32,
     pub(crate) pos: [f32; 3],
     pub(crate) yaw: f32,
     pub(crate) pitch: f32,
+    pub(crate) sel: u8,
 }
 
 /// Server -> all clients: a player has left. Recipients drop the
@@ -641,6 +653,54 @@ impl ClientInv {
             craft: self.craft_grid.to_vec(),
         }
     }
+}
+
+/// W471: server-side durability wear against a remote client's
+/// authoritative inventory. `sel` is the sender's selected hotbar
+/// slot from its last pose (`PlayerMsg.sel`); `SEL_NONE` (creative
+/// / unknown) skips. `amount_of` maps the slot's item id to the
+/// per-action wear (mine vs attack); a zero amount (non-tool,
+/// empty slot) applies nothing. Applied wear queues an inventory
+/// snapshot so the client's local PREDICTION of the same wear gets
+/// confirmed instead of reverted.
+pub(crate) fn wear_client_selected(
+    inventories: &mut HashMap<u32, ClientInv>,
+    pending_inv_sends: &mut HashSet<u32>,
+    cid: u32,
+    sel: u8,
+    amount_of: fn(u16) -> u16,
+) {
+    if sel as usize >= HOTBAR_SLOTS {
+        return;
+    }
+    let Some(inv) = inventories.get_mut(&cid) else {
+        return;
+    };
+    let slot = &mut inv.inventory[sel as usize];
+    let amount = slot.as_ref().map(|st| amount_of(st.id)).unwrap_or(0);
+    if amount > 0 {
+        // Wear amounts are only nonzero for damageable tool /
+        // weapon classes, so this always mutates the slot.
+        crate::item::durability::hurt_and_break(slot, amount, false);
+        pending_inv_sends.insert(cid);
+    }
+}
+
+/// W471: melee-wear shorthand for the PvP / mob-hit validators
+/// (`Weapon.item_damage_per_attack`: sword 1, digger tools 2).
+pub(crate) fn wear_client_weapon(
+    inventories: &mut HashMap<u32, ClientInv>,
+    pending_inv_sends: &mut HashSet<u32>,
+    cid: u32,
+    sel: u8,
+) {
+    wear_client_selected(
+        inventories,
+        pending_inv_sends,
+        cid,
+        sel,
+        crate::item::durability::attack_wear_amount,
+    );
 }
 
 /// Aggregate of mutable refs to every per-tick collector that
@@ -1514,8 +1574,8 @@ pub(crate) fn process_server_inbox(
                 if let Ok((m, _)) =
                     bincode::serde::decode_from_slice::<PvPHitMsg, _>(&data, cfg)
                 {
-                    let attacker_pos =
-                        poses.get(&client_id).copied().map(|p| p.pos);
+                    let attacker = poses.get(&client_id).copied();
+                    let attacker_pos = attacker.map(|p| p.pos);
                     let target_pos = if m.target_id == 0 {
                         Some(ctx.host_player_pos)
                     } else {
@@ -1529,6 +1589,19 @@ pub(crate) fn process_server_inbox(
                         let dz = ap[2] - tp[2];
                         let d2 = dx * dx + dy * dy + dz * dz;
                         if d2 <= (pvp_reach + 1.0).powi(2) {
+                            // W471: wear the remote attacker's
+                            // weapon on the AUTHORITATIVE copy
+                            // (the attacker's own client applies
+                            // the same wear as prediction).
+                            let sel = attacker
+                                .map(|p| p.sel)
+                                .unwrap_or(SEL_NONE);
+                            wear_client_weapon(
+                                inventories,
+                                pending_inv_sends,
+                                client_id,
+                                sel,
+                            );
                             if m.target_id == 0 {
                                 // Host is the target.
                                 *ctx.pvp_self_damage += pvp_damage;

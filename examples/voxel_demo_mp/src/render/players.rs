@@ -54,6 +54,9 @@ pub(crate) fn draw(
             pos: [l.pos.x, l.pos.y, l.pos.z],
             yaw: l.yaw,
             pitch: l.pitch,
+            // W471: pose-only render entry; the wear-routing slot
+            // field is irrelevant here.
+            sel: crate::net::SEL_NONE,
         });
     }
     if render_list.is_empty() {

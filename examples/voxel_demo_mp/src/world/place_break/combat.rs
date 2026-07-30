@@ -36,6 +36,22 @@ pub(crate) fn apply_combat(
     {
         vx.stamina = (vx.stamina - 3.0).max(0.0);
     }
+    // W471: melee wear (MC `ItemStack.postHurtEnemy` reading the
+    // `Weapon.item_damage_per_attack` component: swords 1, digger
+    // tools 2). One wear application per landed swing, on whatever
+    // the attacker holds; the helper no-ops for non-weapons and in
+    // creative. Clients apply this as PREDICTION on their own
+    // mirror - the server wears the authoritative `ClientInv` copy
+    // when it validates the hit and the next snapshot reconciles.
+    if attack_player.is_some() || attack_mob.is_some() {
+        let wear = vx
+            .inventory
+            .get(vx.selected_slot)
+            .and_then(|s| s.as_ref())
+            .map(|st| crate::item::durability::attack_wear_amount(st.id))
+            .unwrap_or(0);
+        vx.wear_selected_stack(wear);
+    }
     if let Some(target_id) = attack_player {
         let held = vx
             .inventory

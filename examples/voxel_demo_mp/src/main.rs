@@ -13,8 +13,10 @@
 //! - `"vx.edit"` carries `EditMsg { x, y, z, block }` for a single
 //!   block-edit (server -> all clients on apply; client -> server
 //!   as a request).
-//! - `"vx.player"` carries `PlayerMsg { id, pos, yaw, pitch }` for
-//!   pose broadcasts so each client can render others as cubes.
+//! - `"vx.player"` carries `PlayerMsg { id, pos, yaw, pitch, sel }`
+//!   for pose broadcasts so each client can render others as cubes
+//!   (W471: `sel` = sender's selected hotbar slot, used server-side
+//!   for durability wear on validated breaks / hits).
 
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::process::ExitCode;

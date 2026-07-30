@@ -396,6 +396,31 @@ pub(crate) fn armor_totals(voxel: &Voxel) -> (f32, f32) {
     (def, tough)
 }
 
+/// W471: wear every worn damageable armor piece after a hit that
+/// armor mitigates - the `LivingEntity.doHurtEquipment` port
+/// (`durabilityDamage = (int)max(1.0, damage / 4.0)` to each of
+/// the four humanoid slots). `damage` is the PRE-mitigation
+/// amount, exactly as `getDamageAfterArmorAbsorb` passes it to
+/// `hurtArmor`. A piece that reaches its max damage disappears
+/// from its slot with the MC break sound. Caller has already
+/// cleared the creative / godmode / invuln gates, so the wear
+/// itself is unconditional (creative=false).
+pub(crate) fn wear_armor_pieces(voxel: &mut Voxel, damage: f32) {
+    let per_piece = crate::item::durability::armor_wear_amount(damage);
+    if per_piece == 0 {
+        return;
+    }
+    let mut broke_any = false;
+    for slot in voxel.armor_slots.iter_mut() {
+        if crate::item::durability::hurt_and_break(slot, per_piece, false) {
+            broke_any = true;
+        }
+    }
+    if broke_any {
+        voxel.play_item_break_fx();
+    }
+}
+
 pub(crate) fn apply_damage_kind(voxel: &mut Voxel, amount: f32, kind: DamageKind) {
     if amount <= 0.0 {
         return;
@@ -403,8 +428,17 @@ pub(crate) fn apply_damage_kind(voxel: &mut Voxel, amount: f32, kind: DamageKind
     // W419: armor absorbs physical + burn damage
     // (CombatRules.getDamageAfterAbsorb); drowning and the void
     // bypass it like MC. (Fall damage rides Generic here -
-    // splitting it into its own kind is a follow-up.)
-    let amount = if matches!(kind, DamageKind::Generic | DamageKind::Burn) {
+    // splitting it into its own kind is a follow-up... which W420
+    // did: Fall is its own kind and bypasses, like the MC
+    // `fall` row in the `bypasses_armor` damage-type tag.)
+    // W471: the same kind set drives armor WEAR below - MC calls
+    // `hurtArmor` inside `getDamageAfterArmorAbsorb`, i.e. armor
+    // wears exactly when it mitigates, with the PRE-mitigation
+    // damage amount.
+    let armor_mitigates =
+        matches!(kind, DamageKind::Generic | DamageKind::Burn);
+    let pre_mitigation = amount;
+    let amount = if armor_mitigates {
         let (def, tough) = armor_totals(voxel);
         if def > 0.0 {
             let f = 2.0 + tough / 4.0;
@@ -433,6 +467,15 @@ pub(crate) fn apply_damage_kind(voxel: &mut Voxel, amount: f32, kind: DamageKind
     // respawn can't be insta-killed by lingering mobs.
     if voxel.invuln_remaining > 0.0 {
         return;
+    }
+    // W471: armor wear - now that every no-damage early-out has
+    // passed (MC skips `actuallyHurt` entirely for invulnerable
+    // players). Each worn damageable piece takes
+    // `max(1, floor(pre_mitigation / 4))` (`Player.hurtArmor` ->
+    // `doHurtEquipment` over FEET/LEGS/CHEST/HEAD); a piece that
+    // reaches max damage breaks off the body.
+    if armor_mitigates {
+        wear_armor_pieces(voxel, pre_mitigation);
     }
     let prev_int = voxel.player_health.ceil() as i32;
     voxel.player_health = (voxel.player_health - amount).max(0.0);

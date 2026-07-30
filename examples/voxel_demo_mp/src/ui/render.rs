@@ -561,13 +561,17 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             .iter()
             .map(|s| icon(s.as_ref().map(|st| (BlockId(st.id), st.count))))
             .collect();
-        // W5.2b/W466: per-slot durability snapshot for the slot
-        // widgets, computed from each stack's components.damage
-        // (damage counts UP; the widget wants remaining/max).
-        // Snapshotted so the egui closure can borrow it alongside
-        // the mutable `&mut vx.inventory` capture without
-        // colliding. Slots with damage 0 report None - the bar
-        // stays hidden for untouched tools, as before.
+        // W5.2b/W466/W471: per-slot durability snapshot for the
+        // slot widgets, computed from each stack's
+        // components.damage (damage counts UP; the widget wants
+        // remaining/max). The denominator comes from the generated
+        // MC max-damage table (`item::max_damage_for`), so every
+        // damageable item - tools, armor, flint+steel, bow, shears
+        // - shows the bar. Snapshotted so the egui closure can
+        // borrow it alongside the mutable `&mut vx.inventory`
+        // capture without colliding. Slots with damage 0 report
+        // None - the bar stays hidden for untouched items (MC
+        // `isBarVisible` = isDamaged).
         let item_durability_snapshot: Vec<Option<(u16, u16)>> = vx
             .inventory
             .iter()
@@ -576,11 +580,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     if st.components.damage == 0 {
                         return None;
                     }
-                    let max = if st.id == block::FLINT_AND_STEEL_ID {
-                        block::FLINT_AND_STEEL_MAX_USES
-                    } else {
-                        crate::item::tool_max_durability(st.id)?
-                    };
+                    let max = crate::item::max_damage_for(st.id)?;
                     Some((max.saturating_sub(st.components.damage), max))
                 })
             })

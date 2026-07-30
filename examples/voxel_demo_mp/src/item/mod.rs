@@ -24,6 +24,8 @@
 //! reading the block table directly while the new inventory plumbing
 //! (chest contents, crafting outputs, ...) consults `item_type`.
 
+pub(crate) mod durability;
+pub(crate) mod durability_table;
 pub(crate) mod icons;
 pub(crate) mod stack;
 
@@ -33,6 +35,10 @@ pub(crate) mod stack;
 // container hop, hence the targeted allow.
 #[allow(unused_imports)]
 pub(crate) use stack::{ItemComponents, ItemStack};
+
+// W471: id-keyed durability lookup (generated MC max-damage table).
+#[allow(unused_imports)]
+pub(crate) use durability::max_damage_for;
 
 #[cfg(test)]
 mod item_tests;
@@ -2821,41 +2827,10 @@ pub(crate) fn item_max_stack(id: u16) -> u8 {
     it.max_stack
 }
 
-/// W175: max durability for a tool / weapon, or `None` for items that
-/// don't wear out. Type detected by the tool-name shape (matches the
-/// stack=1 tool list); tier by the material suffix using MC's values
-/// (wood 59, gold 32, stone 131, iron 250, diamond 1561, netherite
-/// 2031). Drives the per-slot durability tracker + the break-on-zero.
-pub(crate) fn tool_max_durability(item_id: u16) -> Option<u16> {
-    let it = item_type(item_id)?;
-    let n = it.name;
-    let is_tool = n.contains("pickaxe")
-        || n.contains("shovel")
-        || n.starts_with("axe_")
-        || n.ends_with("_axe")
-        || n.contains("sword")
-        || n.starts_with("hoe_")
-        || n.ends_with("_hoe");
-    if !is_tool {
-        return None;
-    }
-    let max = if n.ends_with("_wood") || n.ends_with("_wooden") {
-        59
-    } else if n.ends_with("_gold") || n.ends_with("_golden") {
-        32
-    } else if n.ends_with("_stone") {
-        131
-    } else if n.ends_with("_iron") {
-        250
-    } else if n.ends_with("_diamond") {
-        1561
-    } else if n.ends_with("_netherite") {
-        2031
-    } else {
-        return None; // unknown tier - treat as unbreakable rather than guess
-    };
-    Some(max)
-}
+// W175 note: the old name-shape `tool_max_durability` lived here;
+// W471 replaced it with the generated-table lookup
+// `durability::max_damage_for` (covers armor + the durability-only
+// items too, values pinned from the MC 26.1.2 source).
 
 /// W53.3: return the MC-strict max_stack for items the ITEM_TYPES
 /// table is wrong about. `None` = no override (use the table value).
@@ -3054,18 +3029,18 @@ pub(crate) fn block_top_tile_for_item(id: u16) -> Option<&'static TileSpec> {
 mod tests {
     use super::*;
 
-    /// W175: tools wear out by material tier (MC durabilities);
-    /// non-tools are unbreakable (None).
+    /// W175/W471: tools wear out by material tier (MC durabilities,
+    /// now via the generated table); non-tools are unbreakable.
     #[test]
     fn tool_durability_by_tier() {
         // pickaxe_wood = 59, pickaxe_iron = 250, pickaxe_diamond = 1561.
-        assert_eq!(tool_max_durability(16), Some(59)); // pickaxe_wood
-        assert_eq!(tool_max_durability(18), Some(250)); // pickaxe_iron
-        assert_eq!(tool_max_durability(155), Some(1561)); // pickaxe_diamond
-        assert_eq!(tool_max_durability(154), Some(32)); // pickaxe_gold
-        assert_eq!(tool_max_durability(274), Some(2031)); // pickaxe_netherite
+        assert_eq!(max_damage_for(16), Some(59)); // pickaxe_wood
+        assert_eq!(max_damage_for(18), Some(250)); // pickaxe_iron
+        assert_eq!(max_damage_for(155), Some(1561)); // pickaxe_diamond
+        assert_eq!(max_damage_for(154), Some(32)); // pickaxe_gold
+        assert_eq!(max_damage_for(274), Some(2031)); // pickaxe_netherite
         // A plain block / ingredient never wears out.
-        assert_eq!(tool_max_durability(1), None); // stone block
+        assert_eq!(max_damage_for(1), None); // stone block
     }
 
     #[test]

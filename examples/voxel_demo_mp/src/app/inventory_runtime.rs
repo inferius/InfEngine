@@ -5,51 +5,46 @@ use crate::lighting::HaloLighting;
 
 impl Voxel {
 
-    /// W5.2b/W466: register one use of the currently-held
+    /// W5.2b/W466/W471: register one use of the currently-held
     /// flint+steel after a successful ignition (portal frame OR
-    /// fire block). Damage counts UP on the stack's components;
-    /// when it reaches `FLINT_AND_STEEL_MAX_USES` the tool burns
-    /// out and the slot empties (same 64-use budget as before the
-    /// ItemStack fold - a fresh tool has damage 0).
+    /// fire block). MC `FlintAndSteelItem.useOn` calls
+    /// `hurtAndBreak(1)`: one wear point per use, break at the
+    /// table max (64), creative never wears (infinite-materials
+    /// gate).
     ///
     /// Idempotent across non-flint+steel held items - a Cobble in
     /// hand never triggered ignition in the first place, so the
     /// fn only fires when the caller already verified `held.id ==
-    /// FLINT_AND_STEEL_ID`.
+    /// FLINT_AND_STEEL_ID` (and a plain block has no max_damage
+    /// row anyway).
     pub(crate) fn consume_flint_and_steel_use(&mut self) {
+        self.wear_selected_stack(1);
+    }
+
+    /// W471: apply `amount` wear points to the SELECTED hotbar
+    /// stack through the central `hurt_and_break` port. Plays the
+    /// MC break feedback (`entity.item.break`) and leaves the slot
+    /// empty when the item breaks. No-op in creative and for items
+    /// without a max_damage row.
+    pub(crate) fn wear_selected_stack(&mut self, amount: u16) {
         let slot_idx = self.selected_slot;
-        let Some(stack) = self.inventory[slot_idx].as_mut() else {
+        let Some(slot) = self.inventory.get_mut(slot_idx) else {
             return;
         };
-        let damage = stack.components.damage.saturating_add(1);
-        if damage >= block::FLINT_AND_STEEL_MAX_USES {
-            // Burn out: clear the slot.
-            self.inventory[slot_idx] = None;
-        } else {
-            stack.components.damage = damage;
+        let creative = self.abilities.instabuild;
+        if crate::item::durability::hurt_and_break(slot, amount, creative) {
+            self.play_item_break_fx();
         }
     }
 
-    /// W175/W466: register one use of the held tool (a block mined /
-    /// a mob hit). Damage counts UP from 0 on the stack's
-    /// components; at the tool's max the tool breaks and the slot
-    /// clears. No-op when the held item isn't a tool (or is
-    /// unbreakable). Generalises `consume_flint_and_steel_use` to
-    /// the whole tool/weapon set via `item::tool_max_durability`.
-    pub(crate) fn consume_tool_durability(&mut self) {
-        let slot_idx = self.selected_slot;
-        let Some(stack) = self.inventory[slot_idx].as_mut() else {
-            return;
-        };
-        let Some(max) = crate::item::tool_max_durability(stack.id) else {
-            return;
-        };
-        let damage = stack.components.damage.saturating_add(1);
-        if damage >= max {
-            self.inventory[slot_idx] = None;
-        } else {
-            stack.components.damage = damage;
-        }
+    /// W471: MC item-break feedback (`LivingEntity.breakItem`):
+    /// `entity.item.break` at the player. Synth opt-out - silence
+    /// beats a beep when the pack misses the event (W56.1 rule).
+    /// The source also sprays 5 item particles; skipped until an
+    /// item-particle path exists.
+    pub(crate) fn play_item_break_fx(&mut self) {
+        let pos = [self.player_pos.x, self.player_pos.y, self.player_pos.z];
+        self.sfx_at("item/break", pos, |_, _| {});
     }
 
     /// Register a successful pickup of `n` items for the floating

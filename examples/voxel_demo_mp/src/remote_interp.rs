@@ -75,6 +75,8 @@ impl RemoteInterp {
             ],
             yaw: lerp_angle(self.prev.yaw, self.current.yaw),
             pitch: lerp_angle(self.prev.pitch, self.current.pitch),
+            // W471: discrete state - snap to the latest snapshot.
+            sel: self.current.sel,
         }
     }
 }

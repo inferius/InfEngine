@@ -237,14 +237,22 @@ pub(crate) fn draw_slot_widget_with_durability(
             );
         }
     }
-    // W5.2b: durability bar along the bottom edge. Hidden when
-    // cur == max (untouched tool) so the cell stays clean until
-    // the player actually wears it down.
+    // W5.2b/W471: durability bar along the bottom edge. Hidden
+    // when cur == max (untouched item), matching MC
+    // `isBarVisible` (damage > 0). The MC bar is 13 device pixels
+    // wide (`getBarWidth` = round(13 - damage*13/max)); our cell
+    // is wider, so the width fraction is quantized to the same 13
+    // steps instead. Color follows `getBarColor` exactly:
+    // hsv(remaining_frac / 3, 1, 1) - a red -> yellow -> green
+    // hue sweep over the CONTINUOUS remaining fraction (the RGB
+    // piecewise form below is that hue formula expanded).
     if let Some((cur, max)) = durability
         && cur < max
         && max > 0
     {
         let frac = (cur as f32 / max as f32).clamp(0.0, 1.0);
+        // getBarWidth: round(13 * remaining/max) thirteenths.
+        let width_frac = (frac * 13.0).round() / 13.0;
         // Bar geometry: inset 4px on each side, 4px tall, sitting
         // 4px above the cell's bottom edge.
         let bar_rect = egui::Rect::from_min_max(
@@ -254,12 +262,16 @@ pub(crate) fn draw_slot_widget_with_durability(
         // Dark backing so the gradient stays legible against the
         // bright stack-count badge or icon.
         painter.rect_filled(bar_rect, 1.0, egui::Color32::from_gray(20));
-        // Gradient: red (0%) -> yellow (50%) -> green (100%).
+        // hsvToRgb(frac / 3, 1, 1) expanded: hue 0 = red, 1/6 =
+        // yellow, 1/3 = green.
         let r = if frac < 0.5 { 255 } else { (255.0 * (1.0 - frac) * 2.0) as u8 };
         let g = if frac < 0.5 { (255.0 * frac * 2.0) as u8 } else { 255 };
         let fill_rect = egui::Rect::from_min_max(
             bar_rect.min,
-            egui::pos2(bar_rect.min.x + bar_rect.width() * frac, bar_rect.max.y),
+            egui::pos2(
+                bar_rect.min.x + bar_rect.width() * width_frac,
+                bar_rect.max.y,
+            ),
         );
         painter.rect_filled(fill_rect, 1.0, egui::Color32::from_rgb(r, g, 0));
     }

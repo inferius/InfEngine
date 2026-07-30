@@ -88,6 +88,11 @@ pub(crate) const PORTAL_ID: u16 = 47;
 pub(crate) const FLINT_AND_STEEL_ID: u16 = 48;
 /// W5.2b: max uses of a fresh flint+steel. Matches MC's 64-use
 /// budget; every ignition (portal frame OR fire block) decrements.
+/// W471: runtime lookups moved to the generated
+/// `item::max_damage_for` table - the const survives as the
+/// test-side cross-check anchor (a durability test asserts the
+/// table row equals it).
+#[cfg(test)]
 pub(crate) const FLINT_AND_STEEL_MAX_USES: u16 = 64;
 /// Fire block id (Q.4b). Per-cell age (0..=15) lives in the
 /// parallel `Voxel::fires` HashMap (same pattern as chests +

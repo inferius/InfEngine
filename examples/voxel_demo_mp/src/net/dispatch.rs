@@ -27,6 +27,17 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         let player_pos = vx.player_pos;
         let player_yaw = vx.player_yaw;
         let player_pitch = vx.player_pitch;
+        // W471: selected hotbar slot rides on the pose so the
+        // server can wear the right authoritative inventory slot
+        // when it validates this player's breaks / melee hits.
+        // Instabuild (creative) sends the no-wear sentinel - game
+        // mode is client-local in this engine, so the pose is
+        // where the server learns about it.
+        let player_sel = if vx.abilities.instabuild {
+            net::SEL_NONE
+        } else {
+            vx.selected_slot.min(net::SEL_NONE as usize) as u8
+        };
         // Retransmit period (in net ticks) for pending unsynced
         // payloads. UDP losses are rare on LAN so resending every
         // tick is wasteful; every 4 ticks is roughly 67 ms at
@@ -182,6 +193,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         pos: [player_pos.x, player_pos.y, player_pos.z],
                         yaw: player_yaw,
                         pitch: player_pitch,
+                        sel: player_sel,
                     },
                 );
                 // Raw inbound per client: (client_id, edit) +
@@ -464,6 +476,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         pos: [1e9, 1e9, 1e9],
                         yaw: 0.0,
                         pitch: 0.0,
+                        sel: net::SEL_NONE,
                     });
                     let voxel_center = [
                         e.x as f32 + 0.5,
@@ -501,11 +514,34 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         // pickup, then apply.
                         let voxel = [e.x, e.y, e.z];
                         let broken = vx.world.get(voxel);
-                        if broken != BlockId::AIR
-                            && let Some(inv) = inventories.get_mut(&cid)
-                            && crate::inventory::inv_pickup(&mut inv.inventory, broken)
-                        {
-                            pending_inv_sends.insert(cid);
+                        if broken != BlockId::AIR {
+                            if let Some(inv) = inventories.get_mut(&cid)
+                                && crate::inventory::inv_pickup(
+                                    &mut inv.inventory,
+                                    broken,
+                                )
+                            {
+                                pending_inv_sends.insert(cid);
+                            }
+                            // W471: wear the breaker's held tool on
+                            // the AUTHORITATIVE inventory (the
+                            // client already predicted the same
+                            // wear locally; the snapshot confirms
+                            // it). Same block-side gate as the
+                            // local path: no wear for liquid
+                            // scoops / zero-hardness cells
+                            // (Item.mineBlock destroySpeed != 0).
+                            if !crate::block::block_is_liquid(broken)
+                                && crate::block_hardness(broken) != 0.0
+                            {
+                                net::wear_client_selected(
+                                    inventories,
+                                    pending_inv_sends,
+                                    cid,
+                                    pose.sel,
+                                    crate::item::durability::mine_wear_amount,
+                                );
+                            }
                         }
                         to_apply.push(e);
                     } else {
@@ -687,6 +723,7 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                     pos: [player_pos.x, player_pos.y, player_pos.z],
                     yaw: player_yaw,
                     pitch: player_pitch,
+                    sel: player_sel,
                 };
                 if let Ok(buf) = bincode::serde::encode_to_vec(me, cfg) {
                     let _ = client.send_bytes("vx.player", buf);
@@ -1055,6 +1092,25 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                 _ => false,
             };
             if ok {
+                // W471: wear the remote attacker's weapon on the
+                // authoritative inventory (the client predicted
+                // the same wear; the queued snapshot confirms).
+                if let NetRole::Server {
+                    inventories,
+                    pending_inv_sends,
+                    ..
+                } = &mut vx.net
+                {
+                    let sel = sender_pose
+                        .map(|p| p.sel)
+                        .unwrap_or(net::SEL_NONE);
+                    net::wear_client_weapon(
+                        inventories,
+                        pending_inv_sends,
+                        cid,
+                        sel,
+                    );
+                }
                 vx.damage_mob(mob_id, Some(cid));
             }
         }

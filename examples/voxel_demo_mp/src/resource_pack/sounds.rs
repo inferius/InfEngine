@@ -462,6 +462,8 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("eat", "entity.generic.eat"),
     ("burp", "entity.player.burp"),
     ("item/pickup", "entity.item.pickup"),
+    // W471: durability break feedback (LivingEntity.breakItem).
+    ("item/break", "entity.item.break"),
     ("xp/pickup", "entity.experience_orb.pickup"),
     ("player/levelup", "entity.player.levelup"),
     // W123 - weather + world ambience.

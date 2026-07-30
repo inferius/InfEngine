@@ -30,8 +30,8 @@ use super::item_max_stack;
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) struct ItemComponents {
     /// Wear counter, counting UP from 0 (MC `damage` component).
-    /// The item breaks when damage reaches the item's max uses
-    /// (`FLINT_AND_STEEL_MAX_USES` / `tool_max_durability`).
+    /// The item breaks when damage reaches the item's max damage
+    /// (W471: `item::max_damage_for`, generated from the MC source).
     #[serde(default)]
     pub damage: u16,
     /// `(enchant_id, level)` pairs (MC `enchantments`). Unused
