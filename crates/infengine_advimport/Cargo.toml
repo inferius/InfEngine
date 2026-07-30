@@ -1,0 +1,25 @@
+[package]
+name = "infengine_advimport"
+description = "Offline importer that converts adventure-game data files into InfEngine's room format. Not a runtime dependency of the engine."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+infengine_adventure = { path = "../infengine_adventure" }
+glam = { workspace = true }
+image = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+
+[[bin]]
+name = "adv-import"
+path = "src/bin/adv_import.rs"

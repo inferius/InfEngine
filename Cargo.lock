@@ -2277,6 +2277,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "infengine_advimport"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "glam 0.30.10",
+ "image",
+ "infengine_adventure",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "infengine_assets"
 version = "0.0.1"
 dependencies = [

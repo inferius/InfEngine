@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/infengine_adventure",
+    "crates/infengine_advimport",
     "crates/infengine_core",
     "crates/infengine_window",
     "crates/infengine_render",

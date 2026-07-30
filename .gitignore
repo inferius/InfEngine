@@ -81,3 +81,11 @@ mc_assets.zip
 # W245.2 exception: the embedded village template data (~780 KB,
 # include_bytes! source - the build breaks without it).
 !examples/voxel_demo_mp/src/worldgen/mcgen/data/village_data.zip
+
+# Imported adventure-game assets.
+# adv-import converts data the user already owns into our format. That
+# output is derived from someone else's copyrighted work and must never
+# be committed or redistributed - only the decoders are ours to ship.
+/imported/
+**/imported/
+*.room.ron.imported
