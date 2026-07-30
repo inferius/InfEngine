@@ -26,6 +26,8 @@ pub struct ImportReport {
     pub images: usize,
     /// Room stubs written.
     pub rooms: usize,
+    /// Rooms that arrived with a walkable floor traced from a mask.
+    pub masks: usize,
     pub skipped: Vec<Skipped>,
 }
 
@@ -40,6 +42,7 @@ impl ImportReport {
         self.archives += other.archives;
         self.images += other.images;
         self.rooms += other.rooms;
+        self.masks += other.masks;
         self.skipped.extend(other.skipped);
     }
 
@@ -71,8 +74,8 @@ impl fmt::Display for ImportReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "{} archives, {} images, {} rooms",
-            self.archives, self.images, self.rooms
+            "{} archives, {} images, {} rooms ({} with a traced floor)",
+            self.archives, self.images, self.rooms, self.masks
         )?;
         if self.skipped.is_empty() {
             return write!(f, "nothing skipped");
@@ -116,17 +119,20 @@ mod tests {
             archives: 1,
             images: 2,
             rooms: 2,
+            masks: 1,
             skipped: vec![skip("x", "bad")],
         };
         a.absorb(ImportReport {
             archives: 3,
             images: 4,
             rooms: 4,
+            masks: 3,
             skipped: vec![skip("y", "worse")],
         });
         assert_eq!(a.archives, 4);
         assert_eq!(a.images, 6);
         assert_eq!(a.rooms, 6);
+        assert_eq!(a.masks, 4);
         assert_eq!(a.skipped.len(), 2);
     }
 
@@ -152,13 +158,14 @@ mod tests {
             archives: 2,
             images: 5,
             rooms: 5,
+            masks: 5,
             skipped: vec![
                 skip("a", "not a full screen (12 pixels)"),
                 skip("b", "not a full screen (48 pixels)"),
             ],
         };
         let text = report.to_string();
-        assert!(text.contains("2 archives, 5 images, 5 rooms"));
+        assert!(text.contains("2 archives, 5 images, 5 rooms (5 with a traced floor)"));
         assert!(text.contains("2 skipped"));
         assert!(text.contains("not a full screen"));
         // The individual entry names are not spelled out.
@@ -171,6 +178,7 @@ mod tests {
             archives: 1,
             images: 1,
             rooms: 1,
+            masks: 1,
             skipped: Vec::new(),
         };
         assert!(report.to_string().contains("nothing skipped"));

@@ -12,6 +12,7 @@
 
 pub mod cps;
 pub mod format80;
+pub mod msc;
 pub mod pak;
 pub mod palette;
 pub mod roomdat;
@@ -194,7 +195,13 @@ pub fn import_pak(
         let image_path = out_dir.join(&image_rel);
         write_png(&image_path, image.width, image.height, &rgba)?;
 
-        let room = background_room(&name, image.width, image.height, &image_rel);
+        let mut room = background_room(&name, image.width, image.height, &image_rel);
+        // A5.2: the game's own walkable region, so an imported room
+        // arrives with a floor instead of an empty one to trace by hand.
+        if let Some(area) = walk_area_for(&pak, stem_of_entry) {
+            room.walk = area;
+            report.masks += 1;
+        }
         let room_path = out_dir.join(ROOM_DIR).join(format!("{name}.room.ron"));
         infengine_adventure::save(&room, &room_path).map_err(|source| ImportError::WriteRoom {
             path: room_path.display().to_string(),
@@ -207,6 +214,24 @@ pub fn import_pak(
     }
 
     Ok(())
+}
+
+/// Walkable region for `stem`, traced from its `.MSC` mask.
+///
+/// Returns `None` when the archive has no mask or it does not decode -
+/// the room still imports, just without a floor.
+fn walk_area_for(pak: &pak::Pak<'_>, stem: &str) -> Option<infengine_adventure::WalkArea> {
+    let data = pak.get(&format!("{stem}.MSC"))?;
+    match msc::decode(data) {
+        Ok(mask) => {
+            let area = mask.to_walk_area();
+            if area.is_empty() { None } else { Some(area) }
+        }
+        Err(err) => {
+            debug!(stem, %err, "room mask did not decode");
+            None
+        }
+    }
 }
 
 /// The room-specific palette for `stem`, built by applying the override

@@ -38,7 +38,8 @@ pub enum Compression {
 }
 
 impl Compression {
-    fn from_code(code: u16) -> Self {
+    /// Decode the header's compression field.
+    pub(crate) fn from_code(code: u16) -> Self {
         match code {
             0 => Self::None,
             1 => Self::Lzw12,
