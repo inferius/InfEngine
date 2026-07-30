@@ -1,0 +1,19 @@
+[package]
+name = "infengine_adventure"
+description = "Point-and-click adventure runtime for InfEngine: rooms, walkable areas, hotspots, actor scaling."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+glam = { workspace = true }
+serde = { workspace = true }
+ron = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
