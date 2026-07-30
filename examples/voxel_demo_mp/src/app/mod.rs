@@ -910,11 +910,6 @@ pub(crate) struct Voxel {
     /// WORLD_DATA_VERSION) is open - gates the legacy per-chunk
     /// fixups in `world_save::fixups`. Current saves never scrub.
     pub(crate) save_fixups_pending: bool,
-    /// W458: per-villager trade XP this session (drives the MC
-    /// Novice..Master tier unlocks). Same lifecycle as
-    /// mob_professions (the workstation claim); persistence rides
-    /// the next containers format bump.
-    pub(crate) villager_trade_xp: std::collections::HashMap<u32, u32>,
     /// W341: session cache of claimed professions (mob id ->
     /// workstation-derived profession). Save persistence is a
     /// follow-up (MobSave field).

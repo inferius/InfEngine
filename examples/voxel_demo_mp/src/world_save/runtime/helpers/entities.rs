@@ -39,6 +39,7 @@ pub(in crate::world_save::runtime) fn build_dimension_entities_from(
             baby_left: m.baby_left,
             tamed: m.tamed,
             temper: m.temper,
+            trade_xp: m.trade_xp,
         })
         .collect();
     // Deterministic order keeps identical saves byte-identical.
@@ -114,6 +115,8 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
         // W348 (v4): tame state survives reload.
         mob.tamed = m.tamed;
         mob.temper = m.temper;
+        // W459 (v5): villager trade XP survives reload.
+        mob.trade_xp = m.trade_xp;
         voxel.mobs.push(mob);
     }
     // W302: the spawned-anchor set (v2 saves migrate with an empty

@@ -31,6 +31,7 @@ use super::chunks::{
 use super::entities::{
     DimensionEntities, ENTITIES_FORMAT_VERSION, ENTITIES_MAGIC, entities_path_in_dir,
     entities_v1_to_v2, entities_v2_to_v3, entities_v3_to_v4,
+    entities_v4_to_v5,
     read_entities_in_dir_with_registry,
     write_entities_in_dir,
 };
@@ -376,6 +377,8 @@ fn entities_migration_v0_to_v1_round_trip() {
     registry.register(SaveKind::Entities, 2, 3, entities_v2_to_v3);
     // W348: ...and on to v4 (tamed/temper).
     registry.register(SaveKind::Entities, 3, 4, entities_v3_to_v4);
+    // W459: ...and on to v5 (trade_xp).
+    registry.register(SaveKind::Entities, 4, 5, entities_v4_to_v5);
 
     let loaded = read_entities_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()

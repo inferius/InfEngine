@@ -271,6 +271,14 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         4,
         super::entities::entities_v3_to_v4,
     );
+    // W459: entities v4 -> v5 adds per-mob trade_xp (villager
+    // levelling survives reload).
+    reg.register(
+        SaveKind::Entities,
+        4,
+        5,
+        super::entities::entities_v4_to_v5,
+    );
     // W138: containers v3 -> v4 adds doors / chest facings /
     // brewing stands / levers-on (the runtime block-state maps
     // that were never persisted - reloaded doors rendered open-

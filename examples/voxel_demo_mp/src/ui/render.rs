@@ -681,11 +681,16 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     .unwrap_or_else(|| crate::trades::profession_for(id))
             })
             .unwrap_or("");
-        // W458: villager trade level from the session XP map.
+        // W458/W459: villager trade level from the mob's persisted
+        // XP (MC VillagerData).
         let trade_level: u8 = trade_open_id
             .map(|id| {
                 crate::trades::level_for_xp(
-                    vx.villager_trade_xp.get(&id).copied().unwrap_or(0),
+                    vx.mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .map(|m| m.trade_xp)
+                        .unwrap_or(0),
                 )
             })
             .unwrap_or(1);
@@ -3654,13 +3659,16 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         }
                         vx.inventory[si] = slot.map(|(b, c)| (BlockId(b), c));
                     }
-                    // W458: villager XP per completed trade drives
-                    // the Novice..Master tier unlocks (MC
-                    // VillagerData thresholds in trades.rs).
-                    if let Some(mid) = trade_open_id {
-                        let e =
-                            vx.villager_trade_xp.entry(mid).or_insert(0);
-                        *e = e.saturating_add(t.xp as u32);
+                    // W458/W459: villager XP per completed trade
+                    // drives the Novice..Master tier unlocks (MC
+                    // VillagerData thresholds); lives ON the mob so
+                    // it parks per dim and persists (entities v5).
+                    if let Some(mid) = trade_open_id
+                        && let Some(m) =
+                            vx.mobs.iter_mut().find(|m| m.id == mid)
+                    {
+                        m.trade_xp =
+                            m.trade_xp.saturating_add(t.xp as u32);
                     }
                 }
             }

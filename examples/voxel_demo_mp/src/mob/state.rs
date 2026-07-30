@@ -101,6 +101,9 @@ pub(crate) struct MobState {
     /// W348: MC temper 0..100 - each buck adds 5, the tame roll is
     /// rand(100) < temper. Persisted (entities v4).
     pub(crate) temper: u8,
+    /// W459: MC VillagerData accumulated trade XP (Novice..Master
+    /// tier unlocks). Persisted (entities v5).
+    pub(crate) trade_xp: u32,
 }
 
 impl MobState {
@@ -143,6 +146,7 @@ impl MobState {
             baby_left: 0.0,
             tamed: false,
             temper: 0,
+            trade_xp: 0,
         }
     }
 }
