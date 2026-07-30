@@ -38,18 +38,18 @@ pub(crate) fn open_furnace(vx: &mut crate::Voxel, pos: [i32; 3]) {
 /// authoritative state when running as Client. Pending mouse flags
 /// cleared so the click doesn't replay against the world.
 pub(crate) fn open_chest(vx: &mut crate::Voxel, pos: [i32; 3]) {
-    use crate::block;
     use crate::net::NetRole;
-    vx.chests
-        .entry(pos)
-        .or_insert_with(block::chest::new_chest);
-    vx.chest_open = Some(pos);
+    // W472: a double chest opens as ONE 54-slot menu keyed by the
+    // canonical PRIMARY half (both halves minted so the pairing
+    // check passes on freshly-streamed clients too).
+    let (primary, _) = crate::net::container_apply::chest_canonical(vx, pos);
+    vx.chest_open = Some(primary);
     // W126: MC chest-open creak (real OGG; silent without the pack).
     let spos = [pos[0] as f32 + 0.5, pos[1] as f32 + 0.5, pos[2] as f32 + 0.5];
     vx.sfx_at("container/chest/open", spos, |_, _| {});
     if let NetRole::Client { client, .. } = &mut vx.net {
         let cfg = bincode::config::standard();
-        let msg = crate::net::ChestOpenMsg { pos };
+        let msg = crate::net::ChestOpenMsg { pos: primary };
         if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
             let _ = client.send_bytes("vx.chest_open", buf);
         }

@@ -389,6 +389,17 @@ pub(crate) struct Voxel {
     /// piece's components (damage / future enchants survive the
     /// hand -> body -> hand round trip).
     pub(crate) armor_slots: [Option<crate::item::ItemStack>; 4],
+    /// W472: the inventory screen's cursor-held stack (the E
+    /// screen is a full MC menu now). Recovered into the inventory
+    /// on close; clients mirror the host's authoritative cursor
+    /// from the `vx.inv` snapshot while the screen is open.
+    pub(crate) inv_screen_held: Option<crate::item::ItemStack>,
+    /// W472: per-client announced game mode (instabuild bool) from
+    /// the `vx.gamemode` handshake. Host-only; gates the wire
+    /// CLONE (and future creative-only ops) for remote clients.
+    /// Client-asserted trust - consistent with /gamemode being
+    /// client-local.
+    pub(crate) client_gamemodes: HashMap<u32, bool>,
     /// `true` for the last frame's "are we actually sprinting"
     /// state - used by the FOV lerp.
     pub(crate) sprinting: bool,

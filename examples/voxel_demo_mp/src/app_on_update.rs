@@ -243,6 +243,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                     } else if vx.creative_tab.open {
                         // W20.3: ESC closes the creative tab (same as E).
                         vx.creative_tab.close();
+                    } else if vx.inventory_open {
+                        // W472: ESC closes the E screen with cursor
+                        // recovery (MC parity - Esc == E here).
+                        vx.close_inventory_screen();
                     } else if mp {
                         vx.mp_menu_open = !vx.mp_menu_open;
                     } else {
@@ -378,8 +382,10 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                     let _ = client.send_bytes("vx.inv_op", buf);
                 }
             } else {
-                vx.apply_inv_action(crate::ui::InvAction::Throw {
-                    slot: crate::inventory::SlotKind::Inv(sel),
+                // W472: through the shared E-screen core (same op
+                // the wire applier consumes).
+                vx.apply_inv_screen_op(crate::net::InvOpMsg::ThrowSelected {
+                    slot: sel as u8,
                     all: drop_all,
                 });
             }
@@ -521,11 +527,18 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 // "creative-ish abilities active" proxy (today
                 // Creative is the only mode with mayfly=true).
                 // Close the survival inventory if it happened
-                // to be open from a mode switch.
-                vx.inventory_open = false;
+                // to be open from a mode switch (cursor recovery
+                // included - W472).
+                if vx.inventory_open {
+                    vx.close_inventory_screen();
+                }
                 vx.creative_tab.open_now();
+            } else if vx.inventory_open {
+                // W472: closing the E screen recovers the cursor
+                // + notifies the host.
+                vx.close_inventory_screen();
             } else {
-                vx.inventory_open = !vx.inventory_open;
+                vx.inventory_open = true;
             }
             // Drop any queued mouse-button edits the click that
             // closes the inventory would otherwise be replayed
@@ -877,15 +890,26 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
         // which also serves as the take-it-off path until the
         // inventory-panel armor slots land.
         if vx.rmb_pending
+            && vx.selected_slot < HOTBAR_SLOTS
             && let Some(held) = vx.inventory[vx.selected_slot].clone()
             && let Some((slot, _, _)) = crate::item::armor_props(held.id)
         {
-            // W469: store the STACK wholesale - equipping no longer
-            // strips components (a worn / future-enchanted piece
-            // keeps its state on the body and on the way back).
-            let prev = vx.armor_slots[slot].take();
-            vx.armor_slots[slot] = Some(held);
-            vx.inventory[vx.selected_slot] = prev;
+            // W472: RMB-equip is the world-side quick path; it now
+            // routes through the SAME screen core as the E-screen
+            // armor slots (SWAP armor <-> selected hotbar slot,
+            // accept filters + 1-caps included) and rides the wire
+            // so the host's authoritative armor follows.
+            let op = crate::net::InvOpMsg::Swap {
+                slot: crate::net::NetSlot::Armor(slot as u32),
+                hotbar: vx.selected_slot as u8,
+            };
+            vx.apply_inv_screen_op(op);
+            if let NetRole::Client { client, .. } = &mut vx.net {
+                let cfg = bincode::config::standard();
+                if let Ok(buf) = bincode::serde::encode_to_vec(op, cfg) {
+                    let _ = client.send_bytes("vx.inv_op", buf);
+                }
+            }
             vx.rmb_pending = false;
             let p = [vx.player_pos.x, vx.player_pos.y, vx.player_pos.z];
             vx.sfx_at("armor/equip", p, |_, _| {});

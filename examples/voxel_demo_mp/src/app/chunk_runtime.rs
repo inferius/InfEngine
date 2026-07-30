@@ -138,6 +138,10 @@ impl Voxel {
         self.chests.clear();
         self.chest_open = None;
         self.chest_held = None;
+        // W472: E-screen cursor + per-client game modes are
+        // session/world state too.
+        self.inv_screen_held = None;
+        self.client_gamemodes.clear();
         // W126: chest entity-render state is per-world too.
         self.chest_facing.clear();
         self.chest_lid_anim.clear();

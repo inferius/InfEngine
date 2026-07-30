@@ -59,7 +59,7 @@ use liquid::{
 };
 mod net;
 use net::{
-    ClientInv, DamageMsg, EditMsg, InvActionMsg, MobHitMsg, MobMsg, NetRole,
+    ClientInv, DamageMsg, EditMsg, MobHitMsg, MobMsg, NetRole,
     PlayerMsg, PvPHitMsg,
 };
 mod world_save;
@@ -266,10 +266,7 @@ use player::{
 use ui::{AppState, BackTo, HighlightMode, InvAction, LoadingPhase, SlotIcon, match_recipe, match_recipe_named};
 use worldgen::{Biome, WorldGen, biome_at};
 use drops::DropItem;
-use inventory::{
-    HOTBAR_SLOTS, INVENTORY_COLS, INVENTORY_ROWS, INVENTORY_SLOTS,
-    SlotKind, SplitMode, STACK_MAX, inv_apply_drag, inv_consume,
-};
+use inventory::{HOTBAR_SLOTS, INVENTORY_SLOTS, inv_consume};
 use tracing::{info, warn};
 
 // W470: the old `remap_action` single-slot GridAction remapper is

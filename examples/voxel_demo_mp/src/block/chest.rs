@@ -78,6 +78,115 @@ pub(crate) fn partner_for(
     None
 }
 
+/// W472: canonical PRIMARY half of a double-chest pair - the half
+/// whose partner sits toward `+ext_pos_dir(facing)`. MC's first
+/// container is the `ChestType.RIGHT` half, a placement-order
+/// blockstate this engine doesn't persist; the geometric rule here
+/// is the deterministic stand-in (stable across sessions - facing
+/// is persisted, and both halves agree on it). The primary keys
+/// the 54-slot menu: slots 0..26 = primary, 27..53 = partner.
+pub(crate) fn double_primary(
+    pos: [i32; 3],
+    partner: [i32; 3],
+    facing: u8,
+) -> [i32; 3] {
+    let ext = ext_pos_dir(facing);
+    if partner == [pos[0] + ext[0], pos[1], pos[2] + ext[2]] {
+        pos
+    } else {
+        partner
+    }
+}
+
+/// W472: canonicalise an arbitrary half of a (possibly) double
+/// chest to `(primary, Option<secondary>)`. Single chests return
+/// `(pos, None)`.
+pub(crate) fn canonical_pair(
+    world: &infengine_voxel::World,
+    chests: &std::collections::HashMap<[i32; 3], Container>,
+    facing: &std::collections::HashMap<[i32; 3], u8>,
+    pos: [i32; 3],
+) -> ([i32; 3], Option<[i32; 3]>) {
+    match partner_for(world, chests, facing, pos) {
+        Some(partner) => {
+            let f = facing.get(&pos).copied().unwrap_or(3);
+            let primary = double_primary(pos, partner, f);
+            let secondary = if primary == pos { partner } else { pos };
+            (primary, Some(secondary))
+        }
+        None => (pos, None),
+    }
+}
+
+/// W472: stitch the two per-position 27-slot containers into ONE
+/// 54-slot menu view (MC `CompoundContainer(first, second)`).
+/// Plain value copy - the per-position storage / save format stays
+/// untouched; `unstitch_double` writes the mutated view back.
+pub(crate) fn stitch_double(
+    first: &Container,
+    second: &Container,
+) -> Container {
+    let mut c = Container::with_size(first.len() + second.len());
+    for i in 0..first.len() {
+        c.set_slot(i, first.slot(i));
+    }
+    for i in 0..second.len() {
+        c.set_slot(first.len() + i, second.slot(i));
+    }
+    c
+}
+
+/// W472: working MENU view of the chest keyed by `primary`:
+/// the plain 27-slot container for a single, the 54-slot stitched
+/// `CompoundContainer` for a double. `None` when the primary has
+/// no container entry.
+pub(crate) fn menu_view(
+    chests: &std::collections::HashMap<[i32; 3], Container>,
+    primary: [i32; 3],
+    secondary: Option<[i32; 3]>,
+) -> Option<Container> {
+    let first = chests.get(&primary)?;
+    match secondary.and_then(|s| chests.get(&s)) {
+        Some(second) => Some(stitch_double(first, second)),
+        None => Some(first.clone()),
+    }
+}
+
+/// W472: write a mutated menu view back into per-position storage
+/// (both halves for a double). Inverse of `menu_view`.
+pub(crate) fn menu_writeback(
+    chests: &mut std::collections::HashMap<[i32; 3], Container>,
+    primary: [i32; 3],
+    secondary: Option<[i32; 3]>,
+    view: &Container,
+) {
+    match secondary {
+        Some(sec) => {
+            // Both halves must exist (menu_view built from them);
+            // guard anyway so a half broken mid-session degrades
+            // to a lossy no-op instead of a panic.
+            if let Some(first) = chests.get_mut(&primary) {
+                for i in 0..first.len().min(view.len()) {
+                    first.set_slot(i, view.slot(i));
+                }
+            }
+            let first_len = chests.get(&primary).map(|c| c.len()).unwrap_or(0);
+            if let Some(second) = chests.get_mut(&sec) {
+                for i in 0..second.len() {
+                    second.set_slot(i, view.slot(first_len + i));
+                }
+            }
+        }
+        None => {
+            if let Some(first) = chests.get_mut(&primary) {
+                for i in 0..first.len() {
+                    first.set_slot(i, view.slot(i));
+                }
+            }
+        }
+    }
+}
+
 /// Collect a chest's contents into the drop list emitted on break.
 /// W468: one FULL stack per occupied slot - counts + components
 /// spill intact (the caller spawns each via `drops::spawn_stack`).

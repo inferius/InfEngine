@@ -267,8 +267,8 @@ fn viewer_close_recovers_cursor_stack() {
 fn chest_act_to_grid_action_round_trips() {
     // The wire enum mirrors `container::ui::GridAction`. W470:
     // both directions are `Option` - the cursor throws have no
-    // slot-addressed GridAction shape and the creative clone
-    // never rides the wire.
+    // slot-addressed GridAction shape. W472: the creative clone
+    // rides the wire now (host-gated on the announced game mode).
     use crate::container::ui::GridAction;
     let cases = [
         (GridAction::Take(0), ChestAct::Take(0)),
@@ -280,6 +280,7 @@ fn chest_act_to_grid_action_round_trips() {
         (GridAction::SwapHotbar(11, 3), ChestAct::SwapHotbar(11, 3)),
         (GridAction::ThrowOne(6), ChestAct::ThrowOne(6)),
         (GridAction::ThrowAll(9), ChestAct::ThrowAll(9)),
+        (GridAction::CloneSlot(1), ChestAct::Clone(1)),
     ];
     for (ga, expected_wire) in cases {
         let wire = ChestAct::from_grid_action(ga).expect("wire arm");
@@ -287,10 +288,109 @@ fn chest_act_to_grid_action_round_trips() {
         let round = wire.to_grid_action().expect("grid arm");
         assert_eq!(round, ga);
     }
-    // Local-only / cursor ops sit outside the mapping.
-    assert!(ChestAct::from_grid_action(GridAction::CloneSlot(1)).is_none());
+    // Cursor ops sit outside the slot-addressed mapping.
     assert!(ChestAct::ThrowCursorAll.to_grid_action().is_none());
     assert!(ChestAct::ThrowCursorOne.to_grid_action().is_none());
+}
+
+/// W472: the wire CLONE is gated on the sender's ANNOUNCED game
+/// mode - survival clients get a no-op, announced-creative clients
+/// get the full max-stack cursor copy.
+#[test]
+fn remote_clone_requires_announced_creative() {
+    let mut v = Voxel::new();
+    let pos = [3, 8, 3];
+    v.apply_chest_open_msgs(&[(9, ChestOpenMsg { pos })]);
+    if let Some(c) = v.chests.get_mut(&pos) {
+        c.set_slot(0, Some(ItemStack::new(7, 3)));
+    }
+    let act = ChestActMsg {
+        pos,
+        player_side: false,
+        action: ChestAct::Clone(0),
+    };
+    // Not announced -> refused.
+    v.apply_chest_act_msgs(&[(9, act)]);
+    assert!(v.container_cursors.get(&9).cloned().flatten().is_none());
+    // Announced creative (vx.gamemode handshake) -> full stack.
+    v.client_gamemodes.insert(9, true);
+    v.apply_chest_act_msgs(&[(9, act)]);
+    assert_eq!(
+        v.container_cursors.get(&9).cloned().flatten(),
+        Some(ItemStack::new(7, crate::item::item_max_stack(7)))
+    );
+}
+
+/// W472: a double chest presents ONE 54-slot menu keyed by the
+/// canonical primary; host-side acts mutate the partner half
+/// through the stitched view and the state snapshot ships all 54
+/// slots (the old local-only partner gap).
+#[test]
+fn double_chest_act_spans_both_halves() {
+    let mut v = Voxel::new();
+    // Two paired chests along +X (facing north = 3 -> ext +X).
+    // Mint the hosting chunk first - a fresh Voxel has no chunks
+    // and set() on a missing chunk is a no-op.
+    v.world.insert_chunk(
+        [0, 0, 0],
+        infengine_voxel::Chunk::filled(infengine_voxel::BlockId(0)),
+    );
+    let a = [10, 8, 10];
+    let b = [11, 8, 10];
+    v.world_set_tracked(a, infengine_voxel::BlockId(crate::block::CHEST_ID));
+    v.world_set_tracked(b, infengine_voxel::BlockId(crate::block::CHEST_ID));
+    v.chest_facing.insert(a, 3);
+    v.chest_facing.insert(b, 3);
+    // Open via EITHER half: registration lands on the primary.
+    v.apply_chest_open_msgs(&[(5, ChestOpenMsg { pos: b })]);
+    let (primary, secondary) = crate::block::chest::canonical_pair(
+        &v.world,
+        &v.chests,
+        &v.chest_facing,
+        b,
+    );
+    let secondary = secondary.expect("pair detected");
+    assert_eq!(v.chest_viewers.get(&primary), Some(&5));
+    // Seed the SECONDARY half's slot 0 = menu slot 27.
+    if let Some(c) = v.chests.get_mut(&secondary) {
+        c.set_slot(0, Some(ItemStack::new(7, 5)));
+    }
+    // Take menu slot 27 (the partner half) through the wire.
+    v.apply_chest_act_msgs(&[(
+        5,
+        ChestActMsg {
+            pos: primary,
+            player_side: false,
+            action: ChestAct::Take(27),
+        },
+    )]);
+    assert_eq!(
+        v.container_cursors.get(&5).cloned().flatten(),
+        Some(ItemStack::new(7, 5)),
+        "cursor took from the partner half via the stitched menu"
+    );
+    assert!(
+        v.chests.get(&secondary).unwrap().slot(0).is_none(),
+        "partner-half slot drained through the menu view"
+    );
+    // Place it into menu slot 0 (primary half).
+    v.apply_chest_act_msgs(&[(
+        5,
+        ChestActMsg {
+            pos: primary,
+            player_side: false,
+            action: ChestAct::Place(0),
+        },
+    )]);
+    assert_eq!(
+        v.chests.get(&primary).unwrap().slot(0),
+        Some(ItemStack::new(7, 5))
+    );
+    // The stitched menu view reports all 54 slots.
+    let view =
+        crate::block::chest::menu_view(&v.chests, primary, Some(secondary))
+            .unwrap();
+    assert_eq!(view.len(), 54);
 }
 
 /// W470: a remote drag-paint distributes floor(count / slots) per

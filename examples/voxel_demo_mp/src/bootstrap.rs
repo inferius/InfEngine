@@ -407,7 +407,6 @@ pub(crate) fn main() -> ExitCode {
                             client: c,
                             remote: HashMap::new(),
                             pending_edits: Vec::new(),
-                            pending_inv_actions: Vec::new(),
                         };
                     }
                     Err(err) => {

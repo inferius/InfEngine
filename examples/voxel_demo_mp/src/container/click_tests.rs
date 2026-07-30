@@ -130,7 +130,7 @@ fn pickup_full_place_onto_different_components_swaps() {
 fn pickup_place_into_rejecting_slot_is_noop() {
     let mut a = [None];
     let accept = [Some(accept_never as SlotAccept)];
-    let mut sections = [SectionMut { slots: &mut a, accept: &accept }];
+    let mut sections = [SectionMut { slots: &mut a, accept: &accept, caps: &[] }];
     let mut cursor = Some(ItemStack::new(1, 4));
     pickup_click(&mut sections, &mut cursor, 0, false);
     assert_eq!(sections[0].slots[0], None);
@@ -144,7 +144,7 @@ fn pickup_click_on_restricted_slot_pulls_into_matching_cursor() {
     // it INTO the cursor up to the cursor's max stack.
     let mut a = [Some(ItemStack::new(1, 30))];
     let accept = [Some(accept_never as SlotAccept)];
-    let mut sections = [SectionMut { slots: &mut a, accept: &accept }];
+    let mut sections = [SectionMut { slots: &mut a, accept: &accept, caps: &[] }];
     let mut cursor = Some(ItemStack::new(1, 40));
     pickup_click(&mut sections, &mut cursor, 0, false);
     // Cursor caps at 64: pulls 24, leaves 6.
@@ -198,22 +198,22 @@ fn swap_click_exchanges_and_respects_filters_both_ways() {
     let mut inv = [Some(ItemStack::new(3, 5))];
     {
         let mut sections = [
-            SectionMut { slots: &mut cont, accept: &accept },
+            SectionMut { slots: &mut cont, accept: &accept, caps: &[] },
             SectionMut::open(&mut inv),
         ];
         // Hotbar holds id 3 which the container slot refuses ->
         // swap is a no-op.
-        swap_click(&mut sections, 0, 1);
+        swap_click(&mut sections, 0, 1, &[]);
         assert_eq!(sections[0].slots[0], Some(ItemStack::new(7, 2)));
         assert_eq!(sections[1].slots[0], Some(ItemStack::new(3, 5)));
     }
     // Replace hotbar with id 7 -> swap succeeds.
     inv[0] = Some(worn(7, 1, 8));
     let mut sections = [
-        SectionMut { slots: &mut cont, accept: &accept },
+        SectionMut { slots: &mut cont, accept: &accept, caps: &[] },
         SectionMut::open(&mut inv),
     ];
-    swap_click(&mut sections, 0, 1);
+    swap_click(&mut sections, 0, 1, &[]);
     assert_eq!(sections[0].slots[0], Some(worn(7, 1, 8)));
     assert_eq!(sections[1].slots[0], Some(ItemStack::new(7, 2)));
 }
@@ -223,11 +223,11 @@ fn swap_click_moves_into_empty_sides() {
     let mut a = [Some(ItemStack::new(2, 3)), None];
     let mut sections = [SectionMut::open(&mut a)];
     // Hovered occupied, hotbar empty -> stack moves to hotbar.
-    swap_click(&mut sections, 0, 1);
+    swap_click(&mut sections, 0, 1, &[]);
     assert_eq!(sections[0].slots[0], None);
     assert_eq!(sections[0].slots[1], Some(ItemStack::new(2, 3)));
     // Hovered empty, hotbar occupied -> stack moves to hovered.
-    swap_click(&mut sections, 0, 1);
+    swap_click(&mut sections, 0, 1, &[]);
     assert_eq!(sections[0].slots[0], Some(ItemStack::new(2, 3)));
     assert_eq!(sections[0].slots[1], None);
 }
@@ -265,7 +265,7 @@ fn pickup_all_collects_across_sections_up_to_cap() {
         SectionMut::open(&mut inv),
     ];
     let mut cursor = Some(ItemStack::new(1, 10));
-    pickup_all(&mut sections, &mut cursor, 0);
+    pickup_all(&mut sections, &mut cursor, 0, false);
     // 10 + 30 + 25 (partial from inv[0]... order: chest[1]=30 ->
     // 40, inv[0]=25 -> 64 caps after 24, inv[1] untouched at pass
     // cap). Cursor hits 64; leftover stays where it was.
@@ -281,7 +281,7 @@ fn pickup_all_skips_different_components_stacks() {
     let mut a = [None, Some(ItemStack::new(7, 2)), Some(worn(7, 3, 5))];
     let mut sections = [SectionMut::open(&mut a)];
     let mut cursor = Some(ItemStack::new(7, 1));
-    pickup_all(&mut sections, &mut cursor, 0);
+    pickup_all(&mut sections, &mut cursor, 0, false);
     assert_eq!(cursor, Some(ItemStack::new(7, 3)));
     // The worn stack stays: different components never merge.
     assert_eq!(sections[0].slots[2], Some(worn(7, 3, 5)));
@@ -295,7 +295,7 @@ fn pickup_all_partial_stacks_first_then_full() {
     let mut a = [None, Some(ItemStack::new(1, 64)), Some(ItemStack::new(1, 8))];
     let mut sections = [SectionMut::open(&mut a)];
     let mut cursor = Some(ItemStack::new(1, 40));
-    pickup_all(&mut sections, &mut cursor, 0);
+    pickup_all(&mut sections, &mut cursor, 0, false);
     assert_eq!(cursor, Some(ItemStack::new(1, 64)));
     // Partial (8) fully drained first; the full stack only lost
     // the remaining 16.
@@ -309,11 +309,11 @@ fn pickup_all_requires_cursor_and_empty_clicked_slot() {
     let mut sections = [SectionMut::open(&mut a)];
     // Empty cursor: no-op.
     let mut cursor = None;
-    pickup_all(&mut sections, &mut cursor, 0);
+    pickup_all(&mut sections, &mut cursor, 0, false);
     assert_eq!(sections[0].slots[0], Some(ItemStack::new(1, 5)));
     // Clicked slot still occupied: no-op (source line 538).
     cursor = Some(ItemStack::new(1, 1));
-    pickup_all(&mut sections, &mut cursor, 0);
+    pickup_all(&mut sections, &mut cursor, 0, false);
     assert_eq!(cursor, Some(ItemStack::new(1, 1)));
     assert_eq!(sections[0].slots[1], Some(ItemStack::new(1, 6)));
 }
@@ -353,7 +353,7 @@ fn drag_skips_filtered_and_mismatched_slots() {
     // foreign stack. Their shares return to the cursor.
     let mut a = [None, None, Some(ItemStack::new(2, 1)), None];
     let accept = [None, Some(accept_never as SlotAccept), None, None];
-    let mut sections = [SectionMut { slots: &mut a, accept: &accept }];
+    let mut sections = [SectionMut { slots: &mut a, accept: &accept, caps: &[] }];
     let mut cursor = Some(ItemStack::new(1, 8));
     quick_craft_apply(&mut sections, &mut cursor, &[0, 1, 2, 3], false);
     // floor(8/4) = 2 per eligible slot; slots 0 + 3 get 2 each,
@@ -470,7 +470,7 @@ fn quick_move_respects_accept_on_empty_slots_only() {
     let accept = [Some(accept_never as SlotAccept), None];
     let mut sections = [
         SectionMut::open(&mut src),
-        SectionMut { slots: &mut dst, accept: &accept },
+        SectionMut { slots: &mut dst, accept: &accept, caps: &[] },
     ];
     assert!(quick_move(&mut sections, 0, &[1, 2]));
     assert_eq!(sections[1].slots[0], None);
@@ -487,6 +487,150 @@ fn quick_move_nothing_possible_returns_false() {
     ];
     assert!(!quick_move(&mut sections, 0, &[1]));
     assert_eq!(sections[0].slots[0], Some(ItemStack::new(1, 5)));
+}
+
+// ---- W472: per-slot max-stack caps --------------------------
+
+#[test]
+fn cap_limits_pickup_place_and_merge() {
+    // `Slot.getMaxStackSize(stack)` = min(item max, slot cap):
+    // a 16-cap slot takes 16 on a full place, remainder stays on
+    // the cursor; a follow-up merge is refused at the cap.
+    let mut a = [None];
+    let caps = [16u8];
+    let mut sections =
+        [SectionMut { slots: &mut a, accept: &[], caps: &caps }];
+    let mut cursor = Some(ItemStack::new(1, 40));
+    pickup_click(&mut sections, &mut cursor, 0, false);
+    assert_eq!(sections[0].slots[0], Some(ItemStack::new(1, 16)));
+    assert_eq!(cursor, Some(ItemStack::new(1, 24)));
+    // Merge attempt on the full-at-cap slot moves nothing.
+    pickup_click(&mut sections, &mut cursor, 0, false);
+    assert_eq!(sections[0].slots[0], Some(ItemStack::new(1, 16)));
+    assert_eq!(cursor, Some(ItemStack::new(1, 24)));
+    assert_eq!(total_of(&sections, &cursor, &[], 1), 40);
+}
+
+#[test]
+fn cap_blocks_oversized_cursor_swap() {
+    // Source line 455: the foreign-stack swap requires
+    // `carried.getCount() <= slot.getMaxStackSize(carried)` - a
+    // 2-stack cursor cannot swap into a 1-cap slot.
+    let mut a = [Some(ItemStack::new(2, 1))];
+    let caps = [1u8];
+    let mut sections =
+        [SectionMut { slots: &mut a, accept: &[], caps: &caps }];
+    let mut cursor = Some(ItemStack::new(1, 2));
+    pickup_click(&mut sections, &mut cursor, 0, false);
+    assert_eq!(sections[0].slots[0], Some(ItemStack::new(2, 1)));
+    assert_eq!(cursor, Some(ItemStack::new(1, 2)));
+    // A 1-count cursor swaps fine.
+    cursor = Some(ItemStack::new(1, 1));
+    pickup_click(&mut sections, &mut cursor, 0, false);
+    assert_eq!(sections[0].slots[0], Some(ItemStack::new(1, 1)));
+    assert_eq!(cursor, Some(ItemStack::new(2, 1)));
+}
+
+#[test]
+fn swap_overflow_splits_into_capped_empty_slot() {
+    // Source line 486 (LIVE with caps): hotbar 40 into an empty
+    // 16-cap slot leaves 24 in the hotbar slot.
+    let mut cont = [None];
+    let caps = [16u8];
+    let mut inv = [Some(ItemStack::new(1, 40))];
+    let mut sections = [
+        SectionMut { slots: &mut cont, accept: &[], caps: &caps },
+        SectionMut::open(&mut inv),
+    ];
+    assert!(swap_click(&mut sections, 0, 1, &[]).is_none());
+    assert_eq!(sections[0].slots[0], Some(ItemStack::new(1, 16)));
+    assert_eq!(sections[1].slots[0], Some(ItemStack::new(1, 24)));
+}
+
+#[test]
+fn swap_overflow_rehomes_displaced_stack_via_add_order() {
+    // Source line 495-500: overflow into an OCCUPIED capped slot -
+    // the target's old stack re-homes through `Inventory.add`
+    // (merge-then-first-empty along the add order); anything left
+    // is returned for the caller to drop.
+    let mut cont = [Some(ItemStack::new(2, 3))];
+    let caps = [16u8];
+    let mut inv = [Some(ItemStack::new(1, 40)), None];
+    {
+        let mut sections = [
+            SectionMut { slots: &mut cont, accept: &[], caps: &caps },
+            SectionMut::open(&mut inv),
+        ];
+        // add order: the free inv slot (gi 2).
+        let dropped = swap_click(&mut sections, 0, 1, &[2]);
+        assert!(dropped.is_none());
+        assert_eq!(sections[0].slots[0], Some(ItemStack::new(1, 16)));
+        assert_eq!(sections[1].slots[0], Some(ItemStack::new(1, 24)));
+        assert_eq!(sections[1].slots[1], Some(ItemStack::new(2, 3)));
+    }
+    // No room in the add order -> the displaced stack is RETURNED
+    // (MC: player.drop).
+    cont[0] = Some(ItemStack::new(2, 3));
+    inv[0] = Some(ItemStack::new(1, 40));
+    inv[1] = Some(ItemStack::new(9, 1));
+    let mut sections = [
+        SectionMut { slots: &mut cont, accept: &[], caps: &caps },
+        SectionMut::open(&mut inv),
+    ];
+    let dropped = swap_click(&mut sections, 0, 1, &[2]);
+    assert_eq!(dropped, Some(ItemStack::new(2, 3)));
+}
+
+#[test]
+fn quick_move_respects_per_slot_caps() {
+    // moveItemStackTo with caps: merge tops up to the SLOT cap,
+    // and the single empty-slot claim places at most the cap
+    // (the source still breaks after one empty slot - line 688).
+    let mut src = [Some(ItemStack::new(1, 30))];
+    let mut dst = [Some(ItemStack::new(1, 10)), None, None];
+    let caps = [16u8, 16, 16];
+    let mut sections = [
+        SectionMut::open(&mut src),
+        SectionMut { slots: &mut dst, accept: &[], caps: &caps },
+    ];
+    assert!(quick_move(&mut sections, 0, &[1, 2, 3]));
+    // Merge phase: 10 -> 16 (6 moved). Empty phase: ONE slot takes
+    // 16; the remaining 8 stay in the source.
+    assert_eq!(sections[1].slots[0], Some(ItemStack::new(1, 16)));
+    assert_eq!(sections[1].slots[1], Some(ItemStack::new(1, 16)));
+    assert_eq!(sections[1].slots[2], None);
+    assert_eq!(sections[0].slots[0], Some(ItemStack::new(1, 8)));
+}
+
+#[test]
+fn quick_craft_respects_per_slot_caps() {
+    // Source line 385: maxSize = min(source max, slot cap).
+    let mut a = [Some(ItemStack::new(1, 14)), None];
+    let caps = [16u8, 16];
+    let mut sections =
+        [SectionMut { slots: &mut a, accept: &[], caps: &caps }];
+    let mut cursor = Some(ItemStack::new(1, 20));
+    quick_craft_apply(&mut sections, &mut cursor, &[0, 1], false);
+    // floor(20/2) = 10 per slot. Slot 0: 14+10 capped at 16 (+2);
+    // slot 1: 10. Placed 12, 8 back on the cursor.
+    assert_eq!(sections[0].slots[0], Some(ItemStack::new(1, 16)));
+    assert_eq!(sections[0].slots[1], Some(ItemStack::new(1, 10)));
+    assert_eq!(cursor, Some(ItemStack::new(1, 8)));
+    assert_eq!(total_of(&sections, &cursor, &[], 1), 34);
+}
+
+#[test]
+fn pickup_all_reverse_walks_end_first() {
+    // Button-1 variant (no UI input wired - kept for source
+    // parity): with room for one stack only, reverse order drains
+    // the LAST slot instead of the first.
+    let mut a = [None, Some(ItemStack::new(1, 30)), Some(ItemStack::new(1, 20))];
+    let mut sections = [SectionMut::open(&mut a)];
+    let mut cursor = Some(ItemStack::new(1, 34));
+    pickup_all(&mut sections, &mut cursor, 0, true);
+    assert_eq!(cursor, Some(ItemStack::new(1, 64)));
+    assert_eq!(sections[0].slots[2], None, "last slot drained first");
+    assert_eq!(sections[0].slots[1], Some(ItemStack::new(1, 20)));
 }
 
 #[test]

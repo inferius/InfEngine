@@ -572,6 +572,16 @@ pub(crate) fn cmd_gamemode(
     }
     voxel.game_mode = target;
     voxel.refresh_abilities();
+    // W472: re-announce the mode to the host so creative-only wire
+    // ops (CLONE) stay gated correctly for this client.
+    if let crate::net::NetRole::Client { client, .. } = &mut voxel.net {
+        let cfg = bincode::config::standard();
+        if let Ok(buf) =
+            bincode::serde::encode_to_vec(voxel.abilities.instabuild, cfg)
+        {
+            let _ = client.send_bytes("vx.gamemode", buf);
+        }
+    }
     lines.push(format!(
         "Game mode set to {}.",
         target.label_cs()

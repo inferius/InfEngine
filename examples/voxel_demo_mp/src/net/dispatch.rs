@@ -170,6 +170,9 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         let mut chest_drags_outer: Vec<(u32, net::ContainerDragMsg)> = Vec::new();
         let mut furnace_drags_outer: Vec<(u32, net::ContainerDragMsg)> = Vec::new();
         let mut inv_ops_outer: Vec<(u32, net::InvOpMsg)> = Vec::new();
+        // W472: E-screen drag-paints + game-mode announcements.
+        let mut inv_drags_outer: Vec<(u32, net::InvDragMsg)> = Vec::new();
+        let mut gamemode_updates_outer: Vec<(u32, bool)> = Vec::new();
         // W468: container-cursor stacks of disconnected viewers
         // that didn't fit back into their inventory. Spawned as
         // floor drops after the `&mut vx.net` borrow releases.
@@ -202,7 +205,6 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                 // authoritative inventory.
                 let mut raw_edits: Vec<(u32, EditMsg)> = Vec::new();
                 let mut path_requests: Vec<(u32, [i32; 3])> = Vec::new();
-                let mut raw_drags: Vec<(u32, InvActionMsg)> = Vec::new();
                 // W5.3a/b: borrow the outer-scope collectors so
                 // the apply pass after the match has data to act on.
                 {
@@ -217,7 +219,6 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         ],
                         raw_edits: &mut raw_edits,
                         path_requests: &mut path_requests,
-                        raw_drags: &mut raw_drags,
                         interp_updates: &mut interp_updates,
                         mob_hits_to_apply: &mut mob_hits_to_apply,
                         torch_orient_updates: &mut torch_orient_updates,
@@ -235,6 +236,8 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         chest_drags: &mut chest_drags_outer,
                         furnace_drags: &mut furnace_drags_outer,
                         inv_ops: &mut inv_ops_outer,
+                        inv_drags: &mut inv_drags_outer,
+                        gamemode_updates: &mut gamemode_updates_outer,
                     };
                     net::process_server_inbox(
                         server,
@@ -424,6 +427,26 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         );
                     }
                 }
+                // W472: ship the stored chest facings so a late
+                // joiner can pair double chests (the renderer
+                // merge AND the 54-slot menu key both derive from
+                // facing; without this catch-up a pre-join pair
+                // looked like two singles to the new client).
+                if !new_ids.is_empty() {
+                    for (v, facing) in vx.chest_facing.iter() {
+                        if let Ok(buf) =
+                            bincode::serde::encode_to_vec((*v, *facing), cfg)
+                        {
+                            for id in &new_ids {
+                                server.send_bytes_to_client(
+                                    *id,
+                                    "vx.chest_facing",
+                                    buf.clone(),
+                                );
+                            }
+                        }
+                    }
+                }
                 // W460: and the thunder flag.
                 if !new_ids.is_empty()
                     && let Ok(buf) =
@@ -574,14 +597,6 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         }
                     }
                 }
-                // Apply incoming drag&drop intents on the server's
-                // authoritative inventory.
-                for (cid, act) in raw_drags {
-                    if let Some(inv) = inventories.get_mut(&cid) {
-                        inv_apply_drag(inv, act.from.into(), act.to.into(), act.split);
-                        pending_inv_sends.insert(cid);
-                    }
-                }
                 // Server also records every received edit so future
                 // joiners get a complete history.
                 for e in &to_apply {
@@ -618,10 +633,17 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                     }
                 }
                 // Push authoritative inventory snapshots to every
-                // client whose state changed this tick.
+                // client whose state changed this tick. W472: the
+                // snapshot bundles the viewer's E-screen cursor so
+                // cursor-mutating ops reconcile in one message.
                 for cid in pending_inv_sends.drain() {
                     if let Some(inv) = inventories.get(&cid) {
-                        let snap = inv.to_snapshot();
+                        let cursor = vx
+                            .container_cursors
+                            .get(&cid)
+                            .cloned()
+                            .flatten();
+                        let snap = inv.to_snapshot(cursor);
                         if let Ok(buf) = bincode::serde::encode_to_vec(&snap, cfg) {
                             server.send_bytes_to_client(cid, "vx.inv", buf);
                         }
@@ -648,7 +670,6 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                 client,
                 remote,
                 pending_edits,
-                pending_inv_actions,
             } => {
                 client.poll();
                 let my_id = client.client_id;
@@ -696,24 +717,18 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         client,
                         remote,
                         pending_edits,
-                        pending_inv_actions,
                         &mut inbox,
                     );
                 }
-                // Re-send pending edits / inventory drags on a
-                // throttled schedule. Server-applied edits are
-                // idempotent (set+broadcast), so duplicate arrivals
-                // are correctness-safe, but we don't need them every
+                // Re-send pending edits on a throttled schedule.
+                // Server-applied edits are idempotent
+                // (set+broadcast), so duplicate arrivals are
+                // correctness-safe, but we don't need them every
                 // single tick - `RETRY_PERIOD` gates the resend.
                 if do_retry {
                     for e in pending_edits.iter() {
                         if let Ok(buf) = bincode::serde::encode_to_vec(e, cfg) {
                             let _ = client.send_bytes("vx.edit", buf);
-                        }
-                    }
-                    for a in pending_inv_actions.iter() {
-                        if let Ok(buf) = bincode::serde::encode_to_vec(a, cfg) {
-                            let _ = client.send_bytes("vx.inv_act", buf);
                         }
                     }
                 }
@@ -791,6 +806,22 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                 if i < vx.craft_grid.len() {
                     vx.craft_grid[i] = s;
                 }
+            }
+            // W472: armor slots ride the snapshot (the E screen is
+            // one menu). Older hosts send an empty vec - leave the
+            // local armor alone then.
+            if !snap.armor.is_empty() {
+                for (i, s) in snap.armor.into_iter().enumerate() {
+                    if i < vx.armor_slots.len() {
+                        vx.armor_slots[i] = s;
+                    }
+                }
+            }
+            // W472: the authoritative E-screen cursor - only
+            // meaningful while our screen is open (on close the
+            // host already recovered it into the inventory).
+            if vx.inventory_open {
+                vx.inv_screen_held = snap.cursor;
             }
             let mut post: HashMap<u16, u32> = HashMap::new();
             for st in vx.inventory.iter().flatten() {
@@ -1169,6 +1200,12 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         vx.apply_chest_drag_msgs(&chest_drags_outer);
         vx.apply_furnace_drag_msgs(&furnace_drags_outer);
         vx.apply_inv_op_msgs(&inv_ops_outer);
+        vx.apply_inv_drag_msgs(&inv_drags_outer);
+        // W472: record announced game modes (client-asserted; the
+        // creative-only wire ops validate against this).
+        for (cid, creative) in gamemode_updates_outer {
+            vx.client_gamemodes.insert(cid, creative);
+        }
         // W5.3a/b: client-side - apply incoming state snapshots
         // from the host. Each snapshot overwrites the local
         // chest/furnace contents so the open UI mirrors the
@@ -1176,14 +1213,35 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
         // - slots and the per-viewer cursor adopt wholesale,
         // components included.
         for state in chest_state_updates {
-            let c = vx
-                .chests
-                .entry(state.pos)
-                .or_insert_with(block::chest::new_chest);
-            for i in 0..c.len() {
-                c.set_slot(i, state.slots.get(i).cloned().flatten());
+            // W472: a double chest ships 54 stitched slots keyed
+            // by the PRIMARY half; split them back into the two
+            // local 27-slot containers (partner-half updates now
+            // reach remote viewers - the old local-only gap).
+            let (primary, secondary) = crate::net::container_apply::chest_canonical(
+                vx, state.pos,
+            );
+            let first_len = {
+                let c = vx
+                    .chests
+                    .entry(primary)
+                    .or_insert_with(block::chest::new_chest);
+                for i in 0..c.len() {
+                    c.set_slot(i, state.slots.get(i).cloned().flatten());
+                }
+                c.len()
+            };
+            if state.slots.len() > first_len
+                && let Some(sec) = secondary
+                && let Some(c2) = vx.chests.get_mut(&sec)
+            {
+                for i in 0..c2.len() {
+                    c2.set_slot(
+                        i,
+                        state.slots.get(first_len + i).cloned().flatten(),
+                    );
+                }
             }
-            if vx.chest_open == Some(state.pos) {
+            if vx.chest_open == Some(primary) {
                 vx.chest_held = state.cursor;
             }
         }

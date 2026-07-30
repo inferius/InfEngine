@@ -419,6 +419,18 @@ pub(crate) fn wear_armor_pieces(voxel: &mut Voxel, damage: f32) {
     if broke_any {
         voxel.play_item_break_fx();
     }
+    // W472: armor is part of the server-known E screen now; assert
+    // the post-wear state so the host's authoritative copy (and
+    // any later `vx.inv` snapshot) never reverts the damage.
+    // Client-asserted, like the `sel` durability model (W471).
+    if let crate::net::NetRole::Client { client, .. } = &mut voxel.net {
+        let cfg = bincode::config::standard();
+        let slots: Vec<Option<crate::item::ItemStack>> =
+            voxel.armor_slots.to_vec();
+        if let Ok(buf) = bincode::serde::encode_to_vec(&slots, cfg) {
+            let _ = client.send_bytes("vx.armor", buf);
+        }
+    }
 }
 
 pub(crate) fn apply_damage_kind(voxel: &mut Voxel, amount: f32, kind: DamageKind) {

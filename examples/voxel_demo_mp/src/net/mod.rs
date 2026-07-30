@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::block::BUCKET_WATER_ID;
 use crate::item::ItemStack;
-use crate::{HOTBAR_SLOTS, INVENTORY_SLOTS, PLAYER_MAX_HEALTH, SplitMode};
+use crate::{HOTBAR_SLOTS, INVENTORY_SLOTS, PLAYER_MAX_HEALTH};
 
 /// One block-edit travelling over the wire. Sent as
 /// `kind = "vx.edit"`. Server applies + broadcasts to every client
@@ -92,6 +92,16 @@ pub(crate) struct InvSnapshotMsg {
     pub(crate) inventory: Vec<Option<ItemStack>>,
     /// 2x2 crafting grid (always 4 entries).
     pub(crate) craft: Vec<Option<ItemStack>>,
+    /// W472: the 4 armor slots (helmet..boots). Part of the
+    /// inventory-screen menu now, so the authoritative snapshot
+    /// carries them.
+    #[serde(default)]
+    pub(crate) armor: Vec<Option<ItemStack>>,
+    /// W472: the sender's inventory-screen cursor (the host tracks
+    /// one per client in `container_cursors`). Applied by the
+    /// client only while its E screen is open.
+    #[serde(default)]
+    pub(crate) cursor: Option<ItemStack>,
 }
 
 /// Encoded `SlotKind`. Bincode-friendly + version-stable so we
@@ -101,6 +111,8 @@ pub(crate) enum NetSlot {
     Inv(u32),
     Craft(u32),
     CraftOut,
+    /// W472: armor slot 0..3 (helmet..boots) on the E screen.
+    Armor(u32),
 }
 
 /// Snapshot of one server-side mob. Sent as `vx.mob`; clients
@@ -227,18 +239,6 @@ pub(crate) struct TeleportMsg {
     pub(crate) pos: [f32; 3],
 }
 
-/// Client -> server inventory intent: a drag-and-drop completion.
-/// Server validates + applies + sends back an `InvSnapshotMsg`.
-/// `split` mirrors the local Drag action and tells the server how
-/// many items to move (all / half / one).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub(crate) struct InvActionMsg {
-    pub(crate) from: NetSlot,
-    pub(crate) to: NetSlot,
-    #[serde(default)]
-    pub(crate) split: SplitMode,
-}
-
 /// W5.3a: client -> host. "I just opened the chest at `pos`."
 /// Host registers the sender as the chest's viewer + ships an
 /// immediate `ChestStateMsg` so the client paints real contents
@@ -283,9 +283,9 @@ pub(crate) struct ChestActMsg {
 /// `pub(crate)` visibility without leaking serde into the container
 /// module. W470 adds the ported doClick ops: double-click collect,
 /// number-key hotbar swap, Q / Ctrl+Q slot throws and the
-/// click-outside cursor throws (MC slotId -999). `CloneSlot` is
-/// deliberately NOT mirrored - the host cannot validate a remote
-/// creative flag, so clone stays a local-only op.
+/// click-outside cursor throws (MC slotId -999). W472 adds the
+/// creative CLONE - the host validates it against the sender's
+/// announced game mode (`vx.gamemode` handshake).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum ChestAct {
     Take(u32),
@@ -307,6 +307,9 @@ pub(crate) enum ChestAct {
     /// W470: click outside the panel - throw one item off the
     /// cursor (RMB).
     ThrowCursorOne,
+    /// W472: creative middle-click clone on the slot. Host-gated
+    /// on the sender's announced game mode.
+    Clone(u32),
 }
 
 /// W5.3a: client -> host. "I just closed the chest." Host clears
@@ -371,16 +374,16 @@ impl ChestAct {
             ChestAct::SwapHotbar(i, h) => G::SwapHotbar(i as usize, h),
             ChestAct::ThrowOne(i) => G::ThrowOne(i as usize),
             ChestAct::ThrowAll(i) => G::ThrowAll(i as usize),
+            ChestAct::Clone(i) => G::CloneSlot(i as usize),
             ChestAct::ThrowCursorAll | ChestAct::ThrowCursorOne => {
                 return None;
             }
         })
     }
 
-    /// Map an internal `GridAction` into the wire variant. `None`
-    /// for the local-only ops (creative clone - the host cannot
-    /// validate a remote creative flag, so it never rides the
-    /// wire).
+    /// Map an internal `GridAction` into the wire variant. W472:
+    /// total - the creative clone rides the wire now (`Clone`),
+    /// validated host-side against the announced game mode.
     pub(crate) fn from_grid_action(
         action: crate::container::ui::GridAction,
     ) -> Option<Self> {
@@ -395,7 +398,7 @@ impl ChestAct {
             G::SwapHotbar(i, h) => ChestAct::SwapHotbar(i as u32, h),
             G::ThrowOne(i) => ChestAct::ThrowOne(i as u32),
             G::ThrowAll(i) => ChestAct::ThrowAll(i as u32),
-            G::CloneSlot(_) => return None,
+            G::CloneSlot(i) => ChestAct::Clone(i as u32),
         })
     }
 }
@@ -413,12 +416,15 @@ pub(crate) struct ContainerDragMsg {
     pub(crate) slots: Vec<(bool, u32)>,
 }
 
-/// W470: client -> host inventory-screen ops beyond the drag&drop
-/// (`InvActionMsg`): number-key swap, hover throws, shift
-/// quick-move and the no-panel selected-slot throw (MC
-/// PlayerDropItem). Applied against the client's authoritative
-/// `ClientInv` through the shared click core; throws spawn drops
-/// at the sender's pose.
+/// W470/W472: client -> host inventory-screen ops. The E screen is
+/// a full cursor-stack menu now, so the whole doClick set rides
+/// this enum: PICKUP clicks, double-click collect, number-key
+/// swap, hover throws, shift quick-move, creative clone, the
+/// click-outside cursor throws, the no-panel selected-slot throw
+/// (MC PlayerDropItem) and the screen-close cursor recovery.
+/// Applied against the client's authoritative `ClientInv` (+ the
+/// per-viewer cursor) through the shared click core; throws spawn
+/// drops at the sender's pose.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(crate) enum InvOpMsg {
     /// Swap the addressed slot with hotbar slot `hotbar` (0..8).
@@ -429,6 +435,29 @@ pub(crate) enum InvOpMsg {
     ThrowSelected { slot: u8, all: bool },
     /// Shift-click quick-move on the inventory screen.
     QuickMove { slot: NetSlot },
+    /// W472: PICKUP click (LMB `secondary=false` / RMB `true`)
+    /// against the cursor stack.
+    Click { slot: NetSlot, secondary: bool },
+    /// W472: PICKUP_ALL double-click collect into the cursor.
+    Collect { slot: NetSlot },
+    /// W472: creative middle-click clone (host-gated on the
+    /// announced game mode).
+    CloneSlot { slot: NetSlot },
+    /// W472: click outside the screen - throw the cursor stack
+    /// (LMB `all=true`) or one item (RMB).
+    CursorThrow { all: bool },
+    /// W472: the E screen closed - recover the cursor into the
+    /// sender's inventory (spill at the sender on overflow).
+    CloseScreen,
+}
+
+/// W472: client -> host, one completed E-screen drag-paint
+/// (QUICK_CRAFT release). Mirror of `ContainerDragMsg` for the
+/// inventory screen (`vx.inv_drag`); slots address the E screen.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct InvDragMsg {
+    pub(crate) one_per_slot: bool,
+    pub(crate) slots: Vec<NetSlot>,
 }
 
 /// Net wire message for a fresh drop the host wants every peer
@@ -555,6 +584,7 @@ impl PersistedInv {
         ClientInv {
             inventory,
             craft_grid,
+            armor: std::array::from_fn(|_| None),
         }
     }
 }
@@ -585,10 +615,6 @@ pub(crate) enum NetRole {
         /// Queue of block edits the client wants applied. Drained
         /// each tick and sent to the server as `vx.edit` payloads.
         pending_edits: Vec<EditMsg>,
-        /// Outbound drag-and-drop intents waiting for an ack
-        /// (via `vx.inv` snapshot). Each is retried every tick
-        /// until the server's reply lands.
-        pending_inv_actions: Vec<InvActionMsg>,
     },
 }
 
@@ -605,11 +631,15 @@ impl NetRole {
 /// Server-side per-client inventory state. W468: the 36 main slots
 /// hold full `ItemStack`s (components ride through every container
 /// act / drag / loot credit); W469 lifted the craft grid too, so
-/// the whole authoritative view is stack-typed.
+/// the whole authoritative view is stack-typed. W472: the 4 armor
+/// slots join (the E screen is one menu over all of them); the
+/// contents mirror the client's assertions (`vx.armor` wear sync)
+/// plus every wire op the host applies.
 #[derive(Debug, Clone)]
 pub(crate) struct ClientInv {
     pub(crate) inventory: [Option<ItemStack>; INVENTORY_SLOTS],
     pub(crate) craft_grid: [Option<ItemStack>; 4],
+    pub(crate) armor: [Option<ItemStack>; 4],
 }
 
 impl ClientInv {
@@ -643,14 +673,18 @@ impl ClientInv {
         Self {
             inventory: inv,
             craft_grid: std::array::from_fn(|_| None),
+            armor: std::array::from_fn(|_| None),
         }
     }
 
     /// Encode as a wire snapshot for the `vx.inv` message.
-    pub(crate) fn to_snapshot(&self) -> InvSnapshotMsg {
+    /// `cursor` is the viewer's authoritative E-screen cursor.
+    pub(crate) fn to_snapshot(&self, cursor: Option<ItemStack>) -> InvSnapshotMsg {
         InvSnapshotMsg {
             inventory: self.inventory.to_vec(),
             craft: self.craft_grid.to_vec(),
+            armor: self.armor.to_vec(),
+            cursor,
         }
     }
 }
@@ -785,7 +819,6 @@ pub(crate) fn process_client_inbox(
     client: &mut NetClient,
     remote: &mut HashMap<u32, PlayerMsg>,
     pending_edits: &mut Vec<EditMsg>,
-    pending_inv_actions: &mut Vec<InvActionMsg>,
     ctx: &mut ClientInboxCtx<'_>,
 ) {
     let cfg = bincode::config::standard();
@@ -836,10 +869,6 @@ pub(crate) fn process_client_inbox(
                     // Keep only the freshest snapshot
                     // this tick (last-write-wins).
                     *ctx.client_snapshot = Some(s);
-                    // Server acknowledged our state, so
-                    // any pending drag intents are now
-                    // resolved one way or the other.
-                    pending_inv_actions.clear();
                 }
             }
             "vx.chest_state" => {
@@ -1109,522 +1138,11 @@ pub(crate) fn process_client_inbox(
     }
 }
 
-/// Aggregate for the host-side inbox drain. Wraps the subset of
-/// `Voxel` state the server arm of `tick_net` mutates (`day_time`,
-/// `last_day_broadcast`, plus the same per-tick collectors the
-/// client arm uses), along with three local outputs the surrounding
-/// `tick_net` consumes after the drain releases (`raw_edits`,
-/// `path_requests`, `raw_drags`).
-///
-/// The `NetRole::Server { server, poses, inventories,
-/// pending_inv_sends }` borrow held by `tick_net` is still passed
-/// as separate `&mut` parameters - those four references are
-/// mutually disjoint from the `Voxel` field refs in this ctx, so
-/// the split-borrow shape stays unambiguous to the compiler.
-pub(crate) struct ServerInboxCtx<'a> {
-    /// Authoritative day clock - bumped by `vx.sleep` when the
-    /// host accepts a client's bed request.
-    pub day_time: &'a mut f32,
-    /// Last-broadcast timestamp of `vx.day`. Cleared so the next
-    /// tick definitely re-emits the time of day after a sleep
-    /// skip moves the clock.
-    pub last_day_broadcast: &'a mut Option<std::time::Instant>,
-    /// True while the host has /worldlock engaged - client edits
-    /// are silently dropped.
-    pub world_locked: bool,
-    /// Snapshot of the host's eye position for PvP-hit reach
-    /// validation against id 0.
-    pub host_player_pos: [f32; 3],
-    /// Outputs filled by the drain + drained after the match arm
-    /// closes for validated world / inventory mutation.
-    pub raw_edits: &'a mut Vec<(u32, EditMsg)>,
-    pub path_requests: &'a mut Vec<(u32, [i32; 3])>,
-    pub raw_drags: &'a mut Vec<(u32, InvActionMsg)>,
-    /// Shared collectors (same shape as `ClientInboxCtx`).
-    pub interp_updates: &'a mut Vec<PlayerMsg>,
-    pub mob_hits_to_apply: &'a mut Vec<(u32, u32)>,
-    pub torch_orient_updates: &'a mut Vec<([i32; 3], u8)>,
-    /// W125: door place/toggle state updates (lower pos, facing,
-    /// open) received this tick. Applied + remeshed by dispatch.
-    pub door_state_updates: &'a mut Vec<([i32; 3], u8, bool)>,
-    /// W126: chest facing records (pos, facing) from places.
-    pub chest_facing_updates: &'a mut Vec<([i32; 3], u8)>,
-    /// W143: stored rail shape updates (pos, shape; 0xFF = removed).
-    pub rail_shape_updates: &'a mut Vec<([i32; 3], u8)>,
-    pub chat_inbox: &'a mut Vec<String>,
-    pub pvp_self_damage: &'a mut f32,
-    /// W5.3a: pending chest open / act / close events for the
-    /// host's main loop to apply against the live `chests` map +
-    /// `chest_viewers` registration.
-    pub chest_opens: &'a mut Vec<(u32, ChestOpenMsg)>,
-    pub chest_acts: &'a mut Vec<(u32, ChestActMsg)>,
-    pub chest_closes: &'a mut Vec<(u32, ChestCloseMsg)>,
-    /// W5.3b: same for furnaces.
-    pub furnace_opens: &'a mut Vec<(u32, FurnaceOpenMsg)>,
-    pub furnace_acts: &'a mut Vec<(u32, FurnaceActMsg)>,
-    pub furnace_closes: &'a mut Vec<(u32, FurnaceCloseMsg)>,
-    /// W470: completed drag-paints against open containers.
-    pub chest_drags: &'a mut Vec<(u32, ContainerDragMsg)>,
-    pub furnace_drags: &'a mut Vec<(u32, ContainerDragMsg)>,
-    /// W470: inventory-screen ops (swap / throw / quick-move) +
-    /// the no-panel selected-slot throw.
-    pub inv_ops: &'a mut Vec<(u32, InvOpMsg)>,
-}
+// W472 - the server inbox drain lives in inbox_server.rs (size
+// cap split); re-exported so call sites keep the `net::` paths.
+mod inbox_server;
+pub(crate) use inbox_server::{ServerInboxCtx, process_server_inbox};
 
-/// Drain the server socket's inbound queue and dispatch each
-/// message to the right collector / inline broadcast. Mirrors the
-/// per-topic match block from `Voxel::tick_net`'s server arm.
-///
-/// `server`, `poses`, `inventories`, `pending_inv_sends` are
-/// passed as plain `&mut` parameters because they live inside the
-/// `NetRole::Server { .. }` destructuring at the call site - the
-/// `&mut self.net` borrow keeps them disjoint from the `Voxel`
-/// refs inside `ctx`.
-///
-/// Wide ABI on purpose: every coupling between the wire decode
-/// and the host's authoritative state lives explicitly in this
-/// signature, so the call site in `tick_net` reads as a single
-/// data-flow declaration.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn process_server_inbox(
-    server: &mut NetServer,
-    poses: &mut HashMap<u32, PlayerMsg>,
-    inventories: &mut HashMap<u32, ClientInv>,
-    pending_inv_sends: &mut HashSet<u32>,
-    pvp_reach: f32,
-    pvp_damage: f32,
-    day_length_s: f32,
-    recipes_lookup: &dyn Fn(usize) -> Option<&'static [(u16, u8)]>,
-    ctx: &mut ServerInboxCtx<'_>,
-) {
-    let cfg = bincode::config::standard();
-    for (client_id, kind, data) in server.drain_bytes() {
-        match kind.as_str() {
-            "vx.edit" => {
-                // World lock: ignore client edits
-                // entirely. The host's own edits go
-                // through the local pipeline + still
-                // broadcast.
-                if ctx.world_locked {
-                    continue;
-                }
-                if let Ok((e, _)) =
-                    bincode::serde::decode_from_slice::<EditMsg, _>(&data, cfg)
-                {
-                    ctx.raw_edits.push((client_id, e));
-                }
-            }
-            "vx.player" => {
-                if let Ok((mut p, _)) =
-                    bincode::serde::decode_from_slice::<PlayerMsg, _>(&data, cfg)
-                {
-                    p.id = client_id;
-                    poses.insert(client_id, p);
-                    ctx.interp_updates.push(p);
-                }
-            }
-            "vx.inv_act" => {
-                if let Ok((m, _)) =
-                    bincode::serde::decode_from_slice::<InvActionMsg, _>(&data, cfg)
-                {
-                    ctx.raw_drags.push((client_id, m));
-                }
-            }
-            "vx.chest_open" => {
-                if let Ok((m, _)) =
-                    bincode::serde::decode_from_slice::<ChestOpenMsg, _>(&data, cfg)
-                {
-                    ctx.chest_opens.push((client_id, m));
-                }
-            }
-            "vx.chest_act" => {
-                if let Ok((m, _)) =
-                    bincode::serde::decode_from_slice::<ChestActMsg, _>(&data, cfg)
-                {
-                    ctx.chest_acts.push((client_id, m));
-                }
-            }
-            "vx.chest_close" => {
-                if let Ok((m, _)) =
-                    bincode::serde::decode_from_slice::<ChestCloseMsg, _>(&data, cfg)
-                {
-                    ctx.chest_closes.push((client_id, m));
-                }
-            }
-            "vx.furnace_open" => {
-                if let Ok((m, _)) =
-                    bincode::serde::decode_from_slice::<FurnaceOpenMsg, _>(&data, cfg)
-                {
-                    ctx.furnace_opens.push((client_id, m));
-                }
-            }
-            "vx.furnace_act" => {
-                if let Ok((m, _)) =
-                    bincode::serde::decode_from_slice::<FurnaceActMsg, _>(&data, cfg)
-                {
-                    ctx.furnace_acts.push((client_id, m));
-                }
-            }
-            "vx.furnace_close" => {
-                if let Ok((m, _)) =
-                    bincode::serde::decode_from_slice::<FurnaceCloseMsg, _>(&data, cfg)
-                {
-                    ctx.furnace_closes.push((client_id, m));
-                }
-            }
-            "vx.chest_drag" => {
-                if let Ok((m, _)) = bincode::serde::decode_from_slice::<
-                    ContainerDragMsg,
-                    _,
-                >(&data, cfg)
-                {
-                    ctx.chest_drags.push((client_id, m));
-                }
-            }
-            "vx.furnace_drag" => {
-                if let Ok((m, _)) = bincode::serde::decode_from_slice::<
-                    ContainerDragMsg,
-                    _,
-                >(&data, cfg)
-                {
-                    ctx.furnace_drags.push((client_id, m));
-                }
-            }
-            "vx.inv_op" => {
-                if let Ok((m, _)) =
-                    bincode::serde::decode_from_slice::<InvOpMsg, _>(&data, cfg)
-                {
-                    ctx.inv_ops.push((client_id, m));
-                }
-            }
-            "vx.recipe" => {
-                // Client asked the server to auto-
-                // fill its craft grid with recipe
-                // index `idx`. Validate the sender's
-                // inventory carries every input,
-                // move them into craft_grid, and
-                // queue an inv snapshot back.
-                if let Ok((idx, _)) =
-                    bincode::serde::decode_from_slice::<u32, _>(&data, cfg)
-                    && let Some(recipe_inputs) = recipes_lookup(idx as usize)
-                    && let Some(inv) = inventories.get_mut(&client_id)
-                {
-                    let mut taken: Vec<(usize, ItemStack)> = Vec::new();
-                    let mut placed: [Option<ItemStack>; 4] =
-                        std::array::from_fn(|_| None);
-                    let mut ok = true;
-                    for (i, (bid, n)) in recipe_inputs.iter().enumerate() {
-                        if i >= 4 {
-                            break;
-                        }
-                        let need = *n;
-                        // W469: the craft grid is stack-typed, so
-                        // any matching stack feeds it losslessly -
-                        // the slice into the grid clones the source
-                        // components (the W468 plain-only gate is
-                        // gone).
-                        let mut found: Option<usize> = None;
-                        for (si, slot) in inv.inventory.iter().enumerate() {
-                            if let Some(st) = slot
-                                && st.id == *bid
-                                && st.count >= need
-                            {
-                                found = Some(si);
-                                break;
-                            }
-                        }
-                        match found {
-                            Some(si) => {
-                                let original = inv.inventory[si]
-                                    .clone()
-                                    .expect("verified");
-                                let remaining =
-                                    original.count.saturating_sub(need);
-                                inv.inventory[si] = if remaining == 0 {
-                                    None
-                                } else {
-                                    Some(original.with_count(remaining))
-                                };
-                                placed[i] = Some(original.with_count(need));
-                                taken.push((si, original));
-                            }
-                            None => {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    if ok {
-                        // Return any existing craft-grid stacks to
-                        // the inventory before overwriting
-                        // (components intact).
-                        let returns: Vec<ItemStack> = inv
-                            .craft_grid
-                            .iter_mut()
-                            .filter_map(|s| s.take())
-                            .collect();
-                        for st in returns {
-                            let _ =
-                                crate::item::stack::drop_into_first_free_stacks(
-                                    &mut inv.inventory,
-                                    st,
-                                );
-                        }
-                        inv.craft_grid = placed;
-                    } else {
-                        for (si, original) in taken {
-                            inv.inventory[si] = Some(original);
-                        }
-                    }
-                    pending_inv_sends.insert(client_id);
-                }
-            }
-            "vx.mob_hit" => {
-                if let Ok((m, _)) =
-                    bincode::serde::decode_from_slice::<MobHitMsg, _>(&data, cfg)
-                {
-                    ctx.mob_hits_to_apply.push((client_id, m.mob_id));
-                }
-            }
-            "vx.sleep" => {
-                // Client requested a time skip (bed
-                // RMB). Authoritative side validates
-                // it's night before honouring; force
-                // a vx.day broadcast next tick so
-                // every peer sees the morning jump.
-                let phase = (*ctx.day_time / day_length_s).rem_euclid(1.0);
-                let elev = (phase * std::f32::consts::TAU).sin();
-                if elev < -0.05 {
-                    *ctx.day_time = day_length_s * 0.20;
-                    *ctx.last_day_broadcast = None;
-                    let sender = server
-                        .client_name(client_id)
-                        .unwrap_or_else(|| format!("p{client_id}"));
-                    let line =
-                        format!("* {sender} sleeps through the night");
-                    ctx.chat_inbox.push(line.clone());
-                    if let Ok(buf) =
-                        bincode::serde::encode_to_vec(&line, cfg)
-                    {
-                        server.broadcast_bytes("vx.chat", buf);
-                    }
-                }
-            }
-            "vx.path" => {
-                // Defer processing until the match
-                // arm releases self.net so we can
-                // call world_set_tracked + broadcast.
-                if let Ok((v, _)) =
-                    bincode::serde::decode_from_slice::<[i32; 3], _>(&data, cfg)
-                {
-                    ctx.path_requests.push((client_id, v));
-                }
-            }
-            "vx.torch_orient" => {
-                // Cosmetic lean info that rides
-                // alongside a torch place. Edit itself
-                // was already reach-validated via
-                // `vx.edit`; here we just record + fan
-                // out to every other peer so they
-                // render the matching wall / floor
-                // mount.
-                if let Ok(((v, orient), _)) =
-                    bincode::serde::decode_from_slice::<([i32; 3], u8), _>(
-                        &data, cfg,
-                    )
-                {
-                    ctx.torch_orient_updates.push((v, orient));
-                    if let Ok(buf) =
-                        bincode::serde::encode_to_vec((v, orient), cfg)
-                    {
-                        server.broadcast_bytes("vx.torch_orient", buf);
-                    }
-                }
-            }
-            "vx.door_state" => {
-                // W125: a client placed/toggled a door. Record
-                // locally + fan out so every peer flips the same
-                // panel. (Reach was validated by the paired
-                // vx.edit for places; toggles are cosmetic+door
-                // -local so a light touch is fine here.)
-                if let Ok(((v, facing, open), _)) =
-                    bincode::serde::decode_from_slice::<([i32; 3], u8, bool), _>(
-                        &data, cfg,
-                    )
-                {
-                    ctx.door_state_updates.push((v, facing, open));
-                    if let Ok(buf) =
-                        bincode::serde::encode_to_vec((v, facing, open), cfg)
-                    {
-                        server.broadcast_bytes("vx.door_state", buf);
-                    }
-                }
-            }
-            "vx.chest_facing" => {
-                // W126: cosmetic chest yaw riding alongside a
-                // chest place (reach validated by the vx.edit).
-                if let Ok(((v, facing), _)) =
-                    bincode::serde::decode_from_slice::<([i32; 3], u8), _>(
-                        &data, cfg,
-                    )
-                {
-                    ctx.chest_facing_updates.push((v, facing));
-                    if let Ok(buf) =
-                        bincode::serde::encode_to_vec((v, facing), cfg)
-                    {
-                        server.broadcast_bytes("vx.chest_facing", buf);
-                    }
-                }
-            }
-            "vx.rail_shape" => {
-                // W143: a client placed/broke a rail; its placement
-                // already computed the stateful shapes (reach was
-                // validated by the paired vx.edit). Record + fan out.
-                if let Ok(((v, shape), _)) =
-                    bincode::serde::decode_from_slice::<([i32; 3], u8), _>(
-                        &data, cfg,
-                    )
-                {
-                    ctx.rail_shape_updates.push((v, shape));
-                    if let Ok(buf) =
-                        bincode::serde::encode_to_vec((v, shape), cfg)
-                    {
-                        server.broadcast_bytes("vx.rail_shape", buf);
-                    }
-                }
-            }
-            "vx.fellout" => {
-                // Wipe the storage rows + craft grid -
-                // matches the local client penalty. Keep
-                // the hotbar so the player isn't bare.
-                if let Some(inv) = inventories.get_mut(&client_id) {
-                    for s in inv.inventory[HOTBAR_SLOTS..].iter_mut() {
-                        *s = None;
-                    }
-                    for s in inv.craft_grid.iter_mut() {
-                        *s = None;
-                    }
-                    pending_inv_sends.insert(client_id);
-                }
-            }
-            "vx.leave" => {
-                // Explicit disconnect: drop the pose
-                // straight away so the reaper's 5 s
-                // grace doesn't strand a frozen ghost.
-                poses.remove(&client_id);
-                tracing::info!(
-                    client_id,
-                    "client requested explicit leave"
-                );
-            }
-            "vx.chat" => {
-                // Decode + tag with the sender's
-                // client name, then broadcast so every
-                // peer (including the originator) sees
-                // the same final line. The whisper
-                // marker (\u{1}whisper\u{1}<id>\u{1}<text>)
-                // is intercepted and re-routed to a
-                // single client instead.
-                if let Ok((text, _)) =
-                    bincode::serde::decode_from_slice::<String, _>(&data, cfg)
-                {
-                    let sender = server
-                        .client_name(client_id)
-                        .unwrap_or_else(|| format!("p{client_id}"));
-                    if let Some(rest) =
-                        text.strip_prefix("\u{1}whisper\u{1}")
-                    {
-                        let mut parts = rest.splitn(2, '\u{1}');
-                        let tid_str = parts.next().unwrap_or("");
-                        let body = parts.next().unwrap_or("");
-                        if let Ok(tid) = tid_str.parse::<u32>()
-                            && !body.is_empty()
-                        {
-                            let line =
-                                format!("[whisper from {sender}] {body}");
-                            if tid == 0 {
-                                ctx.chat_inbox.push(line);
-                            } else if let Ok(buf) =
-                                bincode::serde::encode_to_vec(&line, cfg)
-                            {
-                                server.send_bytes_to_client(
-                                    tid, "vx.chat", buf,
-                                );
-                            }
-                        }
-                    } else {
-                        let line = format!("<{sender}> {text}");
-                        ctx.chat_inbox.push(line.clone());
-                        if let Ok(buf) =
-                            bincode::serde::encode_to_vec(&line, cfg)
-                        {
-                            server.broadcast_bytes("vx.chat", buf);
-                        }
-                    }
-                }
-            }
-            "vx.pvp_hit" => {
-                // Validate the attacker's reach + the
-                // existence of the target, then forward
-                // a `vx.damage` to the target client.
-                // Host (id 0) attacks are handled
-                // client-side (see the lmb dispatch);
-                // this path only fires for remote
-                // clients hitting other peers.
-                if let Ok((m, _)) =
-                    bincode::serde::decode_from_slice::<PvPHitMsg, _>(&data, cfg)
-                {
-                    let attacker = poses.get(&client_id).copied();
-                    let attacker_pos = attacker.map(|p| p.pos);
-                    let target_pos = if m.target_id == 0 {
-                        Some(ctx.host_player_pos)
-                    } else {
-                        poses.get(&m.target_id).copied().map(|p| p.pos)
-                    };
-                    if let (Some(ap), Some(tp)) =
-                        (attacker_pos, target_pos)
-                    {
-                        let dx = ap[0] - tp[0];
-                        let dy = ap[1] - tp[1];
-                        let dz = ap[2] - tp[2];
-                        let d2 = dx * dx + dy * dy + dz * dz;
-                        if d2 <= (pvp_reach + 1.0).powi(2) {
-                            // W471: wear the remote attacker's
-                            // weapon on the AUTHORITATIVE copy
-                            // (the attacker's own client applies
-                            // the same wear as prediction).
-                            let sel = attacker
-                                .map(|p| p.sel)
-                                .unwrap_or(SEL_NONE);
-                            wear_client_weapon(
-                                inventories,
-                                pending_inv_sends,
-                                client_id,
-                                sel,
-                            );
-                            if m.target_id == 0 {
-                                // Host is the target.
-                                *ctx.pvp_self_damage += pvp_damage;
-                            } else {
-                                let dmg = DamageMsg { amount: pvp_damage };
-                                if let Ok(buf) =
-                                    bincode::serde::encode_to_vec(dmg, cfg)
-                                {
-                                    server.send_bytes_to_client(
-                                        m.target_id,
-                                        "vx.damage",
-                                        buf,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-}
 
 
 // W47.6 - per-frame net IO dispatch lives in dispatch.rs.

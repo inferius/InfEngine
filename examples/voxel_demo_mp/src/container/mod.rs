@@ -47,6 +47,12 @@ pub(crate) struct Container {
     /// smeltable items; output slot accepts only the smelt result.
     /// Indices outside the Vec default to "accept any".
     accept: Vec<Option<AcceptFn>>,
+    /// W472: optional per-slot max-stack caps (`Slot.
+    /// getMaxStackSize()`); indices outside the Vec default to
+    /// `click::CAP_NONE` (item max alone applies). Declared by the
+    /// menu builder (e.g. a future enchanting table's lapis 64 /
+    /// item 1 slots); plain chests never populate it.
+    caps: Vec<u8>,
 }
 
 impl Container {
@@ -56,6 +62,7 @@ impl Container {
         Self {
             slots: vec![None; n],
             accept: Vec::new(),
+            caps: Vec::new(),
         }
     }
 
@@ -101,14 +108,37 @@ impl Container {
         self.slots.len()
     }
 
-    /// W470: split borrow for the click core - the mutable slot
-    /// slice plus the (read-only) accept table, so a
-    /// `click::SectionMut` can wrap a live container without
-    /// cloning either side.
-    pub(crate) fn slots_and_accept_mut(
+    /// W470/W472: split borrow for the click core - the mutable
+    /// slot slice plus the (read-only) accept + per-slot cap
+    /// tables, so a `click::SectionMut` can wrap a live container
+    /// without cloning any side.
+    pub(crate) fn parts_mut(
         &mut self,
-    ) -> (&mut [Slot], &[Option<AcceptFn>]) {
-        (&mut self.slots, &self.accept)
+    ) -> (&mut [Slot], &[Option<AcceptFn>], &[u8]) {
+        (&mut self.slots, &self.accept, &self.caps)
+    }
+
+    /// W472: as a click-core section (the common single-container
+    /// case).
+    pub(crate) fn as_section_mut(&mut self) -> click::SectionMut<'_> {
+        let (slots, accept, caps) = self.parts_mut();
+        click::SectionMut { slots, accept, caps }
+    }
+
+    /// W472: cap slot `i` at `cap` items (`Slot.getMaxStackSize()`
+    /// override). Grows the caps vec on demand; un-set slots stay
+    /// at `click::CAP_NONE`.
+    pub(crate) fn set_cap(&mut self, i: usize, cap: u8) {
+        if self.caps.len() <= i {
+            self.caps.resize(i + 1, click::CAP_NONE);
+        }
+        self.caps[i] = cap;
+    }
+
+    /// W472: the raw per-slot cap of slot `i` (`CAP_NONE` when
+    /// unset).
+    pub(crate) fn cap(&self, i: usize) -> u8 {
+        self.caps.get(i).copied().unwrap_or(click::CAP_NONE)
     }
 
     /// True when every slot is empty (NOT the same as `len()==0`).
@@ -157,11 +187,11 @@ impl Container {
         if incoming.count == 0 {
             return 0;
         }
-        let cap = crate::item::item_max_stack(incoming.id);
+        let item_cap = crate::item::item_max_stack(incoming.id);
         let mut remaining = incoming.count;
         // Pass 1: top up matching partial stacks ONLY. Skip empties
         // here so we keep slot count low - matches Minecraft's
-        // pickup behaviour.
+        // pickup behaviour. W472: per-slot caps bind too.
         for i in 0..self.slots.len() {
             if remaining == 0 {
                 return 0;
@@ -169,6 +199,7 @@ impl Container {
             if !self.accepts(i, incoming.id) {
                 continue;
             }
+            let cap = item_cap.min(self.cap(i));
             if let Some(st) = self.slots[i].as_mut()
                 && st.same_stackable(&incoming)
                 && st.count < cap
@@ -191,7 +222,10 @@ impl Container {
             if self.slots[i].is_some() {
                 continue;
             }
-            let take = remaining.min(cap);
+            let take = remaining.min(item_cap.min(self.cap(i)));
+            if take == 0 {
+                continue;
+            }
             self.slots[i] = Some(incoming.with_count(take));
             remaining -= take;
         }

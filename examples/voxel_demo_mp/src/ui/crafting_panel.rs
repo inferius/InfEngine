@@ -465,22 +465,31 @@ fn track_slot(t: TrackCtx<'_>) {
     }
 }
 
-/// Global index of a `SlotRef` on the [3x3 grid, player inventory]
-/// screen.
+/// Global index of a `SlotRef` on the [3x3 grid, main inv 9..35,
+/// hotbar 0..8] screen. W472: MC menu order (CraftingMenu adds the
+/// extended inventory rows before the hotbar) - the `Inv` ARRAY
+/// index is hotbar-first, so hotbar array slots map to the LAST
+/// section.
 fn gi_of(sref: SlotRef) -> usize {
+    const HB: usize = crate::inventory::HOTBAR_SLOTS;
+    const MAIN: usize = crate::inventory::INVENTORY_SLOTS - HB;
     match sref {
         SlotRef::Grid(i) => i,
-        SlotRef::Inv(i) => 9 + i,
+        SlotRef::Inv(i) if i < HB => 9 + MAIN + i,
+        SlotRef::Inv(i) => 9 + (i - HB),
     }
 }
 
-/// The panel's screen as click-core sections. No accept filters -
-/// craft cells and inventory slots take anything.
+/// The panel's screen as click-core sections in MC menu order:
+/// [grid, main rows, hotbar]. No accept filters - craft cells and
+/// inventory slots take anything.
 fn sections_of<'a>(
     grid: &'a mut [Option<ItemStack>; 9],
     inv: &'a mut [Option<ItemStack>],
-) -> [SectionMut<'a>; 2] {
-    [SectionMut::open(&mut grid[..]), SectionMut::open(inv)]
+) -> [SectionMut<'a>; 3] {
+    let (main_sec, hotbar_sec) =
+        crate::container::screen::player_sections(inv);
+    [SectionMut::open(&mut grid[..]), main_sec, hotbar_sec]
 }
 
 /// Apply one click through the SHARED doClick core. Returns a
@@ -493,7 +502,8 @@ fn apply_click(
     kind: ClickKind,
     creative: bool,
 ) -> Option<ItemStack> {
-    let inv_len = inv.len();
+    const HB: usize = crate::inventory::HOTBAR_SLOTS;
+    const MAIN: usize = crate::inventory::INVENTORY_SLOTS - HB;
     let gi = gi_of(sref);
     let mut sections = sections_of(grid, inv);
     match kind {
@@ -506,42 +516,45 @@ fn apply_click(
         ClickKind::ShiftLmb => {
             // CraftingMenu.quickMoveStack routing: grid cells move
             // to the player inventory main-first then hotbar
-            // (`moveItemStackTo(10, 46, false)`); player slots try
-            // the grid first (`moveItemStackTo(1, 10, false)`),
-            // then fall back to a hotbar<->main move.
+            // (`moveItemStackTo(10, 46, false)` - with menu-ordered
+            // sections that is the plain player gi range); player
+            // slots try the grid first (`moveItemStackTo(1, 10,
+            // false)`), then fall back to a hotbar<->main move.
             match sref {
                 SlotRef::Grid(_) => {
-                    let order: Vec<usize> = (crate::inventory::HOTBAR_SLOTS
-                        ..inv_len)
-                        .chain(0..crate::inventory::HOTBAR_SLOTS)
-                        .map(|i| 9 + i)
-                        .collect();
+                    let order: Vec<usize> = (9..9 + MAIN + HB).collect();
                     click::quick_move(&mut sections, gi, &order);
                 }
                 SlotRef::Inv(i) => {
                     let grid_order: Vec<usize> = (0..9).collect();
                     if !click::quick_move(&mut sections, gi, &grid_order) {
-                        let fallback: Vec<usize> =
-                            if i < crate::inventory::HOTBAR_SLOTS {
-                                (crate::inventory::HOTBAR_SLOTS..inv_len)
-                                    .map(|k| 9 + k)
-                                    .collect()
-                            } else {
-                                (0..crate::inventory::HOTBAR_SLOTS)
-                                    .map(|k| 9 + k)
-                                    .collect()
-                            };
+                        let fallback: Vec<usize> = if i < HB {
+                            // Hotbar source -> main rows.
+                            (9..9 + MAIN).collect()
+                        } else {
+                            // Main source -> hotbar.
+                            (9 + MAIN..9 + MAIN + HB).collect()
+                        };
                         click::quick_move(&mut sections, gi, &fallback);
                     }
                 }
             }
         }
         ClickKind::Collect => {
-            click::pickup_all(&mut sections, held, gi);
+            click::pickup_all(&mut sections, held, gi, false);
         }
         ClickKind::SwapHotbar(h) => {
-            if (h as usize) < crate::inventory::HOTBAR_SLOTS {
-                click::swap_click(&mut sections, gi, 9 + h as usize);
+            if (h as usize) < HB {
+                // `Inventory.add` order for a SWAP-displaced stack:
+                // hotbar array order first, then the main rows.
+                let add_order: Vec<usize> =
+                    (9 + MAIN..9 + MAIN + HB).chain(9..9 + MAIN).collect();
+                return click::swap_click(
+                    &mut sections,
+                    gi,
+                    9 + MAIN + h as usize,
+                    &add_order,
+                );
             }
         }
         ClickKind::ThrowOne => {

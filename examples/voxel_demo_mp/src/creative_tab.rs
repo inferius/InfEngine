@@ -20,9 +20,7 @@
 //! - `filter_items()`: case-insensitive substring match against
 //!   the display name. Pure function - easy to unit test.
 
-use infengine_voxel::BlockId;
-
-use crate::item::{ItemCategory, ITEM_TYPES, ItemType};
+use crate::item::{ItemCategory, ITEM_TYPES, ItemStack, ItemType};
 
 /// W12.9 - Creative tab category strip. Mirrors MC's
 /// `CreativeModeTab` enum but at a coarser grain. Each category
@@ -154,10 +152,12 @@ pub(crate) struct CreativeTabState {
     /// Live search query. Lowercased substring match against the
     /// item display name. Empty string = show everything.
     pub query: String,
-    /// Currently held stack (cursor). Populated by left-clicking
-    /// a grid tile; deposited by clicking a hotbar slot. None
-    /// means the cursor is empty.
-    pub cursor: Option<(BlockId, u8)>,
+    /// Currently held stack (cursor). W472: MC creative-screen
+    /// basics - clicking a grid tile fills the cursor (full stack
+    /// LMB / one RMB); clicking a hotbar slot places it through
+    /// the shared click core. Closing (or clicking outside)
+    /// DESTROYS the cursor, matching creative semantics.
+    pub cursor: Option<ItemStack>,
     /// W12.9 - active tab. Defaults to All.
     pub category: CreativeCategory,
     /// W20.3 - true on the first frame after open_now(). The egui
@@ -268,49 +268,6 @@ pub(crate) fn filter_items_in_category(
     filter_items(&cat_hits, query)
 }
 
-/// Try to deposit `stack` into the player's hotbar (slots
-/// 0..9). First tries to top up a matching stack in any slot,
-/// then claims the first empty hotbar slot. Returns `true` when
-/// the cursor was deposited (in which case the caller clears
-/// `cursor`); `false` means the hotbar was full + the cursor
-/// stays as-is.
-///
-/// Matches the existing `inventory::inv_pickup` flow but only
-/// touches the hotbar so creative drops always land in a
-/// reachable slot. The full inventory grid stays available for
-/// drag&drop.
-pub(crate) fn deposit_in_hotbar(
-    hotbar: &mut [Option<(BlockId, u8)>],
-    stack: (BlockId, u8),
-    max_stack: u8,
-) -> bool {
-    let (block, count) = stack;
-    let mut remaining = count;
-    // Top-up phase.
-    for slot in hotbar.iter_mut() {
-        if let Some((b, c)) = slot.as_mut()
-            && *b == block
-            && *c < max_stack
-        {
-            let room = max_stack - *c;
-            let add = remaining.min(room);
-            *c += add;
-            remaining = remaining.saturating_sub(add);
-            if remaining == 0 {
-                return true;
-            }
-        }
-    }
-    // First-empty phase.
-    for slot in hotbar.iter_mut() {
-        if slot.is_none() {
-            *slot = Some((block, remaining.min(max_stack)));
-            return true;
-        }
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,7 +327,7 @@ mod tests {
         let mut state = CreativeTabState {
             open: false,
             query: "stale".into(),
-            cursor: Some((BlockId(1), 64)),
+            cursor: Some(ItemStack::new(1, 64)),
             category: CreativeCategory::Tools,
             just_opened: false,
         };
@@ -387,7 +344,7 @@ mod tests {
         // items into the world).
         let mut state = CreativeTabState::default();
         state.open_now();
-        state.cursor = Some((BlockId(1), 64));
+        state.cursor = Some(ItemStack::new(1, 64));
         state.close();
         assert!(!state.open);
         assert!(state.cursor.is_none());
@@ -405,36 +362,28 @@ mod tests {
     }
 
     #[test]
-    fn deposit_in_hotbar_fills_empty_slot() {
-        // Deposit phase #2: empty hotbar receives the cursor in
-        // slot 0.
-        let mut hotbar: [Option<(BlockId, u8)>; 9] = [None; 9];
-        let ok =
-            deposit_in_hotbar(&mut hotbar, (BlockId(1), 64), 64);
-        assert!(ok);
-        assert_eq!(hotbar[0], Some((BlockId(1), 64)));
-    }
-
-    #[test]
-    fn deposit_in_hotbar_tops_up_existing_stack() {
-        // Deposit phase #1: top-up flow. Half-stack already in
-        // slot 0; adding 32 more fills it to 64.
-        let mut hotbar: [Option<(BlockId, u8)>; 9] = [None; 9];
-        hotbar[0] = Some((BlockId(1), 32));
-        let ok =
-            deposit_in_hotbar(&mut hotbar, (BlockId(1), 32), 64);
-        assert!(ok);
-        assert_eq!(hotbar[0], Some((BlockId(1), 64)));
-    }
-
-    #[test]
-    fn deposit_in_hotbar_fails_when_full() {
-        // Full hotbar + cursor doesn't match = no deposit.
-        let mut hotbar: [Option<(BlockId, u8)>; 9] =
-            [Some((BlockId(2), 64)); 9];
-        let ok =
-            deposit_in_hotbar(&mut hotbar, (BlockId(1), 64), 64);
-        assert!(!ok);
+    fn creative_cursor_places_through_click_core() {
+        // W472: the creative cursor lands in a hotbar slot through
+        // the SHARED pickup_click (place / merge / swap), not a
+        // bespoke deposit helper.
+        use crate::container::click::{self, SectionMut};
+        let mut hotbar: [Option<ItemStack>; 9] =
+            std::array::from_fn(|_| None);
+        let mut cursor = Some(ItemStack::new(1, 64));
+        {
+            let mut sections = [SectionMut::open(&mut hotbar)];
+            click::pickup_click(&mut sections, &mut cursor, 0, false);
+        }
+        assert_eq!(hotbar[0], Some(ItemStack::new(1, 64)));
+        assert!(cursor.is_none());
+        // Swap with an occupied slot keeps both stacks.
+        cursor = Some(ItemStack::new(2, 3));
+        {
+            let mut sections = [SectionMut::open(&mut hotbar)];
+            click::pickup_click(&mut sections, &mut cursor, 0, false);
+        }
+        assert_eq!(hotbar[0], Some(ItemStack::new(2, 3)));
+        assert_eq!(cursor, Some(ItemStack::new(1, 64)));
     }
 
     #[test]

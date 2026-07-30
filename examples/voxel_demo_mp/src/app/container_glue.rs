@@ -19,6 +19,7 @@ impl Voxel {
     pub(crate) fn apply_chest_drag_msgs(&mut self, msgs: &[(u32, crate::net::ContainerDragMsg)]) { crate::net::container_apply::apply_chest_drag_msgs(self, msgs); }
     pub(crate) fn apply_furnace_drag_msgs(&mut self, msgs: &[(u32, crate::net::ContainerDragMsg)]) { crate::net::container_apply::apply_furnace_drag_msgs(self, msgs); }
     pub(crate) fn apply_inv_op_msgs(&mut self, msgs: &[(u32, crate::net::InvOpMsg)]) { crate::net::container_apply::apply_inv_op_msgs(self, msgs); }
+    pub(crate) fn apply_inv_drag_msgs(&mut self, msgs: &[(u32, crate::net::InvDragMsg)]) { crate::net::container_apply::apply_inv_drag_msgs(self, msgs); }
     pub(crate) fn broadcast_chest_state(&mut self, pos: [i32; 3]) { crate::net::container_apply::broadcast_chest_state(self, pos); }
     pub(crate) fn broadcast_furnace_state(&mut self, pos: [i32; 3]) { crate::net::container_apply::broadcast_furnace_state(self, pos); }
 

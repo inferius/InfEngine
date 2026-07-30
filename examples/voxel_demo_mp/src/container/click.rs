@@ -29,11 +29,10 @@
 //! - PICKUP_ALL -> `pickup_all` (double-click collect).
 //!
 //! Deliberate deviations from the source (documented per fn):
-//! - Per-slot max-stack caps don't exist here: `Slot.
-//!   getMaxStackSize(stack)` is always the item registry's
-//!   `item_max_stack(id)`, so the SWAP / PICKUP overflow-split
-//!   branches (`source.getCount() > maxStackSize`) are dead and not
-//!   ported.
+//! - W472: per-slot max-stack caps exist (`SectionMut::caps`,
+//!   mirroring `Slot.getMaxStackSize(stack)` = min(slot cap, item
+//!   max)), so the SWAP / PICKUP overflow-split branches
+//!   (`source.getCount() > maxStackSize`) are ported live.
 //! - Result slots (craft output) are VIRTUAL in this engine (they
 //!   are computed, not stored), so the THROW / QUICK_MOVE repeat
 //!   loops that re-poll a refilling result slot collapse to a
@@ -52,20 +51,30 @@ use crate::item::stack::take_n_stacks;
 /// property of the item kind, not per-stack components).
 pub(crate) type SlotAccept = fn(u16) -> bool;
 
+/// W472: per-slot max-stack sentinel - "no per-slot cap" (only the
+/// item registry's `item_max_stack` applies). Mirrors the default
+/// `Slot.getMaxStackSize()` (container max = 99 in MC, which never
+/// binds below an item max of 64).
+pub(crate) const CAP_NONE: u8 = u8::MAX;
+
 /// One section of an open screen: a contiguous run of slots
 /// belonging to one storage (container rows, player inventory,
 /// craft grid). `accept` runs parallel to `slots`; missing entries
 /// (shorter slice, `None`) accept everything - mirroring
-/// `Container::accepts`.
+/// `Container::accepts`. `caps` runs parallel too: per-slot
+/// max-stack caps (`Slot.getMaxStackSize()` overrides - armor
+/// slots 1, future enchant lapis 64); missing entries = `CAP_NONE`.
 pub(crate) struct SectionMut<'a> {
     pub(crate) slots: &'a mut [Option<ItemStack>],
     pub(crate) accept: &'a [Option<SlotAccept>],
+    pub(crate) caps: &'a [u8],
 }
 
 impl<'a> SectionMut<'a> {
-    /// Accept-free section (player inventory, craft grids).
+    /// Accept-free, cap-free section (player inventory, craft
+    /// grids).
     pub(crate) fn open(slots: &'a mut [Option<ItemStack>]) -> Self {
-        Self { slots, accept: &[] }
+        Self { slots, accept: &[], caps: &[] }
     }
 }
 
@@ -118,17 +127,41 @@ pub(crate) fn accepts(sections: &[SectionMut<'_>], gi: usize, item_id: u16) -> b
     }
 }
 
+/// W472: `Slot.getMaxStackSize(stack)` port - the effective max
+/// count a stack of `item_id` may reach in the slot at `gi`:
+/// `min(item_max_stack, per-slot cap)`. Out-of-range / uncapped
+/// slots fall back to the item max alone.
+pub(crate) fn effective_cap(
+    sections: &[SectionMut<'_>],
+    gi: usize,
+    item_id: u16,
+) -> u8 {
+    let slot_cap = match locate(sections, gi) {
+        Some((si, li)) => {
+            sections[si].caps.get(li).copied().unwrap_or(CAP_NONE)
+        }
+        None => CAP_NONE,
+    };
+    item_max_stack(item_id).min(slot_cap)
+}
+
 /// `Slot.safeInsert(stack, amount)` port: move up to `amount` items
-/// from `incoming` into `slot`, bounded by the item's max stack and
-/// the slot's current fill. The caller has already checked the
-/// accept filter (mirroring how `safeInsert` is reached behind
-/// `mayPlace` in the source). `incoming.count` is reduced in place;
-/// a drained incoming is the caller's cue to clear its cursor.
-fn safe_insert(slot: &mut Option<ItemStack>, incoming: &mut ItemStack, amount: u8) {
+/// from `incoming` into `slot`, bounded by `cap` (the slot's
+/// effective max for this item - W472: `Slot.getMaxStackSize(
+/// stack)`) and the slot's current fill. The caller has already
+/// checked the accept filter (mirroring how `safeInsert` is
+/// reached behind `mayPlace` in the source). `incoming.count` is
+/// reduced in place; a drained incoming is the caller's cue to
+/// clear its cursor.
+fn safe_insert(
+    slot: &mut Option<ItemStack>,
+    incoming: &mut ItemStack,
+    amount: u8,
+    cap: u8,
+) {
     if incoming.count == 0 {
         return;
     }
-    let cap = item_max_stack(incoming.id);
     let existing = slot.as_ref().map(|st| st.count).unwrap_or(0);
     let transferable = amount
         .min(incoming.count)
@@ -170,10 +203,13 @@ pub(crate) fn pickup_click(
     gi: usize,
     secondary: bool,
 ) {
-    let accept_ok = cursor
-        .as_ref()
-        .map(|cur| accepts(sections, gi, cur.id))
-        .unwrap_or(false);
+    let (accept_ok, slot_cap) = match cursor.as_ref() {
+        Some(cur) => (
+            accepts(sections, gi, cur.id),
+            effective_cap(sections, gi, cur.id),
+        ),
+        None => (false, 0),
+    };
     let Some(slot) = slot_mut(sections, gi) else {
         return;
     };
@@ -181,7 +217,7 @@ pub(crate) fn pickup_click(
         (false, Some(cur)) => {
             if accept_ok {
                 let amount = if secondary { 1 } else { cur.count };
-                safe_insert(slot, cur, amount);
+                safe_insert(slot, cur, amount, slot_cap);
                 if cur.count == 0 {
                     *cursor = None;
                 }
@@ -200,15 +236,16 @@ pub(crate) fn pickup_click(
             if accept_ok {
                 if same {
                     let amount = if secondary { 1 } else { cur.count };
-                    safe_insert(slot, cur, amount);
+                    safe_insert(slot, cur, amount, slot_cap);
                     if cur.count == 0 {
                         *cursor = None;
                     }
-                } else if cur.count <= item_max_stack(cur.id) {
+                } else if cur.count <= slot_cap {
                     // Foreign stack: swap slot <-> cursor. The count
                     // guard is the source's `carried.getCount() <=
-                    // slot.getMaxStackSize(carried)`; with per-item
-                    // caps it always holds, kept for fidelity.
+                    // slot.getMaxStackSize(carried)` - W472: live
+                    // with per-slot caps (a 2-stack can't swap into
+                    // a cap-1 slot; MC does nothing in that case).
                     let existing = slot.take();
                     *slot = Some(cursor.take().expect("cursor checked Some"));
                     *cursor = existing;
@@ -268,58 +305,100 @@ pub(crate) fn throw_from_slot(
     take_n_stacks(slot, amount)
 }
 
-/// SWAP arm: exchange the hovered slot `gi` with the hotbar slot
-/// `hotbar_gi` (the number-key press). Accept filters are honoured
-/// in BOTH directions - an armor-ish filtered slot refuses a
-/// non-matching hotbar stack and vice versa. The source's
-/// overflow-split branches (`source.getCount() > maxStackSize`)
-/// are dead with per-item caps and not ported.
+/// SWAP arm: exchange the hovered slot `gi` (MC `target`) with the
+/// hotbar slot `hotbar_gi` (MC `source = inventory.getItem(
+/// buttonNum)`). Source semantics (lines 471-507):
+/// - hotbar empty + target filled: target moves to the hotbar
+///   RAW (`Inventory.setItem` - no filter on the hotbar side).
+/// - hotbar filled + target empty: gated on `target.mayPlace`;
+///   W472 overflow-split live: when the hotbar stack exceeds the
+///   target's effective cap, the target receives a `split(cap)`
+///   and the REMAINDER stays in the hotbar slot.
+/// - both filled: gated on `target.mayPlace(source)`; overflow
+///   splits the hotbar stack into the target and re-homes the
+///   target's old stack via `Inventory.add` over `add_order`
+///   (merge-then-first-empty); a stack `add` can't place is
+///   RETURNED for the caller to drop (`player.drop`).
+///
+/// Returns the displaced stack that found no home (`None` in every
+/// non-overflow path).
 pub(crate) fn swap_click(
     sections: &mut [SectionMut<'_>],
     gi: usize,
     hotbar_gi: usize,
-) {
+    add_order: &[usize],
+) -> Option<ItemStack> {
     if gi == hotbar_gi {
-        return;
+        return None;
     }
-    let source = slot_ref(sections, gi).cloned();
+    let target = slot_ref(sections, gi).cloned();
     let hot = slot_ref(sections, hotbar_gi).cloned();
-    match (source, hot) {
+    match (target, hot) {
         (None, None) => {}
-        (Some(s), None) => {
-            // Hovered -> hotbar (source empty branch mirrored: MC
-            // indexes hotbar as the `buttonNum` side).
-            if accepts(sections, hotbar_gi, s.id) {
-                if let Some(slot) = slot_mut(sections, gi) {
-                    *slot = None;
-                }
-                if let Some(slot) = slot_mut(sections, hotbar_gi) {
-                    *slot = Some(s);
-                }
+        (Some(t), None) => {
+            // Target -> hotbar. MC writes the hotbar slot raw
+            // (`inventory.setItem`), no mayPlace on that side.
+            if let Some(slot) = slot_mut(sections, gi) {
+                *slot = None;
+            }
+            if let Some(slot) = slot_mut(sections, hotbar_gi) {
+                *slot = Some(t);
             }
         }
         (None, Some(h)) => {
-            // Hotbar -> hovered; the hovered slot must accept.
+            // Hotbar -> target; the target slot must accept.
             if accepts(sections, gi, h.id) {
-                if let Some(slot) = slot_mut(sections, hotbar_gi) {
-                    *slot = None;
-                }
-                if let Some(slot) = slot_mut(sections, gi) {
-                    *slot = Some(h);
+                let cap = effective_cap(sections, gi, h.id);
+                if h.count > cap {
+                    // Overflow-split (source line 486): the target
+                    // takes `cap`, the remainder stays in the
+                    // hotbar slot.
+                    if let Some(slot) = slot_mut(sections, hotbar_gi) {
+                        *slot = Some(h.with_count(h.count - cap));
+                    }
+                    if let Some(slot) = slot_mut(sections, gi) {
+                        *slot = Some(h.with_count(cap));
+                    }
+                } else {
+                    if let Some(slot) = slot_mut(sections, hotbar_gi) {
+                        *slot = None;
+                    }
+                    if let Some(slot) = slot_mut(sections, gi) {
+                        *slot = Some(h);
+                    }
                 }
             }
         }
-        (Some(s), Some(h)) => {
-            if accepts(sections, gi, h.id) && accepts(sections, hotbar_gi, s.id) {
-                if let Some(slot) = slot_mut(sections, gi) {
-                    *slot = Some(h);
-                }
-                if let Some(slot) = slot_mut(sections, hotbar_gi) {
-                    *slot = Some(s);
+        (Some(t), Some(h)) => {
+            if accepts(sections, gi, h.id) {
+                let cap = effective_cap(sections, gi, h.id);
+                if h.count > cap {
+                    // Overflow-split (source line 495): target gets
+                    // `split(cap)` off the hotbar stack, the old
+                    // target stack re-homes via `inventory.add`.
+                    if let Some(slot) = slot_mut(sections, hotbar_gi) {
+                        *slot = Some(h.with_count(h.count - cap));
+                    }
+                    if let Some(slot) = slot_mut(sections, gi) {
+                        *slot = Some(h.with_count(cap));
+                    }
+                    let mut displaced = t;
+                    move_stack_to_order(sections, &mut displaced, add_order);
+                    if displaced.count > 0 {
+                        return Some(displaced);
+                    }
+                } else {
+                    if let Some(slot) = slot_mut(sections, gi) {
+                        *slot = Some(h);
+                    }
+                    if let Some(slot) = slot_mut(sections, hotbar_gi) {
+                        *slot = Some(t);
+                    }
                 }
             }
         }
     }
+    None
 }
 
 /// CLONE arm: creative middle-click. Cursor must be empty; it
@@ -362,12 +441,19 @@ pub(crate) fn can_quick_replace(
 /// clicked slot must not hold a pickable item - after the first
 /// click of the double-click picked the stack up, it is empty, so
 /// the guard degenerates to "clicked slot is empty".
-/// (The source's reverse-order `buttonNum != 0` variant has no
-/// input binding here and is not ported.)
+///
+/// `reverse` is the source's `buttonNum != 0` variant (iterate the
+/// slot list END-first). W472: ported for completeness, but NO
+/// input reaches it - the vanilla client only ever sends button 0
+/// (`AbstractContainerScreen.mouseReleased` gates the double-click
+/// on `event.button() == 0`), and in this engine a double-RMB is
+/// already claimed by the one-per-slot drag-paint. Every caller
+/// passes `false`.
 pub(crate) fn pickup_all(
     sections: &mut [SectionMut<'_>],
     cursor: &mut Option<ItemStack>,
     clicked_gi: usize,
+    reverse: bool,
 ) {
     let Some(cur) = cursor.as_mut() else {
         return;
@@ -378,7 +464,8 @@ pub(crate) fn pickup_all(
     let cap = item_max_stack(cur.id);
     let total = total_slots(sections);
     for pass in 0..2 {
-        for gi in 0..total {
+        for step in 0..total {
+            let gi = if reverse { total - 1 - step } else { step };
             if cur.count >= cap {
                 return;
             }
@@ -479,8 +566,10 @@ pub(crate) fn quick_craft_apply(
         if !ok {
             continue;
         }
+        // W472: `min(source.getMaxStackSize(), slot.
+        // getMaxStackSize(source))` - the per-slot cap binds.
         let carry = slot_now.map(|st| st.count).unwrap_or(0);
-        let max_size = item_max_stack(source.id);
+        let max_size = effective_cap(sections, gi, source.id);
         let new_count = quick_craft_place_count(n, one_per_slot, &source)
             .saturating_add(carry)
             .min(max_size);
@@ -499,9 +588,12 @@ pub(crate) fn quick_craft_apply(
 /// 1. Merge into occupied `same_stackable` slots along the order
 ///    (no accept check - matching contents imply prior acceptance).
 ///    Skipped entirely for max-stack-1 items (`isStackable`).
+///    W472: each slot merges up to ITS effective cap
+///    (`slot.getMaxStackSize(target)`).
 /// 2. Place the remainder into the FIRST empty slot that accepts
-///    the item (the source `break`s after one empty slot; with
-///    per-item caps the whole remainder always fits it).
+///    the item, up to that slot's effective cap. The source
+///    `break`s after ONE empty slot even when a cap-limited slot
+///    leaves a remainder (line 688) - ported as-is.
 ///
 /// Returns true when anything moved. `stack.count` is reduced in
 /// place; the caller re-slots any leftover.
@@ -511,12 +603,12 @@ pub(crate) fn move_stack_to_order(
     order: &[usize],
 ) -> bool {
     let mut changed = false;
-    let cap = item_max_stack(stack.id);
-    if cap > 1 {
+    if item_max_stack(stack.id) > 1 {
         for &gi in order {
             if stack.count == 0 {
                 break;
             }
+            let cap = effective_cap(sections, gi, stack.id);
             let Some(slot) = slot_mut(sections, gi) else {
                 continue;
             };
@@ -543,8 +635,10 @@ pub(crate) fn move_stack_to_order(
             if slot_ref(sections, gi).is_some() || !accepts(sections, gi, stack.id) {
                 continue;
             }
-            let put = stack.count.min(cap);
-            if let Some(slot) = slot_mut(sections, gi) {
+            let put = stack.count.min(effective_cap(sections, gi, stack.id));
+            if put > 0
+                && let Some(slot) = slot_mut(sections, gi)
+            {
                 *slot = Some(stack.with_count(put));
                 stack.count -= put;
                 changed = true;

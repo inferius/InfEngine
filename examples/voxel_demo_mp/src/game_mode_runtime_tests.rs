@@ -366,7 +366,7 @@ fn creative_tab_close_on_esc() {
     let mut v = voxel_in_mode(GameMode::Creative);
     v.creative_tab.open_now();
     v.creative_tab.query = "stone".into();
-    v.creative_tab.cursor = Some((infengine_voxel::BlockId(1), 64));
+    v.creative_tab.cursor = Some(crate::item::ItemStack::new(1, 64));
     v.creative_tab.close();
     assert!(!v.creative_tab.open);
     assert!(v.creative_tab.query.is_empty());
@@ -386,23 +386,26 @@ fn creative_tab_search_filters_inventory() {
 }
 
 #[test]
-fn creative_tab_click_adds_to_hotbar() {
-    // W15.1: clicking a grid entry deposits a full stack into the
-    // hotbar via deposit_in_hotbar. Verify the entry lands in the
-    // first empty slot.
-    let mut hotbar: [Option<(infengine_voxel::BlockId, u8)>; 9] = [None; 9];
+fn creative_tab_click_fills_cursor_then_places() {
+    // W472: clicking a grid entry puts a full stack ON THE CURSOR
+    // (MC creative screen); a hotbar-strip click places it through
+    // the shared pickup_click.
+    use crate::container::click::{self, SectionMut};
     let entry = crate::creative_tab::CreativeEntry {
         id: 1,
         max_stack: 64,
         category: crate::item::ItemCategory::BuildingBlock,
     };
-    let ok = crate::creative_tab::deposit_in_hotbar(
-        &mut hotbar,
-        (infengine_voxel::BlockId(entry.id), entry.max_stack),
-        entry.max_stack,
-    );
-    assert!(ok, "deposit must succeed in an empty hotbar");
-    assert_eq!(hotbar[0], Some((infengine_voxel::BlockId(1), 64)));
+    let mut cursor =
+        Some(crate::item::ItemStack::new(entry.id, entry.max_stack));
+    let mut hotbar: [Option<crate::item::ItemStack>; 9] =
+        std::array::from_fn(|_| None);
+    {
+        let mut sections = [SectionMut::open(&mut hotbar)];
+        click::pickup_click(&mut sections, &mut cursor, 0, false);
+    }
+    assert!(cursor.is_none(), "cursor placed");
+    assert_eq!(hotbar[0], Some(crate::item::ItemStack::new(1, 64)));
 }
 
 // -----------------------------------------------------------------------

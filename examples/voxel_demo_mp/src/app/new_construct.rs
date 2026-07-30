@@ -346,6 +346,8 @@ impl Voxel {
             bow_charge: None,
             player_xp: 0,
             armor_slots: std::array::from_fn(|_| None),
+            inv_screen_held: None,
+            client_gamemodes: std::collections::HashMap::new(),
             thrown_potions: Vec::new(),
             player_effects: crate::effects::PlayerEffects::default(),
             smithing_slots: std::array::from_fn(|_| None),

@@ -30,11 +30,21 @@ impl Voxel {
         match NetClient::connect(addr, &self.player_name) {
             Ok(c) => {
                 info!(addr = %addr, "joining server");
+                // W472: announce our game mode right after the
+                // Hello so the host can gate creative-only ops
+                // (CLONE) for this client. Re-announced on every
+                // /gamemode change.
+                let cfg = bincode::config::standard();
+                if let Ok(buf) = bincode::serde::encode_to_vec(
+                    self.abilities.instabuild,
+                    cfg,
+                ) {
+                    let _ = c.send_bytes("vx.gamemode", buf);
+                }
                 self.net = NetRole::Client {
                     client: c,
                     remote: HashMap::new(),
                     pending_edits: Vec::new(),
-                    pending_inv_actions: Vec::new(),
                 };
                 self.mouse_dx = 0.0;
                 self.mouse_dy = 0.0;

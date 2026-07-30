@@ -45,19 +45,45 @@ pub(crate) fn recover_viewer_cursor(
     }
 }
 
+/// W472: canonicalise a wire chest pos to the double-chest
+/// PRIMARY (+ the secondary half when paired). Mints the container
+/// entries for both halves so a freshly-streamed client can open
+/// either side.
+pub(crate) fn chest_canonical(
+    vx: &mut crate::Voxel,
+    pos: [i32; 3],
+) -> ([i32; 3], Option<[i32; 3]>) {
+    vx.chests.entry(pos).or_insert_with(block::chest::new_chest);
+    // A paired neighbour with no container entry yet gets one, so
+    // partner_for's contains_key gate passes.
+    let f = vx.chest_facing.get(&pos).copied().unwrap_or(3);
+    let ext = block::chest::ext_pos_dir(f);
+    for dir in [ext, [-ext[0], 0, -ext[2]]] {
+        let p = [pos[0] + dir[0], pos[1], pos[2] + dir[2]];
+        if vx.world.get(p).0 == crate::block::CHEST_ID
+            && vx.chest_facing.get(&p).copied().unwrap_or(3) == f
+        {
+            vx.chests.entry(p).or_insert_with(block::chest::new_chest);
+        }
+    }
+    block::chest::canonical_pair(
+        &vx.world,
+        &vx.chests,
+        &vx.chest_facing,
+        pos,
+    )
+}
+
 pub(crate) fn apply_chest_open_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::net::ChestOpenMsg)]) {
         for (client_id, m) in msgs {
+            // W472: the menu is keyed by the double-chest PRIMARY.
+            let (primary, _) = chest_canonical(vx, m.pos);
             // A stale cursor from a lost close message returns to
             // the opener's inventory before the fresh session
             // starts (the client's local cursor is empty on open).
-            recover_viewer_cursor(vx, *client_id, m.pos);
-            // Mint an empty chest if the slot doesn't exist yet -
-            // matches the host-side RMB-on-chest path.
-            vx.chests
-                .entry(m.pos)
-                .or_insert_with(block::chest::new_chest);
-            vx.chest_viewers.insert(m.pos, *client_id);
-            vx.broadcast_chest_state(m.pos);
+            recover_viewer_cursor(vx, *client_id, primary);
+            vx.chest_viewers.insert(primary, *client_id);
+            vx.broadcast_chest_state(primary);
         }
     }
 
@@ -91,18 +117,33 @@ fn client_eye_and_look(vx: &crate::Voxel, client_id: u32) -> ([f32; 3], [f32; 3]
     /// velocity.
 pub(crate) fn apply_chest_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::net::ChestActMsg)]) {
         for (client_id, m) in msgs {
+            // W472: acts address the menu by the double-chest
+            // PRIMARY; the client sends the canonical pos, but a
+            // stale/hostile half canonicalises again here.
+            let (primary, secondary) = chest_canonical(vx, m.pos);
             // Validate the viewer; ignore stray acts from clients
             // that didn't go through the open handshake.
-            if vx.chest_viewers.get(&m.pos).copied() != Some(*client_id) {
+            if vx.chest_viewers.get(&primary).copied() != Some(*client_id) {
                 continue;
             }
-            let Some(chest) = vx.chests.get_mut(&m.pos) else {
+            // W472: the working menu view - 54 stitched slots for
+            // a double, written back to both halves after the op.
+            let Some(mut view) =
+                block::chest::menu_view(&vx.chests, primary, secondary)
+            else {
                 continue;
             };
             // W468: the viewer's cursor persists across acts in
             // `container_cursors` and rides back on the state
             // snapshot below - a Take no longer drops the stack
             // into a discarded temporary.
+            // W472: creative-only ops validate against the
+            // sender's announced game mode.
+            let creative = vx
+                .client_gamemodes
+                .get(client_id)
+                .copied()
+                .unwrap_or(false);
             let cursor = vx.container_cursors.entry(*client_id).or_default();
             let mut thrown: Vec<crate::item::ItemStack> = Vec::new();
             match m.action {
@@ -128,36 +169,40 @@ pub(crate) fn apply_chest_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::n
                     {
                         // ClientInv is stack-native (W468): the apply
                         // helpers mutate it directly, components intact.
-                        thrown = if m.player_side {
-                            block::chest::apply_player_action(
-                                &mut inv.inventory,
-                                chest,
-                                cursor,
-                                action,
-                            )
-                        } else {
-                            block::chest::apply_chest_action(
-                                chest,
-                                &mut inv.inventory,
-                                cursor,
-                                action,
-                            )
-                        };
+                        thrown = crate::container::screen::apply_grid_action(
+                            &mut view,
+                            &mut inv.inventory,
+                            cursor,
+                            m.player_side,
+                            action,
+                            &crate::container::screen::CHEST_CFG,
+                            creative,
+                        );
                         pending_inv_sends.insert(*client_id);
                     } else if !m.player_side {
                         // No per-client inventory (offline test harness):
                         // chest-side acts still run against the cursor;
                         // Transfer has no partner and no-ops.
-                        thrown = block::chest::apply_chest_action(
-                            chest, &mut no_inv, cursor, action,
+                        thrown = crate::container::screen::apply_grid_action(
+                            &mut view,
+                            &mut no_inv,
+                            cursor,
+                            false,
+                            action,
+                            &crate::container::screen::CHEST_CFG,
+                            creative,
                         );
                     }
                 }
             }
-            // Pos is needed beyond the borrow scope above.
-            let pos = m.pos;
+            block::chest::menu_writeback(
+                &mut vx.chests,
+                primary,
+                secondary,
+                &view,
+            );
             let cid = *client_id;
-            vx.broadcast_chest_state(pos);
+            vx.broadcast_chest_state(primary);
             let (eye, look) = client_eye_and_look(vx, cid);
             for st in thrown {
                 crate::drops::spawn_thrown_stack(vx, st, eye, look);
@@ -170,10 +215,14 @@ pub(crate) fn apply_chest_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::n
     /// per-viewer cursor.
 pub(crate) fn apply_chest_drag_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::net::ContainerDragMsg)]) {
         for (client_id, m) in msgs {
-            if vx.chest_viewers.get(&m.pos).copied() != Some(*client_id) {
+            // W472: same stitched-menu addressing as the acts.
+            let (primary, secondary) = chest_canonical(vx, m.pos);
+            if vx.chest_viewers.get(&primary).copied() != Some(*client_id) {
                 continue;
             }
-            let Some(chest) = vx.chests.get_mut(&m.pos) else {
+            let Some(mut view) =
+                block::chest::menu_view(&vx.chests, primary, secondary)
+            else {
                 continue;
             };
             let cursor = vx.container_cursors.entry(*client_id).or_default();
@@ -186,7 +235,7 @@ pub(crate) fn apply_chest_drag_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::
                 && let Some(inv) = inventories.get_mut(client_id)
             {
                 crate::container::screen::apply_grid_drag(
-                    chest,
+                    &mut view,
                     &mut inv.inventory,
                     cursor,
                     &visited,
@@ -196,15 +245,20 @@ pub(crate) fn apply_chest_drag_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::
             } else {
                 let mut no_inv: [Option<crate::item::ItemStack>; 0] = [];
                 crate::container::screen::apply_grid_drag(
-                    chest,
+                    &mut view,
                     &mut no_inv,
                     cursor,
                     &visited,
                     m.one_per_slot,
                 );
             }
-            let pos = m.pos;
-            vx.broadcast_chest_state(pos);
+            block::chest::menu_writeback(
+                &mut vx.chests,
+                primary,
+                secondary,
+                &view,
+            );
+            vx.broadcast_chest_state(primary);
         }
     }
 
@@ -213,9 +267,11 @@ pub(crate) fn apply_chest_drag_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::
     /// their inventory (spill at the chest on overflow).
 pub(crate) fn apply_chest_close_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::net::ChestCloseMsg)]) {
         for (client_id, m) in msgs {
-            if vx.chest_viewers.get(&m.pos).copied() == Some(*client_id) {
-                vx.chest_viewers.remove(&m.pos);
-                recover_viewer_cursor(vx, *client_id, m.pos);
+            // W472: viewer registration lives under the PRIMARY.
+            let (primary, _) = chest_canonical(vx, m.pos);
+            if vx.chest_viewers.get(&primary).copied() == Some(*client_id) {
+                vx.chest_viewers.remove(&primary);
+                recover_viewer_cursor(vx, *client_id, primary);
             }
         }
     }
@@ -245,6 +301,12 @@ pub(crate) fn apply_furnace_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate:
             let Some(furnace) = vx.furnaces.get_mut(&m.pos) else {
                 continue;
             };
+            // W472: creative flag for the wire CLONE arm.
+            let creative = vx
+                .client_gamemodes
+                .get(client_id)
+                .copied()
+                .unwrap_or(false);
             // W468: same per-viewer cursor as the chest apply.
             let cursor = vx.container_cursors.entry(*client_id).or_default();
             let mut thrown: Vec<crate::item::ItemStack> = Vec::new();
@@ -273,6 +335,7 @@ pub(crate) fn apply_furnace_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate:
                                 furnace,
                                 cursor,
                                 action,
+                                creative,
                             )
                         } else {
                             block::furnace::apply_furnace_action(
@@ -280,6 +343,7 @@ pub(crate) fn apply_furnace_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate:
                                 &mut inv.inventory,
                                 cursor,
                                 action,
+                                creative,
                             )
                         };
                         pending_inv_sends.insert(*client_id);
@@ -289,6 +353,7 @@ pub(crate) fn apply_furnace_act_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate:
                             &mut no_inv,
                             cursor,
                             action,
+                            creative,
                         );
                     }
                 }
@@ -345,91 +410,73 @@ pub(crate) fn apply_furnace_drag_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate
         }
     }
 
-    /// W470: `vx.inv_op` applier - inventory-screen swap / throw /
-    /// quick-move + the no-panel selected-slot throw, against the
-    /// sender's authoritative `ClientInv` via the shared click
-    /// core. Throws spawn at the sender's pose; a fresh inventory
-    /// snapshot is queued after every op.
+    /// W470/W472: `vx.inv_op` applier - the FULL E-screen doClick
+    /// set against the sender's authoritative `ClientInv` (craft /
+    /// armor / main / hotbar) + per-viewer cursor, via the SAME
+    /// shared core the local panel uses
+    /// (`inventory::inv_screen_apply_op`). Throws spawn at the
+    /// sender's pose; a fresh inventory snapshot is queued after
+    /// every op.
 pub(crate) fn apply_inv_op_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::net::InvOpMsg)]) {
-        use crate::container::click::{self, SectionMut};
-        use crate::net::{InvOpMsg, NetSlot};
+        use crate::net::InvOpMsg;
         for (client_id, m) in msgs {
             let mut thrown: Vec<crate::item::ItemStack> = Vec::new();
+            // Screen-close: recover the viewer's cursor into their
+            // inventory (spill at their feet on overflow).
+            if matches!(m, InvOpMsg::CloseScreen) {
+                let (eye, _) = client_eye_and_look(vx, *client_id);
+                let spill = [eye[0] as i32, eye[1] as i32, eye[2] as i32];
+                recover_viewer_cursor(vx, *client_id, spill);
+                continue;
+            }
+            let creative = vx
+                .client_gamemodes
+                .get(client_id)
+                .copied()
+                .unwrap_or(false);
+            let cursor = vx.container_cursors.entry(*client_id).or_default();
             if let NetRole::Server { inventories, pending_inv_sends, .. } = &mut vx.net {
                 let Some(inv) = inventories.get_mut(client_id) else {
                     continue;
                 };
-                // Screen layout: [inventory 36, craft grid 4]. The
-                // craft OUTPUT is virtual and not addressable.
-                let inv_len = inv.inventory.len();
-                let gi_of = |slot: NetSlot| -> Option<usize> {
-                    match slot {
-                        NetSlot::Inv(i) => {
-                            ((i as usize) < inv_len).then_some(i as usize)
-                        }
-                        NetSlot::Craft(i) => Some(inv_len + i as usize),
-                        NetSlot::CraftOut => None,
-                    }
-                };
-                let mut sections = [
-                    SectionMut::open(&mut inv.inventory),
-                    SectionMut::open(&mut inv.craft_grid),
-                ];
-                let none_cursor: Option<crate::item::ItemStack> = None;
-                match *m {
-                    InvOpMsg::Swap { slot, hotbar } => {
-                        if let Some(gi) = gi_of(slot)
-                            && (hotbar as usize) < crate::inventory::HOTBAR_SLOTS
-                        {
-                            click::swap_click(
-                                &mut sections,
-                                gi,
-                                hotbar as usize,
-                            );
-                        }
-                    }
-                    InvOpMsg::Throw { slot, all } => {
-                        if let Some(gi) = gi_of(slot)
-                            && let Some(st) = click::throw_from_slot(
-                                &mut sections,
-                                &none_cursor,
-                                gi,
-                                all,
-                            )
-                        {
-                            thrown.push(st);
-                        }
-                    }
-                    InvOpMsg::ThrowSelected { slot, all } => {
-                        let gi = slot as usize;
-                        if gi < crate::inventory::HOTBAR_SLOTS
-                            && let Some(st) = click::throw_from_slot(
-                                &mut sections,
-                                &none_cursor,
-                                gi,
-                                all,
-                            )
-                        {
-                            thrown.push(st);
-                        }
-                    }
-                    InvOpMsg::QuickMove { slot } => {
-                        if let Some(gi) = gi_of(slot) {
-                            let order =
-                                crate::inventory::inv_screen_quick_move_order(
-                                    slot.into(),
-                                    inv_len,
-                                );
-                            click::quick_move(&mut sections, gi, &order);
-                        }
-                    }
-                }
+                thrown = crate::inventory::inv_screen_apply_op(
+                    &mut inv.craft_grid,
+                    &mut inv.armor,
+                    &mut inv.inventory,
+                    cursor,
+                    *m,
+                    creative,
+                );
                 pending_inv_sends.insert(*client_id);
             }
             let cid = *client_id;
             let (eye, look) = client_eye_and_look(vx, cid);
             for st in thrown {
                 crate::drops::spawn_thrown_stack(vx, st, eye, look);
+            }
+        }
+    }
+
+    /// W472: `vx.inv_drag` applier - completed E-screen drag-paint
+    /// against the sender's `ClientInv` + cursor.
+pub(crate) fn apply_inv_drag_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crate::net::InvDragMsg)]) {
+        for (client_id, m) in msgs {
+            let cursor = vx.container_cursors.entry(*client_id).or_default();
+            if let NetRole::Server { inventories, pending_inv_sends, .. } = &mut vx.net {
+                let Some(inv) = inventories.get_mut(client_id) else {
+                    continue;
+                };
+                let visited: Vec<crate::inventory::SlotKind> =
+                    m.slots.iter().map(|&s| s.into()).collect();
+                crate::inventory::inv_screen_apply_drag(
+                    &mut inv.craft_grid,
+                    &mut inv.armor,
+                    &mut inv.inventory,
+                    cursor,
+                    &visited,
+                    m.one_per_slot,
+                );
+                pending_inv_sends.insert(*client_id);
             }
         }
     }
@@ -453,15 +500,27 @@ pub(crate) fn apply_furnace_close_msgs(vx: &mut crate::Voxel, msgs: &[(u32, crat
     /// updated contents. W468: stack-native slots + the viewer's
     /// authoritative cursor ride the message.
 pub(crate) fn broadcast_chest_state(vx: &mut crate::Voxel, pos: [i32; 3]) {
-        let Some(&viewer) = vx.chest_viewers.get(&pos) else {
+        // W472: canonicalise so mutations reported for EITHER half
+        // reach the viewer registered under the primary; a double
+        // chest ships all 54 stitched slots (remote partner-half
+        // edits included - the old local-only partner gap).
+        let (primary, secondary) = block::chest::canonical_pair(
+            &vx.world,
+            &vx.chests,
+            &vx.chest_facing,
+            pos,
+        );
+        let Some(&viewer) = vx.chest_viewers.get(&primary) else {
             return;
         };
-        let Some(chest) = vx.chests.get(&pos) else {
+        let Some(view) =
+            block::chest::menu_view(&vx.chests, primary, secondary)
+        else {
             return;
         };
         let msg = crate::net::ChestStateMsg {
-            pos,
-            slots: chest.slots().to_vec(),
+            pos: primary,
+            slots: view.slots().to_vec(),
             cursor: vx.container_cursors.get(&viewer).cloned().flatten(),
         };
         if let NetRole::Server { server, .. } = &mut vx.net {

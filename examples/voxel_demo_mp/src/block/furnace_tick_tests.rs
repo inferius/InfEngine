@@ -270,7 +270,7 @@ fn action_place_into_input_accepts_smeltable() {
     let mut f = new_furnace();
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
     let mut held: Option<ItemStack> = Some(ItemStack::new(14, 3));
-    apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Place(FURNACE_INPUT_SLOT));
+    apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Place(FURNACE_INPUT_SLOT), false);
     assert_eq!(held, None);
     assert_eq!(f.slot(FURNACE_INPUT_SLOT), Some(ItemStack::new(14, 3)));
 }
@@ -280,7 +280,7 @@ fn action_place_into_input_rejects_non_smeltable() {
     let mut f = new_furnace();
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
     let mut held: Option<ItemStack> = Some(ItemStack::new(1, 3));
-    apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Place(FURNACE_INPUT_SLOT));
+    apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Place(FURNACE_INPUT_SLOT), false);
     assert_eq!(held, Some(ItemStack::new(1, 3)));
     assert_eq!(f.slot(FURNACE_INPUT_SLOT), None);
 }
@@ -290,7 +290,7 @@ fn action_place_into_fuel_accepts_coal_only() {
     let mut f = new_furnace();
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
     let mut held: Option<ItemStack> = Some(ItemStack::new(13, 5));
-    apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Place(FURNACE_FUEL_SLOT));
+    apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Place(FURNACE_FUEL_SLOT), false);
     assert_eq!(held, None);
     assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(13, 5)));
 }
@@ -300,7 +300,7 @@ fn action_place_into_output_rejects_everything() {
     let mut f = new_furnace();
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
     let mut held: Option<ItemStack> = Some(ItemStack::new(43, 2));
-    apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Place(FURNACE_OUTPUT_SLOT));
+    apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Place(FURNACE_OUTPUT_SLOT), false);
     assert_eq!(held, Some(ItemStack::new(43, 2)));
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), None);
 }
@@ -311,7 +311,7 @@ fn action_take_from_output_works() {
     f.set_slot(FURNACE_OUTPUT_SLOT, Some(ItemStack::new(43, 7)));
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
     let mut held: Option<ItemStack> = None;
-    apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Take(FURNACE_OUTPUT_SLOT));
+    apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Take(FURNACE_OUTPUT_SLOT), false);
     assert_eq!(held, Some(ItemStack::new(43, 7)));
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), None);
 }
@@ -323,7 +323,7 @@ fn action_take_half_from_output_works() {
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
     let mut held: Option<ItemStack> = None;
     apply_furnace_action(
-        &mut f, &mut inv, &mut held, GridAction::TakeHalf(FURNACE_OUTPUT_SLOT),
+        &mut f, &mut inv, &mut held, GridAction::TakeHalf(FURNACE_OUTPUT_SLOT), false,
     );
     assert_eq!(held, Some(ItemStack::new(43, 4)));
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), Some(ItemStack::new(43, 3)));
@@ -336,7 +336,7 @@ fn action_transfer_from_furnace_to_player() {
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
     let mut held: Option<ItemStack> = None;
     apply_furnace_action(
-        &mut f, &mut inv, &mut held, GridAction::Transfer(FURNACE_OUTPUT_SLOT),
+        &mut f, &mut inv, &mut held, GridAction::Transfer(FURNACE_OUTPUT_SLOT), false,
     );
     assert_eq!(held, None);
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), None);
@@ -351,7 +351,7 @@ fn action_transfer_from_player_to_furnace_respects_filters() {
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
     inv[3] = Some(ItemStack::new(1, 5));
     let mut held: Option<ItemStack> = None;
-    apply_player_action(&mut inv, &mut f, &mut held, GridAction::Transfer(3));
+    apply_player_action(&mut inv, &mut f, &mut held, GridAction::Transfer(3), false);
     // W470 (AbstractFurnaceMenu.quickMoveStack): stone is neither
     // smeltable nor fuel, so no furnace slot takes it - the MC
     // fallback hops it from the hotbar into the main rows instead.
@@ -367,7 +367,7 @@ fn action_place_one_into_input_lifts_single_item() {
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
     let mut held: Option<ItemStack> = Some(ItemStack::new(14, 5));
     apply_furnace_action(
-        &mut f, &mut inv, &mut held, GridAction::PlaceOne(FURNACE_INPUT_SLOT),
+        &mut f, &mut inv, &mut held, GridAction::PlaceOne(FURNACE_INPUT_SLOT), false,
     );
     assert_eq!(held, Some(ItemStack::new(14, 4)));
     assert_eq!(f.slot(FURNACE_INPUT_SLOT), Some(ItemStack::new(14, 1)));
@@ -382,15 +382,15 @@ fn full_ui_session_roundtrip() {
     inv[0] = Some(ItemStack::new(14, 2));
     inv[1] = Some(ItemStack::new(13, 1));
     let mut held: Option<ItemStack> = None;
-    apply_player_action(&mut inv, &mut f, &mut held, GridAction::Transfer(0));
+    apply_player_action(&mut inv, &mut f, &mut held, GridAction::Transfer(0), false);
     assert_eq!(f.slot(FURNACE_INPUT_SLOT), Some(ItemStack::new(14, 2)));
-    apply_player_action(&mut inv, &mut f, &mut held, GridAction::Transfer(1));
+    apply_player_action(&mut inv, &mut f, &mut held, GridAction::Transfer(1), false);
     assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(13, 1)));
     let mut rt = FurnaceRuntime::default();
     step_one_furnace(&mut f, &mut rt, FURNACE_COOK_MS_PER_OUTPUT);
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), Some(ItemStack::new(43, 1)));
     apply_furnace_action(
-        &mut f, &mut inv, &mut held, GridAction::Transfer(FURNACE_OUTPUT_SLOT),
+        &mut f, &mut inv, &mut held, GridAction::Transfer(FURNACE_OUTPUT_SLOT), false,
     );
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), None);
     assert!(inv.contains(&Some(ItemStack::new(43, 1))));

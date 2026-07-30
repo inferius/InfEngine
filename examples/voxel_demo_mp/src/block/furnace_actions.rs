@@ -7,6 +7,9 @@
 //! hotbar-first) which mirrors `AbstractFurnaceMenu.quickMoveStack`.
 //! Accept filters ride inside the `Container` itself (input /
 //! fuel / output predicates from `block::furnace`).
+//!
+//! W472: `creative` threads through (the CLONE arm rides the wire
+//! now, gated on the sender's announced game mode).
 
 #![allow(dead_code)]
 
@@ -22,6 +25,7 @@ pub(crate) fn apply_furnace_action(
     partner: &mut [Option<ItemStack>],
     held: &mut Option<ItemStack>,
     action: GridAction,
+    creative: bool,
 ) -> Vec<ItemStack> {
     crate::container::screen::apply_grid_action(
         furnace,
@@ -30,7 +34,7 @@ pub(crate) fn apply_furnace_action(
         false,
         action,
         &crate::container::screen::FURNACE_CFG,
-        false,
+        creative,
     )
 }
 
@@ -40,6 +44,7 @@ pub(crate) fn apply_player_action(
     furnace: &mut Container,
     held: &mut Option<ItemStack>,
     action: GridAction,
+    creative: bool,
 ) -> Vec<ItemStack> {
     crate::container::screen::apply_grid_action(
         furnace,
@@ -48,6 +53,6 @@ pub(crate) fn apply_player_action(
         true,
         action,
         &crate::container::screen::FURNACE_CFG,
-        false,
+        creative,
     )
 }

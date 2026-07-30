@@ -355,13 +355,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             NetRole::Client {
                 client,
                 pending_edits,
-                pending_inv_actions,
                 ..
             } => format!(
-                "client (id={:?}, edits={}, inv_acts={})",
+                "client (id={:?}, edits={})",
                 client.client_id,
                 pending_edits.len(),
-                pending_inv_actions.len(),
             ),
         };
         // Wave 4 (Phase G.6): refresh the menu's worlds +
@@ -604,34 +602,37 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // request search-box focus on the first frame. The flag is
         // cleared in the post-egui section.
         let creative_just_opened = vx.creative_tab.just_opened;
-        // Pending pick-up intents queued from the grid. Each
-        // entry is the (block, count) to drop into the hotbar.
+        // Pending pick-up intents queued from the grid. W472: each
+        // entry is the (block, count) the CURSOR receives (MC
+        // creative screen: click = full stack on cursor, RMB one).
         let mut creative_picks: Vec<(BlockId, u8)> = Vec::new();
+        // W472: hotbar-strip clicks inside the creative window -
+        // (slot, secondary); applied post-egui through the shared
+        // pickup_click against the creative cursor.
+        let mut creative_slot_clicks: Vec<(usize, bool)> = Vec::new();
+        let creative_cursor_snapshot = vx.creative_tab.cursor.clone();
         let mp_menu_open = vx.mp_menu_open;
         let mut mp_menu_open_local = vx.mp_menu_open;
-        // Chest UI snapshot. Cloned here so the egui closure can
-        // render a grid against a stable view; applied actions
-        // mutate `vx.chests` after the closure finishes.
+        // Chest UI snapshot. W472: `chest_open` is the double-chest
+        // PRIMARY; the snapshot is the MENU view - 27 slots for a
+        // single, 54 stitched slots (CompoundContainer) for a
+        // double. Applied actions mutate `vx.chests` (both halves)
+        // after the closure finishes.
         let chest_open_pos = vx.chest_open;
-        let chest_snapshot: Option<container::Container> = vx
-            .chest_open
-            .as_ref()
-            .and_then(|p| vx.chests.get(p).cloned());
-        // W55.2b: detect a paired chest neighbour for the open
-        // chest. When found, the UI renders a 54-slot composite
-        // (this chest above, partner below) and the apply path
-        // routes actions to the matching backing container.
-        let chest_partner_pos: Option<[i32; 3]> = chest_open_pos
-            .and_then(|p| {
-                block::chest::partner_for(
+        let chest_secondary_pos: Option<[i32; 3]> =
+            chest_open_pos.and_then(|p| {
+                block::chest::canonical_pair(
                     &vx.world,
                     &vx.chests,
                     &vx.chest_facing,
                     p,
                 )
+                .1
             });
-        let chest_partner_snapshot: Option<container::Container> =
-            chest_partner_pos.and_then(|p| vx.chests.get(&p).cloned());
+        let chest_snapshot: Option<container::Container> =
+            chest_open_pos.and_then(|p| {
+                block::chest::menu_view(&vx.chests, p, chest_secondary_pos)
+            });
         // Sentinel that the egui close-button + ESC inside the
         // chest panel can flip; we read it back after the closure
         // to clear `chest_open`.
@@ -759,34 +760,20 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             NetRole::Server { .. } => Some("hosting server"),
             NetRole::Client { .. } => Some("connected to server"),
         };
-        let inventory_snapshot: Vec<Option<SlotIcon>> = if inventory_open {
-            vx.inventory[HOTBAR_SLOTS..]
-                .iter()
-                .map(|s| icon(s.as_ref().map(|st| (BlockId(st.id), st.count))))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let craft_snapshot: [Option<SlotIcon>; 4] = std::array::from_fn(|i| {
-            icon(vx.craft_grid[i].as_ref().map(|st| (BlockId(st.id), st.count)))
-        });
+        // W472: E-screen working locals - the cursor-menu panel
+        // mutates these inside the egui closure through the shared
+        // screen core; the post-egui apply writes them back onto
+        // `vx` and forwards the recorded ops in the client role.
+        let mut escreen_craft_local: [Option<crate::item::ItemStack>; 4] =
+            vx.craft_grid.clone();
+        let mut escreen_armor_local: [Option<crate::item::ItemStack>; 4] =
+            vx.armor_slots.clone();
+        let mut escreen_cursor_local: Option<crate::item::ItemStack> =
+            vx.inv_screen_held.clone();
+        let mut escreen_ops_local: Vec<crate::net::InvOpMsg> = Vec::new();
+        let mut escreen_drag_local: Option<crate::net::InvDragMsg> = None;
         let craft_match: Option<(BlockId, u8, &'static str)> =
             match_recipe_named(&vx.craft_grid);
-        let craft_output_snapshot = craft_match.map(|(b, c, _)| {
-            let bt = block_type(b.0);
-            // W20.2: use icon_uv_front for MC atlas compatibility.
-            let uv = vx.resource_pack.icon_uv_front(b);
-            // W153: same item-only fallback as the `icon` closure.
-            match vx.registry.get(b) {
-                Some(d) => (d.color, c, uv, bt.map(|t| t.name).unwrap_or("?")),
-                None => (
-                    [0.78, 0.78, 0.78],
-                    c,
-                    uv,
-                    crate::item::item_type(b.0).map(|it| it.name).unwrap_or("?"),
-                ),
-            }
-        });
         let craft_recipe_name: Option<&'static str> = craft_match.map(|(_, _, n)| n);
         let selected_slot = vx.selected_slot;
         // Click actions to apply after the egui closure exits (the
@@ -795,12 +782,9 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         let mut inv_actions: Vec<InvAction> = Vec::new();
         // Chest-UI side channels. The egui closure pushes one
         // `(side, GridAction)` per click; we drain them post-egui
-        // and route to `block::chest::apply_chest_action` /
-        // `apply_player_action`. `side` = false means a click on
-        // the chest grid, `true` = a click on the player-inv grid.
-        // W55.2b: partner-chest action queue for double chests.
-        let mut chest_partner_actions: Vec<container::ui::GridAction> =
-            Vec::new();
+        // through the shared screen core. `side` = false means a
+        // click on the chest grid (0..53 for a stitched double),
+        // `true` = a click on the player-inv grid.
         let mut chest_grid_actions: Vec<(bool, container::ui::GridAction)> =
             Vec::new();
         let mut chest_held_local = chest_held_snapshot;
@@ -808,8 +792,6 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // Filled inside the egui closure on button release, applied
         // post-egui through the shared click core.
         let mut chest_drag_commit: Option<(Vec<(bool, usize)>, bool)> = None;
-        let mut chest_partner_drag_commit: Option<(Vec<(bool, usize)>, bool)> =
-            None;
         let mut furnace_drag_commit: Option<(Vec<(bool, usize)>, bool)> = None;
         let mut brewing_drag_commit: Option<(Vec<(bool, usize)>, bool)> = None;
         // W470: click outside every egui area while a panel cursor
@@ -1723,14 +1705,15 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             ui.vertical_centered(|ui| {
                                 ui.horizontal(|ui| {
                                     for (i, slot) in hotbar_snapshot.iter().enumerate() {
-                                        let resp = crate::ui::slot_widget::slot_with_dnd_dur(
+                                        // W472: plain painter - the
+                                        // dnd path is gone (the E
+                                        // screen is a cursor menu).
+                                        let resp = crate::ui::slot_widget::draw_slot_widget_with_durability(
                                             ui,
                                             *slot,
                                             atlas_tex_id,
-                                            SlotKind::Inv(i),
                                             i == selected_slot,
-                                            inventory_open,
-                                            &mut inv_actions,
+                                            egui::Sense::click(),
                                             durability_for_slot(i),
                                         );
                                         if resp.clicked() {
@@ -1774,193 +1757,36 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     });
                 }
 
-                // Inventory overlay: 3 extra rows of slots + a hotbar
-                // mirror + a 2x2 crafting grid + a 1-slot output.
-                // Only drawn when the player has the menu open. The
-                // Window's title bar is the only drag handle (egui
-                // default behaviour with `.resizable(false)`).
+                // W472: the inventory screen (E) - a full MC
+                // `InventoryMenu` with a cursor stack (craft 2x2 +
+                // result, armor slots, main rows, hotbar). The
+                // panel mutates the locals through the SHARED
+                // screen core; the post-egui block writes them
+                // back + forwards the recorded ops on the wire in
+                // the client role.
                 if inventory_open {
-                    let screen = ctx.content_rect();
-                    egui::Window::new("Inventory")
-                        .open(&mut inv_open_local)
-                        .collapsible(false)
-                        .resizable(false)
-                        .default_pos([
-                            screen.center().x - 220.0,
-                            screen.center().y - 220.0,
-                        ])
-                        .default_size([440.0, 420.0])
-                        .show(ctx, |ui| {
-                            ui.label("E to close - drag stacks between slots");
-                            ui.separator();
-                            // Storage rows (rows 1..INVENTORY_ROWS).
-                            for row in 0..(INVENTORY_ROWS - 1) {
-                                ui.horizontal(|ui| {
-                                    for col in 0..INVENTORY_COLS {
-                                        let snap_idx = row * INVENTORY_COLS + col;
-                                        let inv_idx = HOTBAR_SLOTS + snap_idx;
-                                        let slot = inventory_snapshot
-                                            .get(snap_idx)
-                                            .copied()
-                                            .unwrap_or(None);
-                                        let resp = crate::ui::slot_widget::slot_with_dnd_dur(
-                                            ui,
-                                            slot,
-                                            atlas_tex_id,
-                                            SlotKind::Inv(inv_idx),
-                                            false,
-                                            true,
-                                            &mut inv_actions,
-                                            durability_for_slot(inv_idx),
-                                        );
-                                        // W470: hover swap / throw
-                                        // keys + shift quick-move.
-                                        crate::ui::slot_widget::hover_key_ops(
-                                            ui,
-                                            &resp,
-                                            SlotKind::Inv(inv_idx),
-                                            slot.is_some(),
-                                            &mut inv_actions,
-                                        );
-                                        let shift =
-                                            ui.input(|i| i.modifiers.shift);
-                                        if resp.clicked()
-                                            && shift
-                                            && slot.is_some()
-                                        {
-                                            inv_actions.push(
-                                                InvAction::QuickMove {
-                                                    slot: SlotKind::Inv(
-                                                        inv_idx,
-                                                    ),
-                                                },
-                                            );
-                                        }
-                                    }
-                                });
-                            }
-                            ui.add_space(8.0);
-                            // Hotbar row reflected inside the window
-                            // so the player can shuffle stacks
-                            // between storage and the hotbar without
-                            // closing the menu (matches Minecraft).
-                            ui.horizontal(|ui| {
-                                for (i, slot) in hotbar_snapshot.iter().enumerate() {
-                                    let resp = crate::ui::slot_widget::slot_with_dnd_dur(
-                                        ui,
-                                        *slot,
-                                        atlas_tex_id,
-                                        SlotKind::Inv(i),
-                                        i == selected_slot,
-                                        true,
-                                        &mut inv_actions,
-                                        durability_for_slot(i),
-                                    );
-                                    // W470: hover swap / throw keys
-                                    // + shift quick-move (hotbar ->
-                                    // main rows). Shift-click must
-                                    // NOT also change the selection.
-                                    crate::ui::slot_widget::hover_key_ops(
-                                        ui,
-                                        &resp,
-                                        SlotKind::Inv(i),
-                                        slot.is_some(),
-                                        &mut inv_actions,
-                                    );
-                                    let shift =
-                                        ui.input(|inp| inp.modifiers.shift);
-                                    if resp.clicked() {
-                                        if shift && slot.is_some() {
-                                            inv_actions.push(
-                                                InvAction::QuickMove {
-                                                    slot: SlotKind::Inv(i),
-                                                },
-                                            );
-                                        } else {
-                                            inv_actions.push(
-                                                InvAction::SelectHotbar(i),
-                                            );
-                                        }
-                                    }
-                                }
-                            });
-                            ui.separator();
-                            ui.horizontal(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.label("Craft (2x2)");
-                                    for row in 0..2 {
-                                        ui.horizontal(|ui| {
-                                            for col in 0..2 {
-                                                let idx = row * 2 + col;
-                                                let resp = crate::ui::slot_widget::slot_with_dnd(
-                                                    ui,
-                                                    craft_snapshot[idx],
-                                                    atlas_tex_id,
-                                                    SlotKind::Craft(idx),
-                                                    false,
-                                                    true,
-                                                    &mut inv_actions,
-                                                );
-                                                // W470: hover keys +
-                                                // shift quick-move
-                                                // back to the inv.
-                                                crate::ui::slot_widget::hover_key_ops(
-                                                    ui,
-                                                    &resp,
-                                                    SlotKind::Craft(idx),
-                                                    craft_snapshot[idx].is_some(),
-                                                    &mut inv_actions,
-                                                );
-                                                let shift = ui.input(
-                                                    |i| i.modifiers.shift,
-                                                );
-                                                if resp.clicked()
-                                                    && shift
-                                                    && craft_snapshot[idx]
-                                                        .is_some()
-                                                {
-                                                    inv_actions.push(
-                                                        InvAction::QuickMove {
-                                                            slot: SlotKind::Craft(idx),
-                                                        },
-                                                    );
-                                                }
-                                            }
-                                        });
-                                    }
-                                });
-                                ui.vertical(|ui| {
-                                    ui.add_space(20.0);
-                                    ui.label(" ->");
-                                });
-                                ui.vertical(|ui| {
-                                    ui.label("Output");
-                                    let resp = crate::ui::slot_widget::slot_with_dnd(
-                                        ui,
-                                        craft_output_snapshot,
-                                        atlas_tex_id,
-                                        SlotKind::CraftOut,
-                                        false,
-                                        true,
-                                        &mut inv_actions,
-                                    );
-                                    if let Some(name) = craft_recipe_name {
-                                        resp.on_hover_text(name);
-                                    }
-                                });
-                            });
-                            // Carry preview is unnecessary - egui's
-                            // dnd_drag_source paints the dragged
-                            // stack at the cursor while held. The
-                            // recipe book lives in its own window
-                            // beside this one (see below) so it can
-                            // grow / scroll without pushing the
-                            // crafting grid off-screen.
-                        });
+                    ui::inventory_screen::render(
+                        ui::inventory_screen::InventoryScreenInputs {
+                            ctx,
+                            craft: &mut escreen_craft_local,
+                            armor: &mut escreen_armor_local,
+                            inv: &mut inv_stacks_local,
+                            cursor: &mut escreen_cursor_local,
+                            selected_slot,
+                            atlas_tex_id,
+                            icon_uv_resolver: &icon_uv_resolver,
+                            open_local: &mut inv_open_local,
+                            creative: dbg_is_creative,
+                            thrown_out: &mut thrown_stacks,
+                            ops_out: &mut escreen_ops_local,
+                            drag_out: &mut escreen_drag_local,
+                        },
+                    );
                     // Recipe book as a separate beside-inventory
                     // window. Resizable + scrollable so it can fit
                     // the full recipe table even on a small display
                     // without cramping the Inventory layout.
+                    let screen = ctx.content_rect();
                     let rb_default = [
                         screen.center().x + 230.0,
                         screen.center().y - 220.0,
@@ -2272,6 +2098,79 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                         }
                                     });
                                 });
+                            // W472: hotbar strip - place the
+                            // cursor stack into a reachable slot
+                            // (MC creative screen shows the hotbar
+                            // for exactly this).
+                            ui.separator();
+                            ui.label("Hotbar");
+                            ui.horizontal(|ui| {
+                                for i in 0..HOTBAR_SLOTS {
+                                    let slot = hotbar_snapshot
+                                        .get(i)
+                                        .copied()
+                                        .unwrap_or(None);
+                                    let resp = crate::ui::slot_widget::draw_slot_widget(
+                                        ui,
+                                        slot,
+                                        atlas_tex_id,
+                                        i == selected_slot,
+                                        egui::Sense::click_and_drag(),
+                                    );
+                                    if resp.clicked() {
+                                        creative_slot_clicks.push((i, false));
+                                    } else if resp.secondary_clicked() {
+                                        creative_slot_clicks.push((i, true));
+                                    }
+                                }
+                            });
+                            // Floating cursor sprite (same look as
+                            // the panel cursors).
+                            if let (Some(pos), Some(st)) = (
+                                ui.ctx().input(|i| i.pointer.hover_pos()),
+                                creative_cursor_snapshot.as_ref(),
+                            ) {
+                                let layer = ui.ctx().layer_painter(
+                                    egui::LayerId::new(
+                                        egui::Order::Foreground,
+                                        egui::Id::new("creative_tab_cursor"),
+                                    ),
+                                );
+                                let rect = egui::Rect::from_center_size(
+                                    pos,
+                                    egui::vec2(32.0, 32.0),
+                                );
+                                let uv = icon_uv_resolver(st.id);
+                                match (atlas_tex_id, uv) {
+                                    (Some(tex), Some(uv)) => {
+                                        layer.image(
+                                            tex,
+                                            rect,
+                                            egui::Rect::from_min_max(
+                                                egui::pos2(uv[0], uv[1]),
+                                                egui::pos2(uv[2], uv[3]),
+                                            ),
+                                            egui::Color32::WHITE,
+                                        );
+                                    }
+                                    _ => {
+                                        layer.rect_filled(
+                                            rect,
+                                            2.0,
+                                            egui::Color32::from_gray(160),
+                                        );
+                                    }
+                                }
+                                if st.count > 1 {
+                                    layer.text(
+                                        rect.max,
+                                        egui::Align2::RIGHT_BOTTOM,
+                                        st.count.to_string(),
+                                        egui::FontId::proportional(14.0),
+                                        egui::Color32::WHITE,
+                                    );
+                                }
+                            }
                         });
                     if !open_local {
                         creative_close_clicked = true;
@@ -2279,16 +2178,16 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 }
 
                 // W470: panel-wide drag-paint trackers, persisted
-                // in egui temp memory. One per screen (the partner
-                // chest is its own 27+36 screen - a drag cannot
-                // cross the double-chest halves).
+                // in egui temp memory. One per screen. W472: the
+                // double chest is ONE stitched 54-slot screen, so
+                // a drag spans both halves through the single
+                // chest tracker.
                 let drag_keys = [
                     egui::Id::new("chest_panel_drag"),
-                    egui::Id::new("chest_partner_panel_drag"),
                     egui::Id::new("furnace_panel_drag"),
                     egui::Id::new("brewing_panel_drag"),
                 ];
-                let panel_drags: [container::ui::PanelDrag; 4] =
+                let panel_drags: [container::ui::PanelDrag; 3] =
                     std::array::from_fn(|i| {
                         ctx.memory(|m| {
                             m.data.get_temp::<container::ui::PanelDrag>(
@@ -2297,12 +2196,8 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         })
                         .unwrap_or_default()
                     });
-                let [
-                    mut chest_drag,
-                    mut chest_partner_drag,
-                    mut furnace_drag,
-                    mut brewing_drag,
-                ] = panel_drags;
+                let [mut chest_drag, mut furnace_drag, mut brewing_drag] =
+                    panel_drags;
 
                 // Chest UI panel. Shows a 27-slot chest grid on
                 // top + the player's 36-slot inventory below.
@@ -2337,43 +2232,20 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                 ));
                             }
                             ui.separator();
-                            // W56.3: id_salt makes each grid's
-                            // egui Id unique even though title +
-                            // (cols, rows) match across the
-                            // partner / main / inv stack.
-                            if let Some(partner) = &chest_partner_snapshot {
-                                ui.label("Chest (paired - top)");
-                                let partner_cfg = container::ui::GridConfig {
-                                    cols: 9,
-                                    rows: 3,
-                                    tile_px: 36.0,
-                                    title: None,
-                                    id_salt: "chest_partner",
-                                };
-                                let mut interact = container::ui::GridInteract {
-                                    drag: &mut chest_partner_drag,
-                                    player_side: false,
-                                    base_index: 0,
-                                };
-                                let actions = container::ui::draw_grid_with_uv(
-                                    ui,
-                                    &partner_cfg,
-                                    partner,
-                                    chest_held_local.as_ref(),
-                                    atlas_tex_id,
-                                    &icon_uv_resolver,
-                                    &mut interact,
-                                );
-                                for a in actions {
-                                    chest_partner_actions.push(a);
-                                }
-                                ui.label("Chest (paired - bottom)");
+                            // W472: ONE grid over the whole menu
+                            // view - 3 rows for a single chest, 6
+                            // rows (54 slots, CompoundContainer)
+                            // for a double. Drag-paint, collect
+                            // and quick-move span all of it.
+                            let chest_rows = chest.len() / 9;
+                            if chest_rows > 3 {
+                                ui.label("Large Chest (54)");
                             } else {
                                 ui.label("Chest (27)");
                             }
                             let chest_cfg = container::ui::GridConfig {
                                 cols: 9,
-                                rows: 3,
+                                rows: chest_rows,
                                 tile_px: 36.0,
                                 title: None,
                                 id_salt: "chest_main",
@@ -2746,18 +2618,13 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             }
                         };
                     finish(&mut chest_drag, &mut chest_drag_commit);
-                    finish(
-                        &mut chest_partner_drag,
-                        &mut chest_partner_drag_commit,
-                    );
                     finish(&mut furnace_drag, &mut furnace_drag_commit);
                     finish(&mut brewing_drag, &mut brewing_drag_commit);
                     // Persist the trackers for the next frame.
                     ctx.memory_mut(|m| {
                         m.data.insert_temp(drag_keys[0], chest_drag);
-                        m.data.insert_temp(drag_keys[1], chest_partner_drag);
-                        m.data.insert_temp(drag_keys[2], furnace_drag);
-                        m.data.insert_temp(drag_keys[3], brewing_drag);
+                        m.data.insert_temp(drag_keys[1], furnace_drag);
+                        m.data.insert_temp(drag_keys[2], brewing_drag);
                     });
                 }
 
@@ -3705,18 +3572,6 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // the server's authoritative snapshot lands. Hotbar selection
         // stays local for snappy feedback (it's purely cosmetic).
         let is_client = matches!(vx.net, NetRole::Client { .. });
-        // W470: forward one inventory-screen op to the host
-        // (client role). Local apply is skipped - the
-        // authoritative snapshot reconciles, and throws must only
-        // spawn host-side.
-        let send_inv_op = |vx: &mut Voxel, op: crate::net::InvOpMsg| {
-            if let NetRole::Client { client, .. } = &mut vx.net {
-                let cfg = bincode::config::standard();
-                if let Ok(buf) = bincode::serde::encode_to_vec(op, cfg) {
-                    let _ = client.send_bytes("vx.inv_op", buf);
-                }
-            }
-        };
         for action in inv_actions {
             match action {
                 InvAction::SelectHotbar(idx) => {
@@ -3724,69 +3579,35 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         vx.selected_slot = idx;
                     }
                 }
-                InvAction::Drag { from, to, split } => {
-                    if is_client {
-                        let msg = InvActionMsg {
-                            from: from.into(),
-                            to: to.into(),
-                            split,
-                        };
-                        if let NetRole::Client {
-                            client,
-                            pending_inv_actions,
-                            ..
-                        } = &mut vx.net
-                        {
-                            let cfg = bincode::config::standard();
-                            if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
-                                let _ = client.send_bytes("vx.inv_act", buf);
-                            }
-                            pending_inv_actions.push(msg);
-                        }
-                    } else {
-                        vx.apply_inv_action(InvAction::Drag { from, to, split });
+            }
+        }
+        // W472: E-screen apply - the panel already ran every op
+        // through the shared screen core against the locals; write
+        // them back and forward the ops in the client role (the
+        // authoritative snapshot confirms / reconciles).
+        if inventory_open {
+            vx.craft_grid = escreen_craft_local;
+            vx.armor_slots = escreen_armor_local;
+            vx.inv_screen_held = escreen_cursor_local;
+            for (i, slot) in inv_stacks_local.iter().enumerate() {
+                if i >= vx.inventory.len() {
+                    break;
+                }
+                vx.inventory[i] = slot.clone();
+            }
+            if is_client
+                && let NetRole::Client { client, .. } = &mut vx.net
+            {
+                let cfg = bincode::config::standard();
+                for op in &escreen_ops_local {
+                    if let Ok(buf) = bincode::serde::encode_to_vec(op, cfg) {
+                        let _ = client.send_bytes("vx.inv_op", buf);
                     }
                 }
-                InvAction::SwapWith { slot, hotbar } => {
-                    if is_client {
-                        send_inv_op(
-                            vx,
-                            crate::net::InvOpMsg::Swap {
-                                slot: slot.into(),
-                                hotbar: hotbar as u8,
-                            },
-                        );
-                    } else {
-                        vx.apply_inv_action(InvAction::SwapWith {
-                            slot,
-                            hotbar,
-                        });
-                    }
-                }
-                InvAction::Throw { slot, all } => {
-                    if is_client {
-                        send_inv_op(
-                            vx,
-                            crate::net::InvOpMsg::Throw {
-                                slot: slot.into(),
-                                all,
-                            },
-                        );
-                    } else {
-                        vx.apply_inv_action(InvAction::Throw { slot, all });
-                    }
-                }
-                InvAction::QuickMove { slot } => {
-                    if is_client {
-                        send_inv_op(
-                            vx,
-                            crate::net::InvOpMsg::QuickMove {
-                                slot: slot.into(),
-                            },
-                        );
-                    } else {
-                        vx.apply_inv_action(InvAction::QuickMove { slot });
-                    }
+                if let Some(dragm) = &escreen_drag_local
+                    && let Ok(buf) = bincode::serde::encode_to_vec(dragm, cfg)
+                {
+                    let _ = client.send_bytes("vx.inv_drag", buf);
                 }
             }
         }
@@ -3808,7 +3629,9 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             vx.show_debug_panel = false;
         }
         if vx.inventory_open && !inv_open_local {
-            vx.inventory_open = false;
+            // W472: X-button close - recover the cursor + notify
+            // the host (the E screen is a cursor menu now).
+            vx.close_inventory_screen();
         }
         if vx.mp_menu_open && !mp_menu_open_local {
             vx.mp_menu_open = false;
@@ -3829,41 +3652,31 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         if creative_close_clicked {
             vx.creative_tab.close();
         }
-        if !creative_picks.is_empty() {
-            // Slice off the first 9 inventory entries as the
-            // hotbar view + run the deposit policy on it.
-            let mut hotbar_view: [Option<(BlockId, u8)>; HOTBAR_SLOTS] =
-                std::array::from_fn(|i| {
-                    vx.inventory[i]
-                        .as_ref()
-                        .map(|st| (BlockId(st.id), st.count))
-                });
-            let sel = vx.selected_slot.min(HOTBAR_SLOTS - 1);
-            for pick in creative_picks {
-                let (block, max_stack) = pick;
-                let stack = (block, max_stack);
-                let deposited = creative_tab::deposit_in_hotbar(
-                    &mut hotbar_view,
-                    stack,
-                    max_stack,
-                );
-                if !deposited {
-                    // W34 fix: when the hotbar is full of other items,
-                    // creative click should OVERWRITE the currently
-                    // selected slot. MC's creative click semantics:
-                    // "pick replaces what's in your hand". Without this
-                    // fallback the click was silently rejected if no
-                    // empty/topup slot was available.
-                    hotbar_view[sel] = Some((block, max_stack));
+        // W472: MC creative-screen cursor model. A grid click puts
+        // the stack ON THE CURSOR (replacing whatever was there -
+        // creative destroys, never spills); a hotbar-strip click
+        // places / swaps through the shared pickup_click.
+        for (block, count) in creative_picks {
+            vx.creative_tab.cursor =
+                Some(crate::item::ItemStack::new(block.0, count));
+        }
+        if !creative_slot_clicks.is_empty() {
+            let mut cursor = vx.creative_tab.cursor.take();
+            {
+                let hb = HOTBAR_SLOTS.min(vx.inventory.len());
+                let mut sections = [container::click::SectionMut::open(
+                    &mut vx.inventory[..hb],
+                )];
+                for (slot, secondary) in creative_slot_clicks {
+                    container::click::pickup_click(
+                        &mut sections,
+                        &mut cursor,
+                        slot,
+                        secondary,
+                    );
                 }
             }
-            for (i, slot) in hotbar_view.iter().enumerate() {
-                // W466: same-id writes keep the slot's components.
-                crate::item::stack::write_tuple_preserving(
-                    &mut vx.inventory[i],
-                    slot.map(|(b, c)| (b.0, c)),
-                );
-            }
+            vx.creative_tab.cursor = cursor;
         }
         // Chest UI close-button reflected back. If the egui window
         // was closed via its X handle, drop the chest_open + held
@@ -4097,7 +3910,6 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         // W470: creative flag for the CLONE arm + client role flag
         // for the local-apply gates below.
         let ui_creative = vx.abilities.instabuild;
-        let is_net_client = matches!(vx.net, NetRole::Client { .. });
         // W50.5: brewing panel apply.
         if brewing_open_pos.is_some() && !brewing_open_local {
             vx.close_brewing_ui();
@@ -4177,25 +3989,16 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     }
                 }
             }
-            if let Some(chest) = vx.chests.get_mut(&pos) {
-                // W467/W470: stack-native apply straight against
-                // `vx.inventory` (disjoint field borrows) through
-                // the shared click core.
+            // W472: apply against the stitched MENU view (54 slots
+            // for a double chest) and write both halves back -
+            // drag-paint / collect / quick-move span the pair.
+            if let Some(mut view) =
+                block::chest::menu_view(&vx.chests, pos, chest_secondary_pos)
+            {
                 for (player_side, action) in chest_grid_actions {
-                    // A client's creative clone would desync (the
-                    // op never rides the wire) - host validates
-                    // its own flag only.
-                    if is_net_client
-                        && matches!(
-                            action,
-                            container::ui::GridAction::CloneSlot(_)
-                        )
-                    {
-                        continue;
-                    }
                     thrown_stacks.extend(
                         container::screen::apply_grid_action(
-                            chest,
+                            &mut view,
                             &mut vx.inventory,
                             &mut chest_held_local,
                             player_side,
@@ -4207,56 +4010,25 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 }
                 if let Some((visited, one_per)) = chest_drag_commit.take() {
                     container::screen::apply_grid_drag(
-                        chest,
+                        &mut view,
                         &mut vx.inventory,
                         &mut chest_held_local,
                         &visited,
                         one_per,
                     );
                 }
+                block::chest::menu_writeback(
+                    &mut vx.chests,
+                    pos,
+                    chest_secondary_pos,
+                    &view,
+                );
             }
             vx.chest_held = chest_held_local;
         } else {
             // No actions but still surface the latest cursor
             // state for the next frame.
             vx.chest_held = chest_held_local;
-        }
-        // W55.2b: apply partner-chest actions (double-chest top
-        // grid). Routes through the same shared core but against
-        // the partner pos. Local-only path (pre-existing: partner
-        // grids don't ride the client wire).
-        if let Some(partner_pos) = chest_partner_pos
-            && let Some(chest) = vx.chests.get_mut(&partner_pos)
-        {
-            // W467: stack-native, same shape as the main-chest
-            // apply above (disjoint borrows of chests / inventory /
-            // chest_held).
-            for action in chest_partner_actions {
-                if is_net_client
-                    && matches!(action, container::ui::GridAction::CloneSlot(_))
-                {
-                    continue;
-                }
-                thrown_stacks.extend(container::screen::apply_grid_action(
-                    chest,
-                    &mut vx.inventory,
-                    &mut vx.chest_held,
-                    false,
-                    action,
-                    &container::screen::CHEST_CFG,
-                    ui_creative,
-                ));
-            }
-            if let Some((visited, one_per)) = chest_partner_drag_commit.take()
-            {
-                container::screen::apply_grid_drag(
-                    chest,
-                    &mut vx.inventory,
-                    &mut vx.chest_held,
-                    &visited,
-                    one_per,
-                );
-            }
         }
         // Apply queued furnace-UI actions. Mirrors the chest path;
         // the furnace-specific quick-move routing (smeltable ->
@@ -4300,15 +4072,9 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             if let Some(furnace) = vx.furnaces.get_mut(&pos) {
                 // W467/W470: stack-native apply against
                 // `vx.inventory` through the shared click core.
+                // W472: creative clone rides the wire now, so the
+                // client's optimistic apply runs it too.
                 for (player_side, action) in furnace_grid_actions {
-                    if is_net_client
-                        && matches!(
-                            action,
-                            container::ui::GridAction::CloneSlot(_)
-                        )
-                    {
-                        continue;
-                    }
                     thrown_stacks.extend(
                         container::screen::apply_grid_action(
                             furnace,
@@ -4396,6 +4162,33 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                     whole,
                 ));
                 vx.crafting_table_held = cursor;
+            } else if vx.inventory_open {
+                // W472: E-screen cursor throw (MC slotId -999);
+                // clients forward the op so the authoritative
+                // cursor follows.
+                if vx.inv_screen_held.is_some() {
+                    let mut cursor = vx.inv_screen_held.take();
+                    thrown_stacks.extend(
+                        container::click::throw_from_cursor(
+                            &mut cursor, whole,
+                        ),
+                    );
+                    vx.inv_screen_held = cursor;
+                    if let NetRole::Client { client, .. } = &mut vx.net {
+                        let cfg = bincode::config::standard();
+                        let op =
+                            crate::net::InvOpMsg::CursorThrow { all: whole };
+                        if let Ok(buf) =
+                            bincode::serde::encode_to_vec(op, cfg)
+                        {
+                            let _ = client.send_bytes("vx.inv_op", buf);
+                        }
+                    }
+                }
+            } else if vx.creative_tab.open {
+                // MC creative screen: clicking outside DESTROYS
+                // the cursor stack (no world spill).
+                vx.creative_tab.cursor = None;
             }
         }
         // W470: spawn every stack thrown by panel ops this frame

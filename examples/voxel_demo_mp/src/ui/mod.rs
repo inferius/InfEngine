@@ -14,6 +14,7 @@
 
 pub(crate) mod brewing_panel;
 pub(crate) mod crafting_panel;
+pub(crate) mod inventory_screen;
 pub(crate) mod smithing_panel;
 pub(crate) mod stonecutter_panel;
 pub(crate) mod trade_panel;
@@ -23,7 +24,6 @@ pub(crate) mod slot_widget;
 use infengine_voxel::BlockId;
 use serde::{Deserialize, Serialize};
 
-use crate::inventory::{SlotKind, SplitMode};
 use crate::RECIPES;
 
 /// Targeting wireframe mode, cycled by the `H` key.
@@ -105,36 +105,14 @@ impl HighlightMode {
 pub(crate) type SlotIcon = ([f32; 3], u8, [f32; 4], &'static str);
 
 /// UI intent captured during the egui pass + applied after the
-/// closure exits. Drag operations are the main interaction;
-/// the hotbar still supports a plain click to change the
-/// active slot.
+/// closure exits. W472: the inventory screen is a cursor-stack
+/// menu now (`ui::inventory_screen` + `net::InvOpMsg`); the only
+/// remaining intent is the HUD hotbar's click-to-select.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum InvAction {
     /// Plain click on a hotbar slot: changes the active
     /// selection.
     SelectHotbar(usize),
-    /// Drag&drop finished: move stack from `from` to `to`. The
-    /// `split` field determines how much of the source stack
-    /// transfers - `All` is the standard whole-stack move,
-    /// `Half` shifts the upper half (good for splitting),
-    /// `One` peels off a single item (good for filling craft
-    /// slots).
-    Drag {
-        from: SlotKind,
-        to: SlotKind,
-        split: SplitMode,
-    },
-    /// W470: number key 1-9 over a hovered slot - swap it with
-    /// the matching hotbar slot (MC SWAP, ported click core).
-    SwapWith { slot: SlotKind, hotbar: usize },
-    /// W470: Q / Ctrl+Q over a hovered slot - throw one / all
-    /// (MC THROW). The thrown stack spawns as a floor drop with
-    /// MC toss velocity + the 40-tick pickup delay.
-    Throw { slot: SlotKind, all: bool },
-    /// W470: Shift+LMB quick-move on the inventory screen
-    /// (`InventoryMenu.quickMoveStack` routing: main <-> hotbar,
-    /// craft cells -> main-then-hotbar).
-    QuickMove { slot: SlotKind },
 }
 
 /// Phase the loading screen is currently in. Drives both the

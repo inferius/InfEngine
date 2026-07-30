@@ -18,9 +18,7 @@ use infengine_voxel::BlockId;
 
 use crate::Voxel;
 use crate::block::{FLINT_AND_STEEL_ID, FLINT_AND_STEEL_MAX_USES};
-use crate::inventory::{SlotKind, SplitMode};
 use crate::item::{ItemComponents, ItemStack};
-use crate::ui::InvAction;
 
 /// Build a flint+steel stack with `damage` wear already on it.
 fn worn_flint(damage: u16) -> ItemStack {
@@ -95,20 +93,24 @@ fn pickup_does_not_merge_into_worn_stack() {
     );
 }
 
-/// Drag a partially-used flint+steel into an empty slot. The
-/// damage travels inside the stack to the new slot index.
+/// W472: move a partially-used flint+steel through the E-screen
+/// cursor (pick up + place). The damage travels inside the stack
+/// to the new slot index.
 #[test]
-fn drag_moves_damage_with_stack() {
+fn cursor_move_carries_damage_with_stack() {
     let mut v = Voxel::new();
     v.inventory = std::array::from_fn(|_| None);
     // Slot 5 holds a half-burned flint+steel (damage 32).
     let from = 5usize;
     let to = 20usize;
     v.inventory[from] = Some(worn_flint(32));
-    v.apply_inv_action(InvAction::Drag {
-        from: SlotKind::Inv(from),
-        to: SlotKind::Inv(to),
-        split: SplitMode::All,
+    v.apply_inv_screen_op(crate::net::InvOpMsg::Click {
+        slot: crate::net::NetSlot::Inv(from as u32),
+        secondary: false,
+    });
+    v.apply_inv_screen_op(crate::net::InvOpMsg::Click {
+        slot: crate::net::NetSlot::Inv(to as u32),
+        secondary: false,
     });
     assert!(v.inventory[from].is_none(), "from slot should be empty");
     assert_eq!(
@@ -118,41 +120,57 @@ fn drag_moves_damage_with_stack() {
     );
 }
 
-/// Swap a flint+steel with an unrelated stack. The flint+steel
-/// moves to the destination slot with its damage; the unrelated
-/// stack lands in the source slot (plain components).
+/// W472: place a worn flint+steel onto an unrelated stack - the
+/// PICKUP swap puts the unrelated stack on the cursor and the
+/// flint+steel (damage intact) into the slot.
 #[test]
-fn drag_swap_with_unrelated_preserves_flint_damage() {
+fn cursor_swap_with_unrelated_preserves_flint_damage() {
     let mut v = Voxel::new();
     v.inventory = std::array::from_fn(|_| None);
     let a = 5usize;
     let b = 20usize;
     v.inventory[a] = Some(worn_flint(10));
     v.inventory[b] = Some(ItemStack::new(1, 16)); // stone stack
-    v.apply_inv_action(InvAction::Drag {
-        from: SlotKind::Inv(a),
-        to: SlotKind::Inv(b),
-        split: SplitMode::All,
+    v.apply_inv_screen_op(crate::net::InvOpMsg::Click {
+        slot: crate::net::NetSlot::Inv(a as u32),
+        secondary: false,
     });
-    // Stone landed at slot a, flint+steel landed at slot b.
+    v.apply_inv_screen_op(crate::net::InvOpMsg::Click {
+        slot: crate::net::NetSlot::Inv(b as u32),
+        secondary: false,
+    });
+    // Stone came onto the cursor; park it in slot a.
+    v.apply_inv_screen_op(crate::net::InvOpMsg::Click {
+        slot: crate::net::NetSlot::Inv(a as u32),
+        secondary: false,
+    });
     assert_eq!(v.inventory[a], Some(ItemStack::new(1, 16)));
     assert_eq!(v.inventory[b], Some(worn_flint(10)));
+    assert!(v.inv_screen_held.is_none());
 }
 
-/// Two flint+steels with DIFFERENT damage never merge on drag -
-/// they swap instead (`same_stackable` requires equal components).
+/// Two flint+steels with DIFFERENT damage never merge on a place -
+/// the PICKUP arm swaps instead (`same_stackable` requires equal
+/// components).
 #[test]
-fn drag_does_not_merge_differently_worn_flints() {
+fn cursor_place_does_not_merge_differently_worn_flints() {
     let mut v = Voxel::new();
     v.inventory = std::array::from_fn(|_| None);
     let a = 5usize;
     let b = 20usize;
     v.inventory[a] = Some(worn_flint(10));
     v.inventory[b] = Some(worn_flint(40));
-    v.apply_inv_action(InvAction::Drag {
-        from: SlotKind::Inv(a),
-        to: SlotKind::Inv(b),
-        split: SplitMode::All,
+    v.apply_inv_screen_op(crate::net::InvOpMsg::Click {
+        slot: crate::net::NetSlot::Inv(a as u32),
+        secondary: false,
+    });
+    v.apply_inv_screen_op(crate::net::InvOpMsg::Click {
+        slot: crate::net::NetSlot::Inv(b as u32),
+        secondary: false,
+    });
+    v.apply_inv_screen_op(crate::net::InvOpMsg::Click {
+        slot: crate::net::NetSlot::Inv(a as u32),
+        secondary: false,
     });
     // Swapped, both wear values intact.
     assert_eq!(v.inventory[a], Some(worn_flint(40)));
