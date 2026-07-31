@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bm;
+pub mod encoding;
 pub mod kyra;
 pub mod report;
 pub mod survey;

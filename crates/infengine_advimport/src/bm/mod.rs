@@ -20,15 +20,18 @@ pub mod dds;
 pub mod meta;
 pub mod resource;
 pub mod scene;
+pub mod speech;
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use glam::Vec2;
+use infengine_adventure::loca::{self, Line, Locale};
 use infengine_adventure::{Exit, Hotspot, Layer, LayerKind, Polygon, Room, Shape};
 use tracing::{debug, warn};
 
+use crate::encoding;
 use crate::ImportError;
 use crate::report::{ImportReport, Skipped};
 
@@ -76,15 +79,157 @@ fn load_meta(source: &Path, rooms: Vec<String>) -> GameMeta {
     }
 }
 
-/// Read a text file, tolerating bytes that are not valid UTF-8.
+/// Convert every language the install ships into our own locale files,
+/// extracting the voice archive that goes with each.
+///
+/// Text and audio already share one key in the source data, so the
+/// conversion only has to preserve that: each line keeps its speaker,
+/// and gains the paths to the recording and lip sync written beside it.
+fn export_languages(source: &Path, out_dir: &Path, report: &mut ImportReport) {
+    let loca_dir = source.join("loca");
+    let Ok(entries) = fs::read_dir(&loca_dir) else {
+        warn!("no loca directory; the import will have no text");
+        return;
+    };
+
+    let mut languages: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.strip_prefix("loca_")
+                .and_then(|rest| rest.strip_suffix(".xml"))
+                .map(str::to_string)
+        })
+        .collect();
+    languages.sort();
+
+    for language in languages {
+        match export_language(source, out_dir, &language, report) {
+            Ok(count) => {
+                report.languages += 1;
+                report.lines += count;
+            }
+            Err(err) => {
+                warn!(%language, %err, "language not imported");
+                report.skipped.push(Skipped {
+                    name: format!("loca_{language}.xml"),
+                    reason: err.to_string(),
+                });
+            }
+        }
+    }
+}
+
+/// Language tag and the name to show in a language menu.
+///
+/// The menu name is written in the language itself, which is what a
+/// player scanning the list actually recognises. An unrecognised
+/// language keeps its directory name rather than being dropped.
+fn language_info(name: &str) -> (String, String) {
+    const KNOWN: &[(&str, &str, &str)] = &[
+        ("czech", "cs", "Čeština"),
+        ("english", "en", "English"),
+        ("german", "de", "Deutsch"),
+        ("french", "fr", "Français"),
+        ("spanish", "es", "Español"),
+        ("italian", "it", "Italiano"),
+        ("polish", "pl", "Polski"),
+        ("russian", "ru", "Русский"),
+    ];
+    KNOWN
+        .iter()
+        .find(|(dir, _, _)| *dir == name)
+        .map(|(_, tag, display)| ((*tag).to_string(), (*display).to_string()))
+        .unwrap_or_else(|| (name.to_ascii_lowercase(), name.to_string()))
+}
+
+fn export_language(
+    source: &Path,
+    out_dir: &Path,
+    language: &str,
+    report: &mut ImportReport,
+) -> Result<usize, ImportError> {
+    let xml = read_text(&source.join("loca").join(format!("loca_{language}.xml"))).ok_or(
+        ImportError::NothingToImport {
+            path: source.display().to_string(),
+            looking_for: format!("loca_{language}.xml"),
+        },
+    )?;
+    let parsed = meta::parse_localisation(&xml);
+    let (tag, display_name) = language_info(language);
+
+    // Pull the recordings out first so each line can point at its file.
+    let archive = source.join("loca").join(language).join("speech.dat");
+    let prefix = format!("voice/{tag}");
+    let mut voice: HashMap<String, (String, Option<String>)> = HashMap::new();
+    if archive.is_file() {
+        match speech::open_index(&archive) {
+            Ok(entries) => {
+                match speech::extract(&archive, &entries, out_dir, &prefix) {
+                    Ok(stats) => {
+                        report.voice_lines += stats.audio;
+                        report.voice_bytes += stats.bytes;
+                        for entry in &entries {
+                            let Some(speaker) = entry.speaker() else {
+                                continue;
+                            };
+                            let name = entry.path.rsplit('/').next().unwrap_or(&entry.path);
+                            let rel = format!("{prefix}/{speaker}/{name}");
+                            let slot = voice
+                                .entry(entry.label().to_string())
+                                .or_insert_with(|| (String::new(), None));
+                            if entry.is_audio() {
+                                slot.0 = rel;
+                            } else if entry.is_lipsync() {
+                                slot.1 = Some(rel);
+                            }
+                        }
+                    }
+                    Err(err) => warn!(%language, %err, "voice archive not extracted"),
+                }
+            }
+            Err(err) => warn!(%language, %err, "voice index not read"),
+        }
+    }
+
+    let mut locale = Locale::new(&tag, &display_name);
+    for (key, line) in parsed.iter() {
+        let mut out = Line::text(&line.text);
+        out.speaker = line.speaker.clone();
+        if let Some((audio, lipsync)) = voice.get(key) {
+            if !audio.is_empty() {
+                out.voice = Some(audio.clone());
+            }
+            out.lipsync = lipsync.clone();
+        }
+        locale.insert(key, out);
+    }
+
+    let count = locale.len();
+    loca::save_locale(&locale, &out_dir.join(loca::LOCALE_DIR)).map_err(|err| {
+        ImportError::WriteRoom {
+            path: format!("{}/{}", loca::LOCALE_DIR, tag),
+            detail: err.to_string(),
+        }
+    })?;
+    Ok(count)
+}
+
+/// Read a text file into UTF-8, whatever it was written in.
 ///
 /// These files declare `encoding="utf-8"` and then carry the odd
 /// Latin-1 byte in a German label. A strict read rejects the whole file
 /// over one of them, which silently costs every hotspot name and every
-/// exit in the game - so decode lossily and keep going.
+/// exit in the game. Decoding lossily would keep the file but replace
+/// those bytes with `?`, so the fallback is a real code page instead -
+/// it maps every byte and cannot lose a letter.
 fn read_text(path: &Path) -> Option<String> {
     let bytes = fs::read(path).ok()?;
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    let (text, found) = encoding::decode(&bytes, encoding::Encoding::Latin1);
+    if found != encoding::Encoding::Utf8 {
+        debug!(path = %path.display(), ?found, "file was not UTF-8; converted");
+    }
+    Some(encoding::strip_bom(&text).to_string())
 }
 
 /// Import every scene under `source`.
@@ -127,6 +272,7 @@ pub fn import_dir(source: &Path, out_dir: &Path) -> Result<ImportReport, ImportE
     let game = load_meta(source, room_ids);
 
     let mut report = ImportReport::default();
+    export_languages(source, out_dir, &mut report);
     for path in &scenes {
         match import_scene(path, out_dir, &game, &mut report) {
             Ok(()) => {

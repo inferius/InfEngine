@@ -35,6 +35,14 @@ pub struct ImportReport {
     pub animations: usize,
     /// Frames across those animations.
     pub frames: usize,
+    /// Languages written as locale files.
+    pub languages: usize,
+    /// Lines of text across them.
+    pub lines: usize,
+    /// Recorded lines extracted.
+    pub voice_lines: usize,
+    /// Bytes of audio written.
+    pub voice_bytes: u64,
     pub skipped: Vec<Skipped>,
 }
 
@@ -53,6 +61,10 @@ impl ImportReport {
         self.sprites += other.sprites;
         self.animations += other.animations;
         self.frames += other.frames;
+        self.languages += other.languages;
+        self.lines += other.lines;
+        self.voice_lines += other.voice_lines;
+        self.voice_bytes += other.voice_bytes;
         self.skipped.extend(other.skipped);
     }
 
@@ -87,6 +99,16 @@ impl fmt::Display for ImportReport {
             "{} archives, {} images, {} rooms ({} with a traced floor)",
             self.archives, self.images, self.rooms, self.masks
         )?;
+        if self.languages > 0 {
+            writeln!(
+                f,
+                "{} languages, {} lines, {} voiced ({:.0} MB of audio)",
+                self.languages,
+                self.lines,
+                self.voice_lines,
+                self.voice_bytes as f64 / (1024.0 * 1024.0)
+            )?;
+        }
         if self.sprites > 0 || self.animations > 0 {
             writeln!(
                 f,

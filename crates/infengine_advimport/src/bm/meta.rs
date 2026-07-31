@@ -225,15 +225,32 @@ pub fn parse_hotspots(xml: &str) -> HotSpotTable {
     HotSpotTable { rows }
 }
 
+/// One translated line: what is said and who says it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LocaLine {
+    pub text: String,
+    pub speaker: Option<String>,
+}
+
 /// Translations, keyed by label.
 #[derive(Debug, Clone, Default)]
 pub struct Localisation {
-    entries: HashMap<String, String>,
+    entries: HashMap<String, LocaLine>,
 }
 
 impl Localisation {
     pub fn get(&self, key: &str) -> Option<&str> {
-        self.entries.get(key).map(String::as_str)
+        self.entries.get(key).map(|l| l.text.as_str())
+    }
+
+    /// The full line, including its speaker.
+    pub fn line(&self, key: &str) -> Option<&LocaLine> {
+        self.entries.get(key)
+    }
+
+    /// Every line, for building our own locale file.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &LocaLine)> {
+        self.entries.iter().map(|(k, v)| (k.as_str(), v))
     }
 
     pub fn len(&self) -> usize {
@@ -280,8 +297,22 @@ pub fn parse_localisation(xml: &str) -> Localisation {
             .into_iter()
             .find(|(k, _)| k == "value")
             .map(|(_, v)| v);
-        if let (Some(key), Some(value)) = (key, value) {
-            entries.insert(key, value);
+
+        // The speaker sits in a <Speaker> tag nested under this text.
+        let speaker = xml[text_end..next_label]
+            .find("<Speaker ")
+            .map(|s| s + text_end)
+            .and_then(|at| {
+                let end = xml[at..].find('>')? + at;
+                attributes(&xml[at + 9..end])
+                    .into_iter()
+                    .find(|(k, _)| k == "value")
+                    .map(|(_, v)| v)
+            })
+            .filter(|s| !s.is_empty());
+
+        if let (Some(key), Some(text)) = (key, value) {
+            entries.insert(key, LocaLine { text, speaker });
         }
     }
     Localisation { entries }
@@ -390,6 +421,16 @@ mod tests {
         let (key, text) = split_display_name("#onlykey");
         assert_eq!(key, "onlykey");
         assert!(text.is_empty());
+    }
+
+    #[test]
+    fn a_speaker_is_kept_with_its_line() {
+        let xml = r#"<TextRoot><Label value="a"><Text value="Ahoj"><Speaker value="Darren"/></Text></Label>
+          <Label value="b"><Text value="Vypravec"/></Label></TextRoot>"#;
+        let loca = parse_localisation(xml);
+        assert_eq!(loca.line("a").expect("line").speaker.as_deref(), Some("Darren"));
+        assert_eq!(loca.line("b").expect("line").speaker, None, "narration has none");
+        assert_eq!(loca.iter().count(), 2);
     }
 
     #[test]

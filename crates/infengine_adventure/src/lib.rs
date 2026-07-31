@@ -30,6 +30,7 @@
 pub mod geom;
 pub mod interact;
 pub mod io;
+pub mod loca;
 pub mod mask;
 pub mod path;
 pub mod room;
@@ -38,6 +39,7 @@ pub mod walk;
 
 pub use interact::{EntryPoint, Exit, Facing, Hotspot, Shape, Verb};
 pub use io::{RoomIoError, load, save};
+pub use loca::{Line, Locale, Locales};
 pub use mask::trace as trace_walk_mask;
 pub use path::{PathError, find_path, path_length, point_along};
 pub use room::{Layer, LayerKind, Room};
