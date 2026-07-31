@@ -28,6 +28,25 @@
 //! the real argument counts is the next piece of work, and until it is
 //! done this is a reader, not a player.
 //!
+//! Two searches have been run and neither settled it, which is worth
+//! recording so they are not repeated:
+//!
+//! - Hill-climbing the argument counts to make each program consume
+//!   exactly its byte range went from 376 of 3231 programs to 1881.
+//!   It stalls there, and the reason is visible in the data: the first
+//!   and last byte pairs of programs overlap, so programs share their
+//!   tails and "ends at the next offset" was never true to begin with.
+//! - Hill-climbing to minimise the number of distinct opcodes, reading
+//!   from the 989 starts the track table actually names, went from 116
+//!   to 78. Also too many.
+//!
+//! What both agree on is the head of the distribution, and that part is
+//! solid: `0x09` is far and away the most common, then `0x2b`, `0x10`,
+//! `0x08`, `0x1e`, `0x20`, `0x7f`, `0x02`, `0x03`, `0x11`, `0x07`,
+//! `0x13`. About twenty commands carry over 99% of the weight, which is
+//! the size a real instruction set would be. Everything below a few
+//! hundred occurrences is drift.
+//!
 //! The command names below are the ones the data supports on its own:
 //! `rest` is over half of all commands, which is what a rest is in
 //! music, and `instrument` appears in bursts at the head of a program
