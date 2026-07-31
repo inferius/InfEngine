@@ -17,6 +17,7 @@
 //! module writes out as PNG.
 
 pub mod dds;
+pub mod meta;
 pub mod resource;
 pub mod scene;
 
@@ -25,7 +26,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use glam::Vec2;
-use infengine_adventure::{Hotspot, Layer, LayerKind, Polygon, Room, Shape};
+use infengine_adventure::{Exit, Hotspot, Layer, LayerKind, Polygon, Room, Shape};
 use tracing::{debug, warn};
 
 use crate::ImportError;
@@ -39,6 +40,52 @@ const ROOM_DIR: &str = "rooms";
 /// A layer with `scroll` at this value moves with the camera one for
 /// one, which is not parallax at all.
 const NO_PARALLAX: f32 = 1.0;
+
+/// The hotspot table and translations that describe a whole game.
+///
+/// Both are optional: without them rooms still import, just with raw
+/// labels for names and every clickable region filed as a hotspot.
+#[derive(Debug, Default)]
+pub struct GameMeta {
+    pub hotspots: meta::HotSpotTable,
+    pub loca: Option<meta::Localisation>,
+    /// Room ids that exist, used to resolve exit targets.
+    pub rooms: Vec<String>,
+}
+
+/// Load `Scripts/HotSpots.xml` and a translation file if either is
+/// present. Czech is preferred, then English, then whatever is there.
+fn load_meta(source: &Path, rooms: Vec<String>) -> GameMeta {
+    let hotspots = read_text(&source.join("Scripts").join("HotSpots.xml"))
+        .map(|xml| meta::parse_hotspots(&xml))
+        .unwrap_or_default();
+
+    let loca_dir = source.join("loca");
+    let loca = ["czech", "english"]
+        .iter()
+        .find_map(|lang| read_text(&loca_dir.join(format!("loca_{lang}.xml"))))
+        .map(|xml| meta::parse_localisation(&xml));
+
+    if hotspots.is_empty() {
+        warn!("no Scripts/HotSpots.xml; hotspots will keep their raw labels");
+    }
+    GameMeta {
+        hotspots,
+        loca,
+        rooms,
+    }
+}
+
+/// Read a text file, tolerating bytes that are not valid UTF-8.
+///
+/// These files declare `encoding="utf-8"` and then carry the odd
+/// Latin-1 byte in a German label. A strict read rejects the whole file
+/// over one of them, which silently costs every hotspot name and every
+/// exit in the game - so decode lossily and keep going.
+fn read_text(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
 
 /// Import every scene under `source`.
 ///
@@ -69,9 +116,19 @@ pub fn import_dir(source: &Path, out_dir: &Path) -> Result<ImportReport, ImportE
         });
     }
 
+    // Room ids are the scene file names, so the whole set is known
+    // before anything is parsed - which is what lets an exit resolve to
+    // a room that has not been imported yet.
+    let room_ids: Vec<String> = scenes
+        .iter()
+        .filter_map(|p| p.file_stem())
+        .map(|s| s.to_string_lossy().to_ascii_lowercase())
+        .collect();
+    let game = load_meta(source, room_ids);
+
     let mut report = ImportReport::default();
     for path in &scenes {
-        match import_scene(path, out_dir, &mut report) {
+        match import_scene(path, out_dir, &game, &mut report) {
             Ok(()) => {
                 report.archives += 1;
                 report.rooms += 1;
@@ -226,6 +283,7 @@ fn relink_layers(room: &mut Room, written: &HashMap<String, String>) {
 pub fn import_scene(
     path: &Path,
     out_dir: &Path,
+    game: &GameMeta,
     report: &mut ImportReport,
 ) -> Result<(), ImportError> {
     let bytes = fs::read(path).map_err(|err| ImportError::ReadFile {
@@ -237,7 +295,7 @@ pub fn import_scene(
         detail: err.to_string(),
     })?;
 
-    let mut room = to_room(&parsed);
+    let mut room = to_room(&parsed, game);
     let written = export_textures(&bytes, &parsed, &room.id, out_dir, report);
     relink_layers(&mut room, &written);
     let file_name = format!("{}.room.ron", room.id);
@@ -249,7 +307,7 @@ pub fn import_scene(
 }
 
 /// Map a parsed scene onto our room model.
-pub fn to_room(parsed: &scene::Scene) -> Room {
+pub fn to_room(parsed: &scene::Scene, game: &GameMeta) -> Room {
     let id = parsed.name.to_ascii_lowercase();
     let project = parsed.first_of_kind("Project");
     let size = Vec2::new(
@@ -282,10 +340,36 @@ pub fn to_room(parsed: &scene::Scene) -> Room {
         let Some(shape) = hotspot_shape(&element.points) else {
             continue;
         };
+        let label = element.label();
+        let found = game.hotspots.get(label);
+        let name = found.map_or_else(
+            || label.to_string(),
+            |m| m.display_name(game.loca.as_ref()),
+        );
+
+        // The scene graph files doorways and scenery under the same node
+        // type; only the hotspot table tells them apart.
+        let is_exit = found.is_some_and(|m| m.kind == meta::HotSpotKind::Exit);
+        if is_exit {
+            let target = meta::exit_target(label)
+                .and_then(|t| meta::resolve_room(&t, &game.rooms))
+                .unwrap_or_default();
+            room.exits.push(Exit {
+                id: label.to_string(),
+                name,
+                shape,
+                target_room: target,
+                enabled: true,
+                ..Default::default()
+            });
+            continue;
+        }
+
         room.hotspots.push(Hotspot {
-            id: element.label().to_string(),
-            name: element.label().to_string(),
+            id: label.to_string(),
+            name,
             shape,
+            default_verb: found.map(|m| m.verb).unwrap_or_default(),
             enabled: true,
             ..Default::default()
         });
@@ -334,6 +418,7 @@ fn hotspot_shape(points: &[Vec2]) -> Option<Shape> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use infengine_adventure::Verb;
     use scene::{Element, Scene, Value};
 
     fn element(kind: &str, attrs: &[(&str, Value)], points: &[Vec2]) -> Element {
@@ -403,7 +488,7 @@ mod tests {
 
     #[test]
     fn room_takes_its_size_from_the_project_node() {
-        let room = to_room(&sample_scene());
+        let room = to_room(&sample_scene(), &GameMeta::default());
         assert_eq!(room.size, Vec2::new(1280.0, 800.0));
         assert_eq!(room.id, "lighthouseday");
         assert_eq!(room.name, "LighthouseDay");
@@ -416,7 +501,7 @@ mod tests {
             name: "Bare".into(),
             elements: Vec::new(),
         };
-        let room = to_room(&scene);
+        let room = to_room(&scene, &GameMeta::default());
         assert_eq!(room.size, Vec2::ZERO);
         // validate() should flag the missing size rather than the
         // importer inventing one.
@@ -425,7 +510,7 @@ mod tests {
 
     #[test]
     fn layers_keep_their_order_and_images() {
-        let room = to_room(&sample_scene());
+        let room = to_room(&sample_scene(), &GameMeta::default());
         assert_eq!(room.layers.len(), 3);
         assert_eq!(room.layers[0].name, "bg");
         assert_eq!(room.layers[0].image, "s097.tga");
@@ -433,7 +518,7 @@ mod tests {
 
     #[test]
     fn ysort_becomes_a_walk_behind_overlay() {
-        let room = to_room(&sample_scene());
+        let room = to_room(&sample_scene(), &GameMeta::default());
         assert_eq!(
             room.layers[1].kind,
             LayerKind::Overlay { depth_y: 644.0 }
@@ -445,7 +530,7 @@ mod tests {
 
     #[test]
     fn scroll_becomes_parallax() {
-        let room = to_room(&sample_scene());
+        let room = to_room(&sample_scene(), &GameMeta::default());
         assert_eq!(
             room.layers[2].kind,
             LayerKind::Parallax {
@@ -471,12 +556,12 @@ mod tests {
                 &[],
             )],
         };
-        assert!(to_room(&scene).layers.is_empty());
+        assert!(to_room(&scene, &GameMeta::default()).layers.is_empty());
     }
 
     #[test]
     fn a_hotspot_outline_becomes_a_polygon() {
-        let room = to_room(&sample_scene());
+        let room = to_room(&sample_scene(), &GameMeta::default());
         assert_eq!(room.hotspots.len(), 1);
         let hotspot = &room.hotspots[0];
         assert_eq!(hotspot.id, "LighthouseNote");
@@ -492,6 +577,93 @@ mod tests {
         assert!(!shape.contains(Vec2::new(35.0, 20.0)));
     }
 
+    /// A scene with one doorway and one object, both filed as HotSpot
+    /// nodes exactly as the scene graph stores them.
+    fn scene_with_a_doorway() -> Scene {
+        Scene {
+            graph_end: 0,
+            name: "Beach".into(),
+            elements: vec![
+                element(
+                    "HotSpot",
+                    &[("label", Value::Text("FromBeachToPromenade".into()))],
+                    &[
+                        Vec2::new(0.0, 0.0),
+                        Vec2::new(10.0, 0.0),
+                        Vec2::new(10.0, 10.0),
+                    ],
+                ),
+                element(
+                    "HotSpot",
+                    &[("label", Value::Text("Note".into()))],
+                    &[
+                        Vec2::new(20.0, 20.0),
+                        Vec2::new(30.0, 20.0),
+                        Vec2::new(30.0, 30.0),
+                    ],
+                ),
+            ],
+        }
+    }
+
+    fn game_meta() -> GameMeta {
+        let xml = concat!(
+            "<HotSpots>",
+            "<HotSpot label=\"FromBeachToPromenade\" display_name=\"#k1 Weg\" cursor=\"exit\" type=\"exit\"/>",
+            "<HotSpot label=\"Note\" display_name=\"#k2 Zettel\" cursor=\"pick_up\" type=\"game\"/>",
+            "</HotSpots>"
+        );
+        GameMeta {
+            hotspots: meta::parse_hotspots(xml),
+            loca: Some(meta::parse_localisation(
+                "<TextRoot><Label value=\"k2\"><Text value=\"listek\"/></Label></TextRoot>",
+            )),
+            rooms: vec!["promenadeday".into(), "beach".into()],
+        }
+    }
+
+    #[test]
+    fn the_hotspot_table_splits_doorways_out_into_exits() {
+        // Without the table both of these are hotspots, because the
+        // scene graph files them under the same node type.
+        let plain = to_room(&scene_with_a_doorway(), &GameMeta::default());
+        assert_eq!(plain.hotspots.len(), 2);
+        assert!(plain.exits.is_empty());
+
+        let room = to_room(&scene_with_a_doorway(), &game_meta());
+        assert_eq!(room.hotspots.len(), 1);
+        assert_eq!(room.exits.len(), 1);
+        assert_eq!(room.exits[0].id, "FromBeachToPromenade");
+    }
+
+    #[test]
+    fn an_exit_target_is_resolved_against_the_rooms_that_exist() {
+        let room = to_room(&scene_with_a_doorway(), &game_meta());
+        assert_eq!(room.exits[0].target_room, "promenadeday");
+        // A resolved target means validate() has nothing to complain
+        // about on this exit.
+        assert!(!room.validate().iter().any(|i| i.contains("no target room")));
+    }
+
+    #[test]
+    fn hotspots_take_their_verb_and_translated_name_from_the_table() {
+        let room = to_room(&scene_with_a_doorway(), &game_meta());
+        let note = &room.hotspots[0];
+        assert_eq!(note.id, "Note");
+        assert_eq!(note.default_verb, Verb::Take);
+        assert_eq!(note.name, "listek", "the translation wins over the label");
+    }
+
+    #[test]
+    fn an_unresolvable_exit_target_is_left_empty_for_the_editor() {
+        let mut game = game_meta();
+        game.rooms = vec!["somewhereelse".into()];
+        let room = to_room(&scene_with_a_doorway(), &game);
+        assert_eq!(room.exits.len(), 1);
+        assert!(room.exits[0].target_room.is_empty());
+        assert!(room.validate().iter().any(|i| i.contains("no target room")));
+    }
+
     #[test]
     fn a_hotspot_with_too_few_points_is_dropped_not_invented() {
         assert!(hotspot_shape(&[]).is_none());
@@ -505,6 +677,6 @@ mod tests {
                 &[Vec2::new(1.0, 1.0)],
             )],
         };
-        assert!(to_room(&scene).hotspots.is_empty());
+        assert!(to_room(&scene, &GameMeta::default()).hotspots.is_empty());
     }
 }
