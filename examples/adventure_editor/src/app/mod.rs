@@ -4,12 +4,15 @@
 //! `project`. `on_update` is a sequence of calls into those, not a place
 //! for logic.
 
+mod input;
+mod screens;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use glam::Vec2;
 use infengine_adventure::loca::LanguageChoice;
-use infengine_adventure::{Animation, Room, find_path};
+use infengine_adventure::{Animation, Room};
 use infengine_audio::AudioSystem;
 use infengine_editor::EditorUi;
 use infengine_render::{Renderer, Texture2dHandle};
@@ -408,88 +411,6 @@ impl Editor {
         }
     }
 
-    /// Apply what the screen editor asked for.
-    fn apply_screen_actions(&mut self, actions: ui_screen::ScreenActions) {
-        use infengine_adventure::screen;
-
-        let dir = self.project.root.join(screen::SCREEN_DIR);
-        if let Some(id) = actions.create {
-            let size = if self.room.size.x > 0.0 {
-                self.room.size
-            } else {
-                Vec2::new(320.0, 200.0)
-            };
-            self.screen_ui.screens.push(screen::Screen::new(id, size));
-            self.screen_ui.screens.sort_by(|a, b| a.id.cmp(&b.id));
-            self.screen_ui.selected_widget = None;
-            self.screen_ui.dirty = true;
-        }
-        if actions.save
-            && let Some(current) = self.screen_ui.current().cloned()
-        {
-            self.screen_ui.status = match screen::save(&current, &dir) {
-                Ok(()) => {
-                    self.screen_ui.dirty = false;
-                    format!("saved {}", current.id)
-                }
-                Err(err) => err.to_string(),
-            };
-        }
-        if actions.reload {
-            let (screens, errors) = screen::load_dir(&dir);
-            self.screen_ui.selected = (!screens.is_empty()).then_some(0);
-            self.screen_ui.screens = screens;
-            self.screen_ui.selected_widget = None;
-            self.screen_ui.dirty = false;
-            self.screen_ui.status = if errors.is_empty() {
-                "reloaded".into()
-            } else {
-                errors[0].to_string()
-            };
-        }
-        if let Some(fired) = actions.fired {
-            self.fire_screen_action(fired);
-        }
-    }
-
-    /// Carry out what a previewed button does.
-    fn fire_screen_action(&mut self, action: infengine_adventure::screen::ScreenAction) {
-        use infengine_adventure::screen::ScreenAction;
-
-        match action {
-            ScreenAction::NewGame => {
-                let start = self.game_ui.manifest.start_room.clone();
-                self.screen_ui.preview = None;
-                if start.is_empty() {
-                    self.status = "no starting room set - see the game window".into();
-                    return;
-                }
-                self.play.game.state = Default::default();
-                self.enter_room_by_id(&start, None);
-                self.start_play();
-            }
-            ScreenAction::Resume | ScreenAction::Close => {
-                self.screen_ui.preview = None;
-            }
-            ScreenAction::Open { screen } => {
-                if !self.screen_ui.show(&screen) {
-                    self.status = format!("no screen called {screen}");
-                }
-            }
-            // The editor is not the thing that quits; saying so is more
-            // use than doing nothing silently.
-            ScreenAction::Quit => self.status = "quit (ignored in the editor)".into(),
-            ScreenAction::SetTextLanguage { language } => self.language.text = language,
-            ScreenAction::SetVoiceLanguage { language } => self.language.voice = language,
-            ScreenAction::RunScript { script } => {
-                if !self.play.game.run_script(&script) {
-                    self.status = format!("no script called {script}");
-                }
-            }
-            ScreenAction::None => {}
-        }
-    }
-
     /// Apply what the game window asked for.
     fn apply_game_actions(&mut self, actions: ui_game::GameActions) {
         use infengine_adventure::pack;
@@ -622,150 +543,6 @@ impl Editor {
         self.selection = Selection::None;
     }
 
-    /// Room-space position of the cursor.
-    fn cursor_room(&self) -> Vec2 {
-        self.view.window_to_room(self.cursor)
-    }
-
-    fn grab_radius(&self) -> f32 {
-        self.view.screen_pixels_in_room(GRAB_PIXELS)
-    }
-
-    fn on_left_press(&mut self) {
-        let p = self.cursor_room();
-        if self.play.active {
-            // A click through a line reads it away; only then does it
-            // mean something in the room.
-            if self.play.subtitle.is_some() {
-                self.play.skip_subtitle();
-                return;
-            }
-            let verb = self.play.verb;
-            let click = self.play.game.click(&self.room, p, verb);
-            self.status = click.label();
-            self.play.hover = click;
-            return;
-        }
-        match self.tool {
-            Tool::Select => {
-                if let Some(at) = edit::vertex_at(&self.room, p, self.grab_radius()) {
-                    self.selection = Selection::Vertex(at);
-                    self.drag = Drag::Vertex(at);
-                } else if let Some(index) = edit::hotspot_at(&self.room, p) {
-                    self.selection = Selection::Hotspot(index);
-                    self.drag = Drag::Hotspot(index);
-                } else {
-                    self.selection = Selection::None;
-                    self.drag = Drag::Pan;
-                }
-            }
-            Tool::DrawFloor => {
-                edit::extend_floor(&mut self.room, &mut self.floor_draft, p);
-                self.dirty = true;
-            }
-            Tool::DrawHotspot => self.drag = Drag::HotspotRect(p),
-            Tool::WalkPreview => self.preview_walk(p),
-        }
-    }
-
-    /// Route the actor to `goal` and keep the result for drawing.
-    fn preview_walk(&mut self, goal: Vec2) {
-        let start = self.walk_from.or_else(|| {
-            self.room
-                .entries
-                .first()
-                .map(|e| e.position)
-                .or_else(|| self.room.walk.clamp(goal))
-        });
-        let Some(start) = start else {
-            self.status = "this room has no floor to walk on".into();
-            return;
-        };
-        match find_path(&self.room.walk, start, goal) {
-            Ok(path) => {
-                self.status = format!(
-                    "{} legs, {:.0} px",
-                    path.len().saturating_sub(1),
-                    infengine_adventure::path_length(&path)
-                );
-                self.walk_from = path.last().copied();
-                self.path = path;
-            }
-            Err(err) => {
-                self.path.clear();
-                self.status = format!("no route: {err:?}");
-            }
-        }
-    }
-
-    fn on_left_release(&mut self) {
-        if let Drag::HotspotRect(from) = self.drag {
-            let to = self.cursor_room();
-            if let Some(index) =
-                edit::finish_hotspot_drag(&mut self.room, from, to, MIN_HOTSPOT)
-            {
-                self.selection = Selection::Hotspot(index);
-                self.dirty = true;
-            }
-        }
-        self.drag = Drag::None;
-    }
-
-    fn on_right_press(&mut self) {
-        match self.tool {
-            Tool::DrawFloor => {
-                self.floor_draft.clear();
-                self.status = "outline finished".into();
-            }
-            Tool::Select => {
-                let p = self.cursor_room();
-                let radius = self.grab_radius();
-                if let Some(at) = edit::insert_vertex_on_edge(&mut self.room, p, radius) {
-                    self.selection = Selection::Vertex(at);
-                    self.dirty = true;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn on_cursor_move(&mut self) {
-        let delta = self.cursor - self.last_cursor;
-        match self.drag {
-            Drag::Pan => self.view.pan(delta),
-            Drag::Vertex(at) => {
-                let target = self.cursor_room();
-                if edit::move_vertex(&mut self.room, at, target) {
-                    self.dirty = true;
-                }
-            }
-            Drag::Hotspot(index) => {
-                let room_delta = delta / self.view.zoom.max(f32::EPSILON);
-                if edit::move_hotspot(&mut self.room, index, room_delta) {
-                    self.dirty = true;
-                }
-            }
-            Drag::None | Drag::HotspotRect(_) => {}
-        }
-    }
-
-    /// Points drawn with the selection highlight.
-    fn selected_points(&self) -> Vec<Vec2> {
-        match self.selection {
-            Selection::Vertex(at) => {
-                let list = match at.kind {
-                    edit::PolyKind::Solid => &self.room.walk.solids,
-                    edit::PolyKind::Hole => &self.room.walk.holes,
-                };
-                list.get(at.polygon)
-                    .and_then(|p| p.points.get(at.vertex))
-                    .copied()
-                    .into_iter()
-                    .collect()
-            }
-            _ => Vec::new(),
-        }
-    }
 }
 
 impl AppHandler for Editor {
