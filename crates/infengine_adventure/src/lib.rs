@@ -39,6 +39,7 @@ pub mod path;
 pub mod plural;
 pub mod room;
 pub mod scale;
+pub mod script_io;
 pub mod walk;
 
 pub use action::{Action, Script};

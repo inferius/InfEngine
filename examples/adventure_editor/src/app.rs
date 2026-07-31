@@ -19,9 +19,11 @@ use tracing::{info, warn};
 
 use crate::draw::{self, Overlays};
 use crate::edit::{self, Selection, Tool};
+use crate::play::{self, PlayMode};
 use crate::playback::Playback;
 use crate::project::Project;
 use crate::ui::{self, UiActions, UiState};
+use crate::ui_play::{self, PlayDraft};
 
 /// How close, in screen pixels, the cursor must be to grab a vertex.
 const GRAB_PIXELS: f32 = 7.0;
@@ -79,6 +81,8 @@ pub struct Editor {
     /// whether a recording exists in the chosen voice language.
     lines: Vec<(String, String, bool)>,
     last_language: LanguageChoice,
+    play: PlayMode,
+    play_draft: PlayDraft,
     status: String,
 }
 
@@ -94,6 +98,7 @@ impl std::fmt::Debug for Editor {
 impl Editor {
     pub fn new(root: PathBuf) -> Self {
         let project = Project::open(&root);
+        let play = PlayMode::with_scripts(project.scripts.clone());
         let status = if project.is_empty() {
             format!("no rooms under {}", project.root.display())
         } else {
@@ -128,6 +133,8 @@ impl Editor {
             language: LanguageChoice::default(),
             lines: Vec::new(),
             last_language: LanguageChoice::default(),
+            play,
+            play_draft: PlayDraft::default(),
             status,
         }
     }
@@ -287,6 +294,117 @@ impl Editor {
         }
     }
 
+    /// Enter play mode in the open room.
+    fn start_play(&mut self) {
+        if self.project.scripts.is_empty() {
+            self.status = "this project has no scripts to run".into();
+        }
+        self.play.begin(&self.room);
+        self.status = format!("playing {}", self.room.id);
+    }
+
+    /// Carry out what a play tick asked for.
+    ///
+    /// Split out because it is the only part of play mode that touches
+    /// files and devices; everything else runs headless in `play`.
+    fn perform(&mut self, request: play::Request) {
+        if let Some(id) = request.speak {
+            self.play_voice(&id);
+        }
+        if let Some(animation) = request.animation {
+            self.playback.select(animation);
+        }
+        if let Some(sound) = request.sound {
+            self.play_file(&sound);
+        }
+        if let Some(music) = request.music {
+            match music {
+                Some(track) => self.play_file(&track),
+                // Nothing to stop yet: music is one-shot playback until
+                // the audio system grows a handle to hold on to.
+                None => self.status = "music off".into(),
+            }
+        }
+        if let Some((room, entry)) = request.enter_room {
+            self.enter_room_by_id(&room, entry.as_deref());
+        }
+    }
+
+    /// Load the room a script asked for and hand it back to the game.
+    fn enter_room_by_id(&mut self, id: &str, entry: Option<&str>) {
+        let target = self
+            .project
+            .rooms
+            .iter()
+            .position(|path| Project::room_label(path) == id);
+        let Some(index) = target else {
+            // Deliberately left blocked: the script stalls where the
+            // missing room is, which is the bug the test run just found.
+            self.play.note(format!("MISSING room {id}"));
+            self.status = format!("no room file for {id}");
+            return;
+        };
+        self.open_room(index);
+        self.play.room_loaded(&self.room, entry);
+    }
+
+    /// Play a recording by localisation id.
+    fn play_voice(&mut self, id: &str) {
+        let path = self
+            .project
+            .locales
+            .line(id, &self.language.voice)
+            .and_then(|line| line.voice.clone());
+        match path {
+            Some(path) => self.play_file(&path),
+            None => self.play.note(format!("no recording for {id}")),
+        }
+    }
+
+    /// Play a file given as a project-relative path.
+    fn play_file(&mut self, relative: &str) {
+        let Some(audio) = self.audio.as_mut() else {
+            return;
+        };
+        let full = self.project.resolve(relative);
+        if let Err(err) = audio.load_sound(&full).and_then(|s| audio.play_sound(&s)) {
+            warn!(file = relative, %err, "could not play");
+            self.play.note(format!("could not play {relative}"));
+        }
+    }
+
+    /// Apply what the play panel asked for.
+    fn apply_play_actions(&mut self, actions: ui_play::PlayActions) {
+        if actions.start {
+            self.start_play();
+        }
+        if actions.stop {
+            self.play.end();
+            self.status = "stopped".into();
+        }
+        if actions.reset {
+            self.play.reset(&self.room);
+            self.status = format!("reset in {}", self.room.id);
+        }
+        if let Some((flag, value)) = actions.set_flag {
+            self.play.game.state.set_flag(flag, value);
+        }
+        if let Some(flag) = actions.add_flag {
+            self.play.game.state.set_flag(flag, true);
+        }
+        if let Some(item) = actions.give_item {
+            self.play.game.state.give(item);
+        }
+        if let Some(item) = actions.take_item {
+            self.play.game.state.take(&item);
+        }
+        if let Some(id) = actions.run_script
+            && self.play.game.run_script(&id)
+        {
+            self.play.note(format!("run {id}"));
+        }
+    }
+
     fn save(&mut self) {
         let Some(path) = self.room_path.clone() else {
             return;
@@ -354,6 +472,19 @@ impl Editor {
 
     fn on_left_press(&mut self) {
         let p = self.cursor_room();
+        if self.play.active {
+            // A click through a line reads it away; only then does it
+            // mean something in the room.
+            if self.play.subtitle.is_some() {
+                self.play.skip_subtitle();
+                return;
+            }
+            let verb = self.play.verb;
+            let click = self.play.game.click(&self.room, p, verb);
+            self.status = click.label();
+            self.play.hover = click;
+            return;
+        }
         match self.tool {
             Tool::Select => {
                 if let Some(at) = edit::vertex_at(&self.room, p, self.grab_radius()) {
@@ -547,7 +678,18 @@ impl AppHandler for Editor {
         match key {
             Key::Backspace => self.delete_selection(),
             Key::F => self.view.fit(),
+            Key::P => {
+                if self.play.active {
+                    self.play.end();
+                } else {
+                    self.start_play();
+                }
+            }
             Key::S => self.save(),
+            Key::Escape if self.play.active => {
+                self.play.end();
+                self.status = "stopped".into();
+            }
             Key::Escape => {
                 self.selection = Selection::None;
                 self.floor_draft.clear();
@@ -570,6 +712,23 @@ impl AppHandler for Editor {
         if self.renderer.is_none() {
             return;
         }
+        let request = play::tick(
+            &mut self.play,
+            &self.room,
+            &self.project.animations,
+            &self.project.locales,
+            &self.language,
+            ctx.delta_time,
+        );
+        if !request.is_empty() {
+            self.perform(request);
+        }
+        if self.play.active {
+            let p = self.cursor_room();
+            let verb = self.play.verb;
+            self.play.hover = self.play.game.resolve(&self.room, p, verb);
+        }
+
         // Advance the preview before anything is drawn, so the frame
         // shown is the one for this instant.
         let current = self
@@ -587,6 +746,17 @@ impl AppHandler for Editor {
         // Compute what depends on &self before taking the renderer out
         // mutably; the borrow checker cannot see that they are disjoint.
         let selected = self.selected_points();
+        let actor = self.play.active.then(|| {
+            let position = self.play.game.state.actor.position;
+            (position, self.room.scale.scale_at(position.y))
+        });
+        let walk_line: Vec<Vec2> = if self.play.active {
+            std::iter::once(self.play.game.state.actor.position)
+                .chain(self.play.game.state.actor.path().iter().copied())
+                .collect()
+        } else {
+            self.path.clone()
+        };
         if let Some(renderer) = self.renderer.as_mut() {
             draw::sync_camera(renderer, &self.view);
             draw::draw_layers(renderer, &self.room, &self.view, &self.textures);
@@ -606,13 +776,17 @@ impl AppHandler for Editor {
                 &self.view,
                 &self.overlays,
                 &selected,
-                &self.path,
+                &walk_line,
             );
+            if let Some((position, scale)) = actor {
+                draw::draw_actor(renderer, &self.view, position, scale);
+            }
         }
 
         // Build the UI, then apply what it asked for after the borrow of
         // the room ends.
         let mut actions = UiActions::default();
+        let mut play_actions = ui_play::PlayActions::default();
         let mut content = None;
         if let Some(ui) = self.ui.as_mut() {
             let mut state = UiState {
@@ -635,7 +809,11 @@ impl AppHandler for Editor {
                 content_min: egui::Vec2::ZERO,
                 content_max: egui::Vec2::ZERO,
             };
+            let play = &mut self.play;
+            let play_draft = &mut self.play_draft;
+            let room_id = state.room.id.clone();
             ui.run(window.raw(), |ctx| {
+                play_actions = ui_play::panel(ctx, play, play_draft, &room_id);
                 actions = ui::build(ctx, &mut state);
             });
             content = Some((state.content_min, state.content_max));
@@ -660,5 +838,6 @@ impl AppHandler for Editor {
         }
 
         self.apply_actions(actions);
+        self.apply_play_actions(play_actions);
     }
 }

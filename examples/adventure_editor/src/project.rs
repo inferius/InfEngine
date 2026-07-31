@@ -5,11 +5,14 @@
 //! room file, so a room can sit in `rooms/` while its background sits in
 //! `images/` without every path starting with `../`.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use infengine_adventure::anim::{self, AnimationSet};
+use infengine_adventure::action::Script;
 use infengine_adventure::loca::{self, Locales};
+use infengine_adventure::script_io;
 
 /// Directory inside a project that holds room files.
 pub const ROOMS_DIR: &str = "rooms";
@@ -30,6 +33,11 @@ pub struct Project {
     pub animations: AnimationSet,
     /// Every language the project ships.
     pub locales: Locales,
+    /// Every script, by id. Scripts are grouped per room on disk but
+    /// referenced globally, so one room's hotspot can run another's.
+    pub scripts: HashMap<String, Script>,
+    /// Script files that would not parse, named so they can be fixed.
+    pub script_errors: Vec<String>,
 }
 
 impl Project {
@@ -64,11 +72,15 @@ impl Project {
         // The fallback is whichever language sorts first, since a
         // project has no say in the matter until one is configured.
         let locales = loca::load_dir(&root.join(loca::LOCALE_DIR), "").unwrap_or_default();
+        let (scripts, errors) = script_io::load_dir(&root.join(script_io::SCRIPT_DIR));
+        let script_errors = errors.iter().map(ToString::to_string).collect();
         Self {
             root,
             rooms,
             animations,
             locales,
+            scripts,
+            script_errors,
         }
     }
 

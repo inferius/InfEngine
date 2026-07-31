@@ -512,6 +512,8 @@ mod tests {
                 .collect(),
             animations: Default::default(),
             locales: Default::default(),
+            scripts: Default::default(),
+            script_errors: Vec::new(),
         }
     }
 

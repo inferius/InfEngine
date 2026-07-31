@@ -16,9 +16,11 @@
 mod app;
 mod draw;
 mod edit;
+mod play;
 mod playback;
 mod project;
 mod ui;
+mod ui_play;
 mod view;
 
 use std::path::PathBuf;

@@ -97,6 +97,14 @@ impl Game {
         }
     }
 
+    /// A fresh game with the same scripts.
+    ///
+    /// What the editor's reset button needs: throw the play state away
+    /// without reloading the project from disk.
+    pub fn new_like(other: &Game) -> Self {
+        Self::new(other.scripts.clone())
+    }
+
     pub fn script(&self, id: &str) -> Option<&Script> {
         self.scripts.get(id)
     }
@@ -107,18 +115,50 @@ impl Game {
         ids
     }
 
+    /// Scripts belonging to a room, in order.
+    ///
+    /// By id prefix, which is the only thing that ties a script to a
+    /// room: they are grouped per file for convenience, not owned.
+    pub fn scripts_for(&self, room: &str) -> Vec<&str> {
+        let prefix = format!("{room}.");
+        let mut ids: Vec<&str> = self
+            .scripts
+            .keys()
+            .filter(|id| id.starts_with(&prefix))
+            .map(String::as_str)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
     /// Enter a room and run its entry script, if it has one.
     ///
-    /// The convention is `<room>.entry`, matching what the importer
-    /// writes; a room without one simply starts idle.
+    /// `<room>.entry` is what an authored room uses. `<room>.entry0` is
+    /// the fallback because an imported game numbers its scripts by the
+    /// source's own entry table, and the first of those is the routine
+    /// the original ran on arrival.
     pub fn enter(&mut self, room: &Room, entry: Option<&str>) {
         self.state.enter(room, entry);
         self.runner.stop();
-        let id = format!("{}.entry", room.id);
-        if let Some(script) = self.scripts.get(&id) {
-            let script = script.clone();
+        let id = [format!("{}.entry", room.id), format!("{}.entry0", room.id)]
+            .into_iter()
+            .find(|id| self.scripts.contains_key(id));
+        if let Some(script) = id.and_then(|id| self.scripts.get(&id)).cloned() {
             self.runner.start(&script);
         }
+    }
+
+    /// Run a script by id, whatever is running now.
+    ///
+    /// The editor calls this to test a script that nothing points at
+    /// yet - an imported game arrives with its logic decompiled but its
+    /// hotspots still to be drawn.
+    pub fn run_script(&mut self, id: &str) -> bool {
+        let Some(script) = self.scripts.get(id).cloned() else {
+            return false;
+        };
+        self.runner.start(&script);
+        true
     }
 
     /// What a click at `point` would do, without doing it.
@@ -394,6 +434,39 @@ mod tests {
             game.resolve(&empty, Vec2::new(10.0, 10.0), Verb::Walk),
             Click::Nothing
         );
+    }
+
+    #[test]
+    fn an_imported_rooms_first_entry_script_runs_on_arrival() {
+        let room = room();
+        let mut scripts = HashMap::new();
+        let mut entry = Script::new("hall.entry0");
+        entry.push(Action::SetFlag {
+            flag: "arrived".into(),
+            value: true,
+        });
+        scripts.insert(entry.id.clone(), entry);
+        scripts.insert(
+            "hall.entry7".into(),
+            Script::new("hall.entry7"),
+        );
+
+        let mut game = Game::new(scripts);
+        game.enter(&room, None);
+        game.step(&room, 0.016);
+        assert!(game.state.flag("arrived"));
+        assert_eq!(game.scripts_for("hall"), vec!["hall.entry0", "hall.entry7"]);
+    }
+
+    #[test]
+    fn a_script_can_be_run_by_hand() {
+        let room = room();
+        let mut game = game();
+        game.enter(&room, None);
+        assert!(!game.run_script("nothing.like.this"));
+        assert!(game.run_script("hall.painting.look"));
+        let events = game.step(&room, 0.016);
+        assert!(matches!(events.first(), Some(Event::Say { .. })));
     }
 
     #[test]

@@ -8,6 +8,10 @@ use std::collections::HashMap;
 
 use glam::Vec2;
 use infengine_adventure::{Animation, Room, Shape};
+
+/// Height of the actor marker at scale 1, in room units. About what
+/// a person occupies on a 200-line screen.
+const ACTOR_HEIGHT: f32 = 60.0;
 use infengine_render::{Renderer, SpriteInstance, Texture2dHandle};
 
 use crate::view::View;
@@ -23,6 +27,7 @@ pub mod color {
     pub const PATH: [f32; 4] = [1.0, 0.55, 0.1, 1.0];
     pub const BOUNDS: [f32; 4] = [0.45, 0.45, 0.55, 0.7];
     pub const PREVIEW: [f32; 4] = [1.0, 0.9, 0.3, 0.8];
+    pub const ACTOR: [f32; 4] = [0.4, 1.0, 0.6, 0.9];
 }
 
 /// Which overlays are switched on.
@@ -81,6 +86,38 @@ pub fn draw_layers(
             SpriteInstance::new([center.x, center.y], [size.x, size.y]),
         );
     }
+}
+
+/// Draw the actor as a marker, sized by the room's depth ramp.
+///
+/// A placeholder until character sprite sheets are decoded, but a
+/// truthful one: it stands the right height for where it is, so a
+/// mis-authored scale ramp is visible immediately.
+pub fn draw_actor(renderer: &mut Renderer, view: &View, at: Vec2, scale: f32) {
+    let height = ACTOR_HEIGHT * scale.max(0.05);
+    let half = height * 0.25;
+    let head = Vec2::new(at.x, at.y - height);
+    outline(
+        renderer,
+        view,
+        &[
+            at,
+            Vec2::new(at.x - half, at.y - height * 0.5),
+            head,
+            Vec2::new(at.x + half, at.y - height * 0.5),
+        ],
+        color::ACTOR,
+    );
+    // The feet, which is the position the game actually reasons about.
+    outline(
+        renderer,
+        view,
+        &[
+            Vec2::new(at.x - 2.0, at.y),
+            Vec2::new(at.x + 2.0, at.y),
+        ],
+        color::ACTOR,
+    );
 }
 
 /// Draw one frame of an animation over the room.
