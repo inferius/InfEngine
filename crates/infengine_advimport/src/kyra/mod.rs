@@ -20,6 +20,7 @@ pub mod pak;
 pub mod palette;
 pub mod wsa;
 pub mod roomdat;
+pub mod voc;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -41,6 +42,8 @@ const IMAGE_DIR: &str = "images";
 const SPRITE_DIR: &str = "sprites";
 /// Where animation sheets go.
 const ANIM_DIR: &str = "animations";
+/// Where recorded dialogue goes.
+const VOICE_DIR: &str = "voice";
 
 /// Height of the playable area of a screen.
 ///
@@ -167,8 +170,24 @@ pub fn import_dir(
     }
 
     let mut locale = Locale::new(language, language);
+    // The CD release keeps extra animations in .APK and its spoken
+    // dialogue in .VRM, both of them ordinary PAK archives beside the
+    // rooms. Reading them costs nothing beyond opening the files.
     for archive in &archives {
-        match import_pak(archive, out_dir, global.as_ref(), &mut locale, language, &mut report) {
+        let stem = archive
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        import_extra_animations(&archive.with_extension("APK"), &stem, global.as_ref(), out_dir, &mut report);
+
+        let outcome = import_pak(archive, out_dir, global.as_ref(), &mut locale, language, &mut report);
+
+        // Voices are linked by line index, so the room's lines have to
+        // be in the locale before the recordings are matched against
+        // them - otherwise every recording lands unattached.
+        import_voices(&archive.with_extension("VRM"), &stem, out_dir, &mut locale, &mut report);
+
+        match outcome {
             Ok(()) => report.archives += 1,
             Err(err) => {
                 warn!(archive = %archive.display(), %err, "skipping unreadable archive");
@@ -337,6 +356,89 @@ pub fn import_pak(
     export_animations(&pak, &stem, fallback, out_dir, report)?;
 
     Ok(())
+}
+
+/// Decode the `.APK` beside a room, which holds animations the `.PAK`
+/// does not.
+fn import_extra_animations(
+    path: &Path,
+    stem: &str,
+    fallback: Option<&Palette>,
+    out_dir: &Path,
+    report: &mut ImportReport,
+) {
+    let Ok(bytes) = fs::read(path) else { return };
+    let Ok(pak) = pak::Pak::parse(&bytes) else {
+        return;
+    };
+    if let Err(err) = export_animations(&pak, stem, fallback, out_dir, report) {
+        warn!(archive = %path.display(), %err, "extra animations not written");
+    }
+}
+
+/// Decode the `.VRM` beside a room: the CD release's spoken dialogue.
+///
+/// Recordings are numbered, and the number is the index of the line
+/// they belong to - sparsely, since not every line is voiced. Numbers
+/// that fall outside the room's line count are still written out but
+/// left unlinked rather than attached to the wrong subtitle.
+fn import_voices(
+    path: &Path,
+    stem: &str,
+    out_dir: &Path,
+    locale: &mut Locale,
+    report: &mut ImportReport,
+) {
+    let Ok(bytes) = fs::read(path) else { return };
+    let Ok(pak) = pak::Pak::parse(&bytes) else {
+        return;
+    };
+    for (index, entry) in pak.with_extension("VOC") {
+        let Some(data) = pak.data_at(index) else {
+            continue;
+        };
+        let voice = match voc::decode(data) {
+            Ok(voice) => voice,
+            Err(err) => {
+                debug!(entry = %entry.name, %err, "VOC did not decode");
+                report.skipped.push(Skipped {
+                    name: format!("{stem}:{}", entry.name),
+                    reason: err.to_string(),
+                });
+                continue;
+            }
+        };
+        let number = entry
+            .name
+            .split('.')
+            .next()
+            .and_then(|s| s.parse::<usize>().ok());
+        let relative = match number {
+            Some(n) => format!("{VOICE_DIR}/{stem}/{n:02}.wav"),
+            None => format!("{VOICE_DIR}/{stem}/{}.wav", entry.name.to_ascii_lowercase()),
+        };
+        let path = out_dir.join(&relative);
+        if let Some(parent) = path.parent()
+            && fs::create_dir_all(parent).is_err()
+        {
+            continue;
+        }
+        let wav = voice.to_wav();
+        if fs::write(&path, &wav).is_err() {
+            continue;
+        }
+        report.voice_lines += 1;
+        report.voice_bytes += wav.len() as u64;
+
+        if let Some(n) = number {
+            let id = emc::Script::line_id(stem, n);
+            if let Some(line) = locale.lines.get_mut(&id) {
+                line.voice = Some(relative);
+            } else {
+                report.unlinked_voice += 1;
+            }
+        }
+    }
 }
 
 /// The frame table a room stores, if it has one.

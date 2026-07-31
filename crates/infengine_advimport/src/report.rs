@@ -43,6 +43,9 @@ pub struct ImportReport {
     pub voice_lines: usize,
     /// Bytes of audio written.
     pub voice_bytes: u64,
+    /// Recordings written but not attached to a line, because their
+    /// number falls outside the room's dialogue.
+    pub unlinked_voice: usize,
     pub skipped: Vec<Skipped>,
 }
 
@@ -65,6 +68,7 @@ impl ImportReport {
         self.lines += other.lines;
         self.voice_lines += other.voice_lines;
         self.voice_bytes += other.voice_bytes;
+        self.unlinked_voice += other.unlinked_voice;
         self.skipped.extend(other.skipped);
     }
 
@@ -108,6 +112,13 @@ impl fmt::Display for ImportReport {
                 self.voice_lines,
                 self.voice_bytes as f64 / (1024.0 * 1024.0)
             )?;
+            if self.unlinked_voice > 0 {
+                writeln!(
+                    f,
+                    "{} recordings written but not linked to a line",
+                    self.unlinked_voice
+                )?;
+            }
         }
         if self.sprites > 0 || self.animations > 0 {
             writeln!(
