@@ -82,7 +82,16 @@ mc_assets.zip
 # include_bytes! source - the build breaks without it).
 !examples/voxel_demo_mp/src/worldgen/mcgen/data/village_data.zip
 
-# Imported adventure-game assets.
+# Imported adventure-game assets. See _assets/README.md - derived from
+# commercial games, regenerable in minutes, never part of the project.
+# The contents are ignored, but the README explaining the convention is
+# not - a fresh clone should find out what this directory is for.
+/_assets/*
+!/_assets/README.md
+**/_assets/*
+!**/_assets/README.md
+
+# Older name for the same thing.
 # adv-import converts data the user already owns into our format. That
 # output is derived from someone else's copyrighted work and must never
 # be committed or redistributed - only the decoders are ours to ship.
