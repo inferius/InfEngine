@@ -8,17 +8,25 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use infengine_adventure::anim::{self, AnimationSet};
+
 /// Directory inside a project that holds room files.
 pub const ROOMS_DIR: &str = "rooms";
 /// Suffix identifying a room file.
 pub const ROOM_SUFFIX: &str = ".room.ron";
 
 /// An open project.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Project {
     pub root: PathBuf,
     /// Room files found under `rooms/`, sorted.
     pub rooms: Vec<PathBuf>,
+    /// Every animation the project describes.
+    ///
+    /// Loaded once with the project rather than per room: an animation
+    /// sheet says nothing about its own frame count, so without the
+    /// index nothing here can be played at all.
+    pub animations: AnimationSet,
 }
 
 impl Project {
@@ -49,7 +57,12 @@ impl Project {
             })
             .collect();
         rooms.sort();
-        Self { root, rooms }
+        let animations = anim::load_index(&root.join(anim::ANIMATION_DIR)).unwrap_or_default();
+        Self {
+            root,
+            rooms,
+            animations,
+        }
     }
 
     /// Resolve a layer's image path against the project root.
@@ -94,6 +107,10 @@ mod tests {
         let dir = temp_project("list");
         let project = Project::open(&dir);
         assert_eq!(project.rooms.len(), 2, "the .txt must not be listed");
+        assert!(
+            project.animations.is_empty(),
+            "a project with no index has no animations"
+        );
         assert_eq!(Project::room_label(&project.rooms[0]), "a_room");
         assert_eq!(Project::room_label(&project.rooms[1]), "b_room");
         let _ = fs::remove_dir_all(&dir);

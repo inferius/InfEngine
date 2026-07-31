@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use glam::Vec2;
-use infengine_adventure::{Room, find_path};
+use infengine_adventure::{Animation, Room, find_path};
 use infengine_editor::EditorUi;
 use infengine_render::{Renderer, Texture2dHandle, TextureFilter};
 use infengine_window::raw_winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -17,6 +17,7 @@ use tracing::{info, warn};
 
 use crate::draw::{self, Overlays};
 use crate::edit::{self, Selection, Tool};
+use crate::playback::Playback;
 use crate::project::Project;
 use crate::ui::{self, UiActions, UiState};
 
@@ -62,6 +63,13 @@ pub struct Editor {
     floor_draft: Vec<Vec2>,
     walk_from: Option<Vec2>,
     path: Vec<Vec2>,
+    room_filter: String,
+    playback: Playback,
+    /// Animations offered for this room: its own first, then the
+    /// ones belonging to no room.
+    room_animations: Vec<Animation>,
+    /// Sheet textures, keyed by the image path they came from.
+    anim_textures: HashMap<String, Texture2dHandle>,
     status: String,
 }
 
@@ -102,6 +110,10 @@ impl Editor {
             floor_draft: Vec::new(),
             walk_from: None,
             path: Vec::new(),
+            room_filter: String::new(),
+            playback: Playback::default(),
+            room_animations: Vec::new(),
+            anim_textures: HashMap::new(),
             status,
         }
     }
@@ -123,6 +135,7 @@ impl Editor {
                 self.view.room_size = self.room.size;
                 self.view.fit();
                 self.load_textures();
+                self.collect_animations();
                 self.status = format!("opened {}", self.room.id);
                 info!(room = %self.room.id, "opened");
             }
@@ -164,6 +177,41 @@ impl Editor {
         }
     }
 
+    /// Gather the animations offered for the open room.
+    ///
+    /// The room's own first, then those tied to no room - cutscenes and
+    /// title sequences are worth previewing from anywhere rather than
+    /// being reachable only from whichever room happens to be open.
+    fn collect_animations(&mut self) {
+        self.playback.clear();
+        self.room_animations = self
+            .project
+            .animations
+            .for_room(&self.room.id)
+            .chain(self.project.animations.loose())
+            .cloned()
+            .collect();
+    }
+
+    /// Upload a sheet if it is not already loaded, and return it.
+    fn animation_texture(&mut self, image: &str) -> Option<Texture2dHandle> {
+        if let Some(handle) = self.anim_textures.get(image) {
+            return Some(*handle);
+        }
+        let renderer = self.renderer.as_mut()?;
+        let path = self.project.resolve(image);
+        match renderer.create_texture_from_file(&path, TextureFilter::Nearest) {
+            Ok(handle) => {
+                self.anim_textures.insert(image.to_string(), handle);
+                Some(handle)
+            }
+            Err(err) => {
+                warn!(image, %err, "animation sheet did not load");
+                None
+            }
+        }
+    }
+
     fn save(&mut self) {
         let Some(path) = self.room_path.clone() else {
             return;
@@ -195,6 +243,9 @@ impl Editor {
         }
         if actions.delete_selection {
             self.delete_selection();
+        }
+        if let Some(id) = actions.play_animation {
+            self.playback.select(id);
         }
     }
 
@@ -437,16 +488,40 @@ impl AppHandler for Editor {
         }
     }
 
-    fn on_update(&mut self, window: &EngineWindow, _ctx: &FrameContext<'_>) {
+    fn on_update(&mut self, window: &EngineWindow, ctx: &FrameContext<'_>) {
         if self.renderer.is_none() {
             return;
         }
+        // Advance the preview before anything is drawn, so the frame
+        // shown is the one for this instant.
+        let current = self
+            .playback
+            .selected
+            .clone()
+            .and_then(|id| self.room_animations.iter().find(|a| a.id == id).cloned());
+        self.playback.tick(ctx.delta_time, current.as_ref());
+        let preview = current.and_then(|animation| {
+            let frame = self.playback.frame(&animation);
+            let handle = self.animation_texture(&animation.image)?;
+            Some((animation, handle, frame))
+        });
+
         // Compute what depends on &self before taking the renderer out
         // mutably; the borrow checker cannot see that they are disjoint.
         let selected = self.selected_points();
         if let Some(renderer) = self.renderer.as_mut() {
             draw::sync_camera(renderer, &self.view);
             draw::draw_layers(renderer, &self.room, &self.view, &self.textures);
+            if let Some((animation, handle, frame)) = &preview {
+                draw::draw_animation_frame(
+                    renderer,
+                    &self.view,
+                    animation,
+                    *handle,
+                    *frame,
+                    self.playback.position,
+                );
+            }
             draw::draw_overlays(
                 renderer,
                 &self.room,
@@ -460,6 +535,7 @@ impl AppHandler for Editor {
         // Build the UI, then apply what it asked for after the borrow of
         // the room ends.
         let mut actions = UiActions::default();
+        let mut content = None;
         if let Some(ui) = self.ui.as_mut() {
             let mut state = UiState {
                 project: &self.project,
@@ -471,10 +547,20 @@ impl AppHandler for Editor {
                 dirty: self.dirty,
                 missing_images: &self.missing_images,
                 status: &self.status,
+                room_filter: &mut self.room_filter,
+                playback: &mut self.playback,
+                animations: &self.room_animations,
+                content_min: egui::Vec2::ZERO,
+                content_max: egui::Vec2::ZERO,
             };
             ui.run(window.raw(), |ctx| {
                 actions = ui::build(ctx, &mut state);
             });
+            content = Some((state.content_min, state.content_max));
+        }
+        if let Some((min, max)) = content {
+            self.view
+                .set_content_rect(Vec2::new(min.x, min.y), Vec2::new(max.x, max.y));
         }
 
         if let (Some(renderer), Some(ui)) = (self.renderer.as_mut(), self.ui.as_mut()) {

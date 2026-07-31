@@ -29,6 +29,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use glam::Vec2;
+use infengine_adventure::anim::{self, Animation, AnimationSet};
 use infengine_adventure::loca::{self, Line, Locale};
 use infengine_adventure::{EntryPoint, Layer, Room};
 use tracing::{debug, warn};
@@ -179,6 +180,7 @@ pub fn import_dir(
     }
 
     let mut locale = Locale::new(language, language);
+    let mut animations = AnimationSet::default();
     // The CD release keeps extra animations in .APK and its spoken
     // dialogue in .VRM, both of them ordinary PAK archives beside the
     // rooms. Reading them costs nothing beyond opening the files.
@@ -187,9 +189,24 @@ pub fn import_dir(
             .file_stem()
             .map(|s| s.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
-        import_extra_animations(&archive.with_extension("APK"), &stem, global.as_ref(), out_dir, &mut report);
+        import_extra_animations(
+            &archive.with_extension("APK"),
+            &stem,
+            global.as_ref(),
+            out_dir,
+            &mut animations,
+            &mut report,
+        );
 
-        let outcome = import_pak(archive, out_dir, global.as_ref(), &mut locale, language, &mut report);
+        let outcome = import_pak(
+            archive,
+            out_dir,
+            global.as_ref(),
+            &mut locale,
+            &mut animations,
+            language,
+            &mut report,
+        );
 
         // Voices are linked by line index, so the room's lines have to
         // be in the locale before the recordings are matched against
@@ -206,6 +223,15 @@ pub fn import_dir(
                 });
             }
         }
+    }
+
+    // One index describing every sheet. Without it nothing can play
+    // them: a PNG does not say where one frame ends and the next
+    // begins.
+    if !animations.is_empty()
+        && let Err(err) = anim::save_index(&animations, &out_dir.join(anim::ANIMATION_DIR))
+    {
+        warn!(%err, "animation index not written");
     }
 
     if !locale.is_empty() {
@@ -228,6 +254,7 @@ pub fn import_pak(
     out_dir: &Path,
     global_palette: Option<&Palette>,
     locale: &mut Locale,
+    animations: &mut AnimationSet,
     language: &str,
     report: &mut ImportReport,
 ) -> Result<(), ImportError> {
@@ -336,8 +363,19 @@ pub fn import_pak(
             let Some(sheet) = cut_sheet(&rgba, image.width, group) else {
                 continue;
             };
-            let rel = format!("{ANIM_DIR}/{name}_{index}.png");
+            let id = format!("{name}_{index}");
+            let rel = format!("{ANIM_DIR}/{id}.png");
             write_png(&out_dir.join(&rel), sheet.0, sheet.1, &sheet.2)?;
+            let frame = group.first().map(|f| (f.width, f.height)).unwrap_or((1, 1));
+            animations.insert(
+                Animation::new(
+                    &id,
+                    &rel,
+                    group.len() as u32,
+                    Vec2::new(frame.0 as f32, frame.1 as f32),
+                )
+                .in_room(&name),
+            );
             report.images += 1;
             report.animations += 1;
             report.frames += group.len();
@@ -363,7 +401,7 @@ pub fn import_pak(
         debug!(archive = %stem, entry = %entry.name, "imported background");
     }
 
-    export_animations(&pak, &stem, fallback, out_dir, report)?;
+    export_animations(&pak, &stem, fallback, out_dir, animations, report)?;
 
     Ok(())
 }
@@ -427,13 +465,14 @@ fn import_extra_animations(
     stem: &str,
     fallback: Option<&Palette>,
     out_dir: &Path,
+    animations: &mut AnimationSet,
     report: &mut ImportReport,
 ) {
     let Ok(bytes) = fs::read(path) else { return };
     let Ok(pak) = pak::Pak::parse(&bytes) else {
         return;
     };
-    if let Err(err) = export_animations(&pak, stem, fallback, out_dir, report) {
+    if let Err(err) = export_animations(&pak, stem, fallback, out_dir, animations, report) {
         warn!(archive = %path.display(), %err, "extra animations not written");
     }
 }
@@ -683,6 +722,7 @@ fn export_animations(
     archive: &str,
     fallback: Option<&Palette>,
     out_dir: &Path,
+    animations: &mut AnimationSet,
     report: &mut ImportReport,
 ) -> Result<(), ImportError> {
     for (index, entry) in pak.with_extension("WSA") {
@@ -702,8 +742,15 @@ fn export_animations(
         };
         let (width, height, rgba) = animation.to_sheet_rgba(fallback);
         let name = entry.name.to_ascii_lowercase().replace(".wsa", "");
-        let path = out_dir.join(format!("{ANIM_DIR}/{archive}_{name}.png"));
-        write_png(&path, width, height, &rgba)?;
+        let id = format!("{archive}_{name}");
+        let rel = format!("{ANIM_DIR}/{id}.png");
+        write_png(&out_dir.join(&rel), width, height, &rgba)?;
+        animations.insert(Animation::new(
+            &id,
+            &rel,
+            animation.frame_count() as u32,
+            Vec2::new(animation.width as f32, animation.height as f32),
+        ));
         report.images += 1;
         report.animations += 1;
         report.frames += animation.frame_count();

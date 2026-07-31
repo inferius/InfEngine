@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use glam::Vec2;
-use infengine_adventure::{Room, Shape};
+use infengine_adventure::{Animation, Room, Shape};
 use infengine_render::{Renderer, SpriteInstance, Texture2dHandle};
 
 use crate::view::View;
@@ -22,6 +22,7 @@ pub mod color {
     pub const SELECTED: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
     pub const PATH: [f32; 4] = [1.0, 0.55, 0.1, 1.0];
     pub const BOUNDS: [f32; 4] = [0.45, 0.45, 0.55, 0.7];
+    pub const PREVIEW: [f32; 4] = [1.0, 0.9, 0.3, 0.8];
 }
 
 /// Which overlays are switched on.
@@ -80,6 +81,47 @@ pub fn draw_layers(
             SpriteInstance::new([center.x, center.y], [size.x, size.y]),
         );
     }
+}
+
+/// Draw one frame of an animation over the room.
+///
+/// The sheet is one image with the frames side by side, so the frame is
+/// selected by texture coordinates rather than by holding one texture
+/// per frame - a room with six three-frame loops would otherwise mean
+/// eighteen uploads for no gain.
+pub fn draw_animation_frame(
+    renderer: &mut Renderer,
+    view: &View,
+    animation: &Animation,
+    handle: Texture2dHandle,
+    frame: u32,
+    at: Vec2,
+) {
+    let Some((sheet_w, sheet_h)) = renderer.texture_size(handle) else {
+        return;
+    };
+    let (uv_min, uv_max) =
+        animation.frame_uv(frame, Vec2::new(sheet_w as f32, sheet_h as f32));
+    let size = animation.frame_size;
+    let center = view.room_to_world(at + size * 0.5);
+    let mut instance = SpriteInstance::new([center.x, center.y], [size.x, size.y]);
+    instance.uv_min = [uv_min.x, uv_min.y];
+    instance.uv_max = [uv_max.x, uv_max.y];
+    renderer.draw_texture(handle, instance);
+
+    // A thin box, because a frame that is entirely transparent is
+    // otherwise indistinguishable from one that failed to load.
+    outline(
+        renderer,
+        view,
+        &[
+            at,
+            Vec2::new(at.x + size.x, at.y),
+            at + size,
+            Vec2::new(at.x, at.y + size.y),
+        ],
+        color::PREVIEW,
+    );
 }
 
 /// Draw one closed polygon outline in room coordinates.

@@ -28,6 +28,7 @@
 #![forbid(unsafe_code)]
 
 pub mod action;
+pub mod anim;
 pub mod geom;
 pub mod interact;
 pub mod io;
@@ -40,6 +41,7 @@ pub mod scale;
 pub mod walk;
 
 pub use action::{Action, Script};
+pub use anim::{Animation, AnimationSet};
 pub use interact::{EntryPoint, Exit, Facing, Hotspot, Shape, Verb};
 pub use io::{RoomIoError, load, save};
 pub use loca::{LanguageChoice, Line, Locale, Locales, Spoken};

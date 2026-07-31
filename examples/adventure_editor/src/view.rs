@@ -13,7 +13,7 @@ use glam::Vec2;
 /// maximum a single pixel fills the window and dragging a vertex becomes
 /// guesswork.
 pub const MIN_ZOOM: f32 = 0.25;
-pub const MAX_ZOOM: f32 = 8.0;
+pub const MAX_ZOOM: f32 = 32.0;
 
 /// How the room is framed in the window.
 #[derive(Debug, Clone)]
@@ -25,6 +25,14 @@ pub struct View {
     pub viewport: Vec2,
     /// Room extent, used to frame it on load.
     pub room_size: Vec2,
+    /// Free area between the side panels, in window coordinates.
+    ///
+    /// The renderer draws to the whole window, but the panels cover
+    /// both edges of it. Framing against the window rather than against
+    /// what is actually visible pushes the room under them, which is
+    /// exactly what "fit" appeared to do wrong.
+    pub content_min: Vec2,
+    pub content_max: Vec2,
 }
 
 impl Default for View {
@@ -34,20 +42,45 @@ impl Default for View {
             zoom: 1.0,
             viewport: Vec2::new(1280.0, 720.0),
             room_size: Vec2::new(320.0, 200.0),
+            content_min: Vec2::ZERO,
+            content_max: Vec2::new(1280.0, 720.0),
         }
     }
 }
 
 impl View {
-    /// Frame the whole room, leaving a small margin.
+    /// Size of the area not covered by panels.
+    pub fn content_size(&self) -> Vec2 {
+        (self.content_max - self.content_min).max(Vec2::splat(1.0))
+    }
+
+    /// Record where the free area is, in window coordinates.
+    pub fn set_content_rect(&mut self, min: Vec2, max: Vec2) {
+        self.content_min = min.min(max);
+        self.content_max = min.max(max);
+    }
+
+    /// Frame the whole room inside the free area, leaving a margin.
+    ///
+    /// Both the zoom and the centring use the free area rather than the
+    /// window, so the room lands between the panels instead of half
+    /// underneath them.
     pub fn fit(&mut self) {
-        self.center = self.room_size * 0.5;
+        let content = self.content_size();
         if self.room_size.x <= 0.0 || self.room_size.y <= 0.0 {
+            self.center = self.room_size * 0.5;
             self.zoom = 1.0;
             return;
         }
-        let fit = (self.viewport / self.room_size) * 0.92;
+        let fit = (content / self.room_size) * 0.92;
         self.zoom = fit.x.min(fit.y).clamp(MIN_ZOOM, MAX_ZOOM);
+
+        // The camera puts `center` at the middle of the window, so to
+        // put the room in the middle of the free area it has to be
+        // offset by the difference.
+        let content_center = (self.content_min + self.content_max) * 0.5;
+        let drift = (content_center - self.viewport * 0.5) / self.zoom;
+        self.center = self.room_size * 0.5 - drift;
     }
 
     /// Room space to renderer world space.
@@ -107,6 +140,8 @@ mod tests {
             zoom: 2.0,
             viewport: Vec2::new(800.0, 600.0),
             room_size: Vec2::new(320.0, 200.0),
+            content_min: Vec2::ZERO,
+            content_max: Vec2::new(800.0, 600.0),
         }
     }
 
@@ -147,6 +182,49 @@ mod tests {
         assert_eq!(v.center, Vec2::new(160.0, 100.0));
         // 800/320 = 2.5, 600/200 = 3.0; the tighter axis wins.
         assert!((v.zoom - 2.5 * 0.92).abs() < 1e-3);
+    }
+
+    #[test]
+    fn fit_uses_the_area_the_panels_leave_free() {
+        // 200 px of panel on the left, 300 on the right: 300 px of room
+        // to work with, not 800.
+        let mut v = view();
+        v.set_content_rect(Vec2::new(200.0, 0.0), Vec2::new(500.0, 600.0));
+        v.fit();
+        assert!(
+            (v.zoom - (300.0 / 320.0) * 0.92).abs() < 1e-3,
+            "zoom should come from the free width, got {}",
+            v.zoom
+        );
+    }
+
+    #[test]
+    fn fit_centres_the_room_between_the_panels() {
+        // The bug this fixes: framing against the window centre pushes
+        // the room half under a panel.
+        let mut v = view();
+        v.set_content_rect(Vec2::new(200.0, 0.0), Vec2::new(500.0, 600.0));
+        v.fit();
+        let room_middle_on_screen = v.room_to_window(v.room_size * 0.5);
+        assert!(
+            (room_middle_on_screen.x - 350.0).abs() < 1e-2,
+            "expected the room centred at 350, got {}",
+            room_middle_on_screen.x
+        );
+    }
+
+    #[test]
+    fn content_defaults_to_the_whole_window() {
+        let v = view();
+        assert_eq!(v.content_size(), v.viewport);
+    }
+
+    #[test]
+    fn a_content_rect_given_backwards_is_still_read_correctly() {
+        let mut v = view();
+        v.set_content_rect(Vec2::new(500.0, 600.0), Vec2::new(200.0, 0.0));
+        assert_eq!(v.content_min, Vec2::new(200.0, 0.0));
+        assert_eq!(v.content_size(), Vec2::new(300.0, 600.0));
     }
 
     #[test]

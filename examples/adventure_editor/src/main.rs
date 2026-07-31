@@ -16,6 +16,7 @@
 mod app;
 mod draw;
 mod edit;
+mod playback;
 mod project;
 mod ui;
 mod view;
