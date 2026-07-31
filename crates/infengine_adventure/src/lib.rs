@@ -47,6 +47,7 @@ pub mod path;
 pub mod room;
 pub mod scale;
 pub mod sound;
+pub mod screen;
 pub mod script_io;
 pub mod walk;
 
@@ -60,5 +61,6 @@ pub use infengine_loca::plural::Category as PluralCategory;
 pub use mask::trace as trace_walk_mask;
 pub use path::{PathError, find_path, path_length, point_along};
 pub use room::{Layer, LayerKind, Room};
+pub use screen::{Screen, Widget, WidgetKind};
 pub use scale::{ScaleRamp, ScaleZone};
 pub use walk::{Polygon, WalkArea};

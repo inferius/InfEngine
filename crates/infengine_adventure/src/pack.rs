@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::action::Action;
 use crate::loca::{self, LanguageChoice};
-use crate::{anim, io, script_io, sound};
+use crate::{anim, io, screen, script_io, sound};
 
 /// File naming the game itself, at the project root.
 pub const MANIFEST_FILE: &str = "game.ron";
@@ -170,6 +170,19 @@ pub fn plan(root: &Path) -> Plan {
                 }
             }
         });
+    }
+
+    // Screens, and the art they draw. Their text rides along with the
+    // locales below, since it is referenced the same way a line is.
+    let (screens, _) = screen::load_dir(&root.join(screen::SCREEN_DIR));
+    for one in &screens {
+        wanted.insert(format!(
+            "{}/{}{}",
+            screen::SCREEN_DIR,
+            one.id,
+            screen::SCREEN_SUFFIX
+        ));
+        wanted.extend(one.images());
     }
 
     // Languages, and every recording they point at.
@@ -384,6 +397,30 @@ mod tests {
             !plan.is_shippable(),
             "a hole in the export is not something to ship quietly"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn screens_and_their_art_come_along() {
+        let root = temp("screens");
+        build(&root);
+        let mut title = screen::Screen::new("title", Vec2::new(320.0, 200.0));
+        title.widgets.push(screen::Widget {
+            id: "backdrop".into(),
+            min: Vec2::ZERO,
+            max: Vec2::new(320.0, 200.0),
+            kind: screen::WidgetKind::Image {
+                image: "images/title.png".into(),
+            },
+            visible: true,
+        });
+        screen::save(&title, &root.join(screen::SCREEN_DIR)).expect("screen");
+        touch(&root, "images/title.png");
+
+        let plan = plan(&root);
+        assert!(plan.files.contains("screens/title.screen.ron"));
+        assert!(plan.files.contains("images/title.png"));
 
         let _ = fs::remove_dir_all(&root);
     }
