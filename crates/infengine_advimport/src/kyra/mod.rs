@@ -17,6 +17,8 @@ pub mod emc;
 pub mod format40;
 pub mod format80;
 pub mod frames;
+#[cfg(feature = "mt32")]
+pub mod mt32;
 pub mod msc;
 pub mod pak;
 pub mod palette;

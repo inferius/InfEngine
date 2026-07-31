@@ -12,6 +12,8 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+moont = { version = "1.0.0", optional = true }
+vorbis_rs = { version = "0.5.6", optional = true }
 infengine_adventure = { path = "../infengine_adventure" }
 glam = { workspace = true }
 image = { workspace = true }
@@ -24,3 +26,10 @@ clap = { workspace = true }
 [[bin]]
 name = "adv-import"
 path = "src/bin/adv_import.rs"
+
+[features]
+default = []
+# Roland MT-32 rendering. Off by default: the emulator is LGPL and the
+# rest of this workspace is MIT OR Apache-2.0, so linking it is a
+# decision rather than a side effect. It is only ever used offline.
+mt32 = ["dep:moont", "dep:vorbis_rs"]

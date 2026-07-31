@@ -145,6 +145,11 @@ pub fn plan(root: &Path) -> Plan {
     if !sounds.is_empty() {
         wanted.insert(format!("{}/{}", sound::SOUND_DIR, sound::INDEX_FILE));
     }
+    // Everything the index maps, whether or not a script has got round
+    // to naming it. The index is a statement that these sounds belong
+    // to the game; a soundtrack nothing points at yet is pending work,
+    // not dead weight, and the animation index is treated the same way.
+    wanted.extend(sounds.sounds.values().cloned());
     let mut unmapped: BTreeSet<String> = BTreeSet::new();
     let (scripts, _) = script_io::load_dir(&root.join(script_io::SCRIPT_DIR));
     for entry in fs::read_dir(root.join(script_io::SCRIPT_DIR)).into_iter().flatten().flatten() {
@@ -445,6 +450,26 @@ mod tests {
         assert!(
             plan.is_shippable(),
             "a sound nobody has supplied is silence, not a broken export"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn everything_the_sound_index_maps_comes_along() {
+        let root = temp("sound_index");
+        build(&root);
+        // Mapped, but no script says its name yet.
+        let mut sounds =
+            sound::load_index(&root.join(sound::SOUND_DIR)).expect("index");
+        sounds.insert("music.title", "music/title.ogg");
+        sound::save_index(&sounds, &root.join(sound::SOUND_DIR)).expect("save");
+        touch(&root, "music/title.ogg");
+
+        let plan = plan(&root);
+        assert!(
+            plan.files.contains("music/title.ogg"),
+            "a soundtrack nothing points at yet is pending work, not dead weight"
         );
 
         let _ = fs::remove_dir_all(&root);

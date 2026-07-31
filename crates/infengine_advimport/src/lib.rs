@@ -18,6 +18,9 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "mt32")]
+pub mod ogg;
+pub mod wav;
 pub mod bm;
 pub mod encoding;
 pub mod kyra;
