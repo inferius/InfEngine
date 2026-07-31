@@ -286,13 +286,12 @@ pub fn import_pak(
         // fixed line - the bridge stores its river frames from row 136,
         // eight rows above the play area's nominal bottom.
         let stored = room_frames(&pak, stem_of_entry, image.width, image.height);
+        let tallest = image.height.min(PLAY_HEIGHT).max(1);
         let room_height = frames::storage_top(&stored)
             .map(u32::from)
             .filter(|top| *top >= MIN_ROOM_HEIGHT)
             .unwrap_or(PLAY_HEIGHT)
-            .min(image.height)
-            .min(PLAY_HEIGHT)
-            .max(1);
+            .clamp(1, tallest);
         let image_rel = format!("{IMAGE_DIR}/{name}.png");
         write_png(
             &out_dir.join(&image_rel),
