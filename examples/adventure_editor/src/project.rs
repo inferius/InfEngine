@@ -18,6 +18,8 @@ use infengine_adventure::script_io;
 pub const ROOMS_DIR: &str = "rooms";
 /// Suffix identifying a room file.
 pub const ROOM_SUFFIX: &str = ".room.ron";
+/// Directory holding loose sprite sheets, relative to the root.
+const SHEET_DIR: &str = "sprites";
 
 /// An open project.
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +40,9 @@ pub struct Project {
     pub scripts: HashMap<String, Script>,
     /// Script files that would not parse, named so they can be fixed.
     pub script_errors: Vec<String>,
+    /// Loose images under `sprites/`, project-relative. Sheets an
+    /// import produced but could not cut into frames.
+    pub sheets: Vec<String>,
 }
 
 impl Project {
@@ -74,6 +79,7 @@ impl Project {
         let locales = loca::load_dir(&root.join(loca::LOCALE_DIR), "").unwrap_or_default();
         let (scripts, errors) = script_io::load_dir(&root.join(script_io::SCRIPT_DIR));
         let script_errors = errors.iter().map(ToString::to_string).collect();
+        let sheets = list_sheets(&root);
         Self {
             root,
             rooms,
@@ -81,6 +87,7 @@ impl Project {
             locales,
             scripts,
             script_errors,
+            sheets,
         }
     }
 
@@ -124,6 +131,30 @@ impl Project {
     pub fn is_empty(&self) -> bool {
         self.rooms.is_empty()
     }
+}
+
+/// Every image under `sprites/`, as project-relative paths.
+fn list_sheets(root: &Path) -> Vec<String> {
+    let dir = root.join(SHEET_DIR);
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut sheets: Vec<String> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+        })
+        .filter_map(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| format!("{SHEET_DIR}/{name}"))
+        })
+        .collect();
+    sheets.sort();
+    sheets
 }
 
 #[cfg(test)]

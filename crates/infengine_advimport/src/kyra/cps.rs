@@ -31,6 +31,35 @@ pub enum Compression {
     None,
     Lzw12,
     Lzw14,
+    /// Declared type 3. Fifteen files in the Kyrandia CD release use it,
+    /// and they are the interesting ones: BRANDON, HERMAN, MERITH and
+    /// ITEMS are the character and inventory shape pages.
+    ///
+    /// A21.1: not decoded, and not for want of trying. Every one of
+    /// these was run against all fifteen files and rejected because it
+    /// neither consumed the input exactly nor produced 64000 bytes:
+    ///
+    /// - Format80 / LCW, at body offsets 8 and 10. The same decoder
+    ///   takes MOUSE.CPS (type 4) to exactly 64000 from exactly its
+    ///   1271 bytes, so the decoder is right and the format is not it.
+    /// - RLE-zero (`00 <count>` writes zeros, anything else is a
+    ///   literal), which is what the published CPS notes call type 3.
+    ///   Two of the fifteen happen to land on a plausible number; the
+    ///   rest stop with thousands of bytes unread.
+    /// - Byte-count RLE in three conventions: signed count, PCX-style
+    ///   `n+1` literals against `n-0x7F` repeats, and plain
+    ///   `(count, value)` pairs.
+    /// - Format40, the WSA XOR delta. It consumes every file exactly,
+    ///   which sounds promising until you notice it has no terminator
+    ///   to disagree with - the write cursor lands at 395589 rather
+    ///   than 64000.
+    /// - LZW at 12 and 14 bits, both bit orders. Dies on an undefined
+    ///   code within a dozen bytes.
+    ///
+    /// Whatever it is, it is not a whole-image codec of the usual
+    /// family. The next thing to try is that the body is not one image
+    /// at all but a sequence of individually compressed shapes, which
+    /// is how the original loads these files.
     Rle,
     /// Westwood Format80 / LCW. What Kyrandia backgrounds actually use.
     Format80,

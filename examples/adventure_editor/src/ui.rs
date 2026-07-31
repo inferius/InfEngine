@@ -21,6 +21,12 @@ pub struct UiActions {
     pub play_animation: Option<String>,
     /// Line the user asked to hear.
     pub play_line: Option<String>,
+    /// Sheet the user opened for cutting.
+    pub open_sheet: Option<String>,
+    /// The draft was accepted into the project's animations.
+    pub save_sheet: bool,
+    /// The draft was abandoned.
+    pub close_sheet: bool,
     pub save: bool,
     pub reload: bool,
     pub fit_view: bool,
@@ -57,6 +63,8 @@ pub struct UiState<'a> {
     pub voice_language: &'a mut String,
     /// This room's lines: id, text, and whether audio exists.
     pub lines: &'a [(String, String, bool)],
+    /// The sheet being cut into frames, if any.
+    pub sheet: &'a mut Option<crate::sheet::SheetDraft>,
 }
 
 impl std::fmt::Debug for UiState<'_> {
@@ -232,6 +240,8 @@ fn inspector_panel(ctx: &egui::Context, state: &mut UiState<'_>, actions: &mut U
                     ui.separator();
                     animation_section(ui, state, actions);
                     ui.separator();
+                    sheet_section(ui, state, actions);
+                    ui.separator();
                     lines_section(ui, state, actions);
                     ui.separator();
                     selection_section(ui, state, actions);
@@ -354,6 +364,92 @@ fn animation_section(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut U
         state.playback.scrub_to(frame, current);
     }
     ui.add(egui::Slider::new(&mut state.playback.speed, 0.1..=4.0).text("speed"));
+}
+
+/// Loose sprite sheets, and the frame cut for the one being worked on.
+fn sheet_section(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions) {
+    ui.heading(format!("Sheets ({})", state.project.sheets.len()));
+
+    if let Some(draft) = state.sheet.as_mut() {
+        sheet_editor(ui, draft, actions);
+        return;
+    }
+
+    if state.project.sheets.is_empty() {
+        ui.label(
+            egui::RichText::new("No loose images under sprites/.").weak(),
+        );
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .id_salt("sheet_list")
+        .max_height(120.0)
+        .show(ui, |ui| {
+            for sheet in &state.project.sheets {
+                let name = sheet.rsplit('/').next().unwrap_or(sheet.as_str());
+                if ui.selectable_label(false, name).clicked() {
+                    actions.open_sheet = Some(sheet.clone());
+                }
+            }
+        });
+}
+
+/// The frame cut itself: size, count, speed.
+fn sheet_editor(
+    ui: &mut egui::Ui,
+    draft: &mut crate::sheet::SheetDraft,
+    actions: &mut UiActions,
+) {
+    ui.label(egui::RichText::new(&draft.image).small().weak());
+    ui.horizontal(|ui| {
+        ui.label("id");
+        ui.text_edit_singleline(&mut draft.id);
+    });
+
+    let sheet = draft.sheet_size;
+    ui.horizontal(|ui| {
+        ui.label("frame");
+        ui.add(
+            egui::DragValue::new(&mut draft.frame_size.x)
+                .range(1.0..=sheet.x.max(1.0))
+                .speed(1.0),
+        );
+        ui.label("x");
+        ui.add(
+            egui::DragValue::new(&mut draft.frame_size.y)
+                .range(1.0..=sheet.y.max(1.0))
+                .speed(1.0),
+        );
+    });
+
+    // The upper bound moves with the frame width, so the slider can
+    // never promise frames that would sample past the sheet's edge.
+    let most = draft.max_frames();
+    draft.frames = draft.frames.clamp(1, most);
+    ui.add(egui::Slider::new(&mut draft.frames, 1..=most).text("frames"));
+    ui.add(egui::Slider::new(&mut draft.fps, 1.0..=24.0).text("fps"));
+    ui.checkbox(&mut draft.looping, "loops");
+
+    let mut in_room = draft.room.is_some();
+    if ui
+        .checkbox(&mut in_room, "belongs to this room")
+        .on_hover_text("Otherwise it can be previewed from anywhere")
+        .changed()
+    {
+        draft.room = in_room.then(String::new);
+    }
+
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(draft.is_valid(), egui::Button::new("add to animations"))
+            .clicked()
+        {
+            actions.save_sheet = true;
+        }
+        if ui.button("cancel").clicked() {
+            actions.close_sheet = true;
+        }
+    });
 }
 
 /// The room's dialogue, with the recording for each line.
@@ -512,6 +608,7 @@ mod tests {
                 .collect(),
             animations: Default::default(),
             locales: Default::default(),
+            sheets: Vec::new(),
             scripts: Default::default(),
             script_errors: Vec::new(),
         }

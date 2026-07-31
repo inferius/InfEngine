@@ -19,6 +19,7 @@ mod edit;
 mod play;
 mod playback;
 mod project;
+mod sheet;
 mod ui;
 mod ui_play;
 mod view;

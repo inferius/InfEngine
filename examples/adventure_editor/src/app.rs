@@ -22,6 +22,7 @@ use crate::edit::{self, Selection, Tool};
 use crate::play::{self, PlayMode};
 use crate::playback::Playback;
 use crate::project::Project;
+use crate::sheet::SheetDraft;
 use crate::ui::{self, UiActions, UiState};
 use crate::ui_play::{self, PlayDraft};
 
@@ -83,6 +84,8 @@ pub struct Editor {
     last_language: LanguageChoice,
     play: PlayMode,
     play_draft: PlayDraft,
+    /// The sheet being cut into frames, if any.
+    sheet: Option<SheetDraft>,
     status: String,
 }
 
@@ -135,6 +138,7 @@ impl Editor {
             last_language: LanguageChoice::default(),
             play,
             play_draft: PlayDraft::default(),
+            sheet: None,
             status,
         }
     }
@@ -270,6 +274,59 @@ impl Editor {
             Ok(()) => self.status = format!("playing {path}"),
             Err(err) => {
                 warn!(%err, "could not play the recording");
+                self.status = err.to_string();
+            }
+        }
+    }
+
+    /// Start cutting a loose image into frames.
+    ///
+    /// The sheet has to be uploaded first: its size is what decides
+    /// every sensible frame width, and guessing without it would only
+    /// produce a cut that has to be thrown away.
+    fn open_sheet(&mut self, image: &str) {
+        let Some(handle) = self.animation_texture(image) else {
+            self.status = format!("{image} did not load");
+            return;
+        };
+        let Some((width, height)) = self
+            .renderer
+            .as_ref()
+            .and_then(|renderer| renderer.texture_size(handle))
+        else {
+            return;
+        };
+        self.sheet = Some(SheetDraft::guess(
+            image,
+            Vec2::new(width as f32, height as f32),
+        ));
+        self.status = format!("cutting {image}");
+    }
+
+    /// Add the draft to the project's animations and write the index.
+    fn save_sheet(&mut self) {
+        let Some(draft) = self.sheet.as_ref() else {
+            return;
+        };
+        let mut animation = draft.to_animation();
+        // An empty room field means "this room" - the checkbox cannot
+        // know the room's name, and asking the user to retype it would
+        // be a way to get it wrong.
+        if animation.room.as_deref() == Some("") {
+            animation.room = Some(self.room.id.clone());
+        }
+        let id = animation.id.clone();
+        self.project.animations.insert(animation);
+        let dir = self.project.root.join(infengine_adventure::anim::ANIMATION_DIR);
+        match infengine_adventure::anim::save_index(&self.project.animations, &dir) {
+            Ok(()) => {
+                self.status = format!("added {id}");
+                self.sheet = None;
+                self.collect_animations();
+                self.playback.select(id);
+            }
+            Err(err) => {
+                warn!(%err, "could not write the animation index");
                 self.status = err.to_string();
             }
         }
@@ -442,6 +499,15 @@ impl Editor {
         }
         if let Some(id) = actions.play_line {
             self.play_line(&id);
+        }
+        if let Some(image) = actions.open_sheet {
+            self.open_sheet(&image);
+        }
+        if actions.save_sheet {
+            self.save_sheet();
+        }
+        if actions.close_sheet {
+            self.sheet = None;
         }
     }
 
@@ -731,11 +797,16 @@ impl AppHandler for Editor {
 
         // Advance the preview before anything is drawn, so the frame
         // shown is the one for this instant.
-        let current = self
-            .playback
-            .selected
-            .clone()
-            .and_then(|id| self.room_animations.iter().find(|a| a.id == id).cloned());
+        let current = match self.sheet.as_ref() {
+            // While a sheet is being cut, the cut is what plays: the
+            // whole point is to see the frames land.
+            Some(draft) => Some(draft.to_animation()),
+            None => self
+                .playback
+                .selected
+                .clone()
+                .and_then(|id| self.room_animations.iter().find(|a| a.id == id).cloned()),
+        };
         self.playback.tick(ctx.delta_time, current.as_ref());
         let preview = current.and_then(|animation| {
             let frame = self.playback.frame(&animation);
@@ -806,6 +877,7 @@ impl AppHandler for Editor {
                 text_language: &mut self.language.text,
                 voice_language: &mut self.language.voice,
                 lines: &self.lines,
+                sheet: &mut self.sheet,
                 content_min: egui::Vec2::ZERO,
                 content_max: egui::Vec2::ZERO,
             };
