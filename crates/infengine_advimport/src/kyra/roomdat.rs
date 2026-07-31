@@ -18,9 +18,19 @@
 //!   84 bytes             28 RGB triples, 6-bit VGA
 //!   u16                  size of what follows
 //!   ...                  object and script records
+//!   12 bytes             four entry points, (u16 x, u8 y) each
 //! ```
+//!
+//! The trailing twelve bytes read as four screen positions rather than
+//! as room ids: x runs to 300 and y to 132, which is the play area, not
+//! an index into 87 rooms. Checked against the walk masks, 340 of 344 of
+//! them land on walkable floor - so they are where the actor stands on
+//! entering, one per direction. Which slot is which direction is not
+//! established, so they are numbered rather than labelled north-east.
 
 use std::fmt;
+
+use glam::Vec2;
 
 use super::palette::Palette;
 
@@ -31,6 +41,10 @@ pub const OVERRIDE_BYTES: usize = OVERRIDE_COLORS * 3;
 /// Palette index the override lands on. The window sits at the top of
 /// the 256-colour table, just below the entries the engine reserves.
 pub const OVERRIDE_START: u8 = 228;
+
+/// Entry points stored at the tail: four of them, three bytes each.
+pub const ENTRY_POINTS: usize = 4;
+const ENTRY_BYTES: usize = ENTRY_POINTS * 3;
 
 /// Byte that opens the marker ending the header.
 const MARKER_HEAD: u8 = 0x88;
@@ -70,12 +84,15 @@ impl fmt::Display for RoomDatError {
 impl std::error::Error for RoomDatError {}
 
 /// What the importer needs out of a room `.DAT`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RoomData {
     /// Name of the `.MSK` holding the room's walkable region.
     pub mask_name: String,
     /// 28 RGB triples in 6-bit VGA form.
     pub palette_override: Vec<u8>,
+    /// Where the actor stands on entering, one per direction. Rooms
+    /// with a single way in repeat the same position four times.
+    pub entry_points: Vec<Vec2>,
 }
 
 impl RoomData {
@@ -120,7 +137,31 @@ pub fn parse(data: &[u8]) -> Result<RoomData, RoomDatError> {
     Ok(RoomData {
         mask_name,
         palette_override: window.to_vec(),
+        entry_points: read_entry_points(data, nul + 1 + start + OVERRIDE_BYTES),
     })
+}
+
+/// Read the four entry positions from the tail of the file.
+///
+/// `after_palette` is where the palette window ends; the entry points
+/// sit past the script records that follow it. Bounding the read that
+/// way matters: taking the last twelve bytes unconditionally would, on a
+/// short file, read back into the palette and place the actor at a
+/// position made of colour components.
+fn read_entry_points(data: &[u8], after_palette: usize) -> Vec<Vec2> {
+    let Some(at) = data.len().checked_sub(ENTRY_BYTES) else {
+        return Vec::new();
+    };
+    if at < after_palette {
+        return Vec::new();
+    }
+    let tail = &data[at..];
+    (0..ENTRY_POINTS)
+        .map(|i| {
+            let x = u16::from_le_bytes([tail[i * 3], tail[i * 3 + 1]]);
+            Vec2::new(x as f32, tail[i * 3 + 2] as f32)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -204,6 +245,43 @@ mod tests {
                 value: 0xFF
             })
         );
+    }
+
+    /// Twelve bytes reading as four (u16 x, u8 y) pairs.
+    fn entry_tail(points: &[(u16, u8)]) -> Vec<u8> {
+        let mut v = Vec::new();
+        for (x, y) in points {
+            v.extend_from_slice(&x.to_le_bytes());
+            v.push(*y);
+        }
+        v
+    }
+
+    #[test]
+    fn the_tail_yields_four_entry_positions() {
+        let tail = entry_tail(&[(296, 106), (296, 106), (40, 120), (12, 130)]);
+        let data = build("BRINS.MSK", &[], &ramp(), &tail);
+        let room = parse(&data).expect("parse");
+        assert_eq!(room.entry_points.len(), 4);
+        assert_eq!(room.entry_points[0], glam::Vec2::new(296.0, 106.0));
+        assert_eq!(room.entry_points[3], glam::Vec2::new(12.0, 130.0));
+    }
+
+    #[test]
+    fn a_room_with_one_way_in_repeats_the_same_position() {
+        let tail = entry_tail(&[(24, 108); 4]);
+        let data = build("ALCHEMY.MSK", &[], &ramp(), &tail);
+        let room = parse(&data).expect("parse");
+        assert!(room.entry_points.iter().all(|p| *p == room.entry_points[0]));
+    }
+
+    #[test]
+    fn a_file_too_short_for_the_tail_yields_no_entry_points() {
+        // Reading them anyway would take bytes out of the palette and
+        // place the actor at a position made of colour components.
+        let data = build("X.MSK", &[], &ramp(), &[1, 2, 3]);
+        let room = parse(&data).expect("parse");
+        assert!(room.entry_points.is_empty());
     }
 
     #[test]

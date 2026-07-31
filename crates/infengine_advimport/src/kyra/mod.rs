@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 use glam::Vec2;
 use infengine_adventure::loca::{self, Line, Locale};
-use infengine_adventure::{Layer, Room};
+use infengine_adventure::{EntryPoint, Layer, Room};
 use tracing::{debug, warn};
 
 use crate::report::{ImportReport, Skipped};
@@ -272,6 +272,7 @@ pub fn import_pak(
             room.walk = area;
             report.masks += 1;
         }
+        add_entry_points(&pak, stem_of_entry, &mut room);
         let room_path = out_dir.join(ROOM_DIR).join(format!("{name}.room.ron"));
         infengine_adventure::save(&room, &room_path).map_err(|source| ImportError::WriteRoom {
             path: room_path.display().to_string(),
@@ -286,6 +287,36 @@ pub fn import_pak(
     export_animations(&pak, &stem, fallback, out_dir, report)?;
 
     Ok(())
+}
+
+/// Give the room the positions the game starts the actor at.
+///
+/// The four stored points are often the same position repeated, so
+/// duplicates collapse into one entry. Each is snapped onto the floor:
+/// a handful sit a pixel outside the traced outline, and an entry point
+/// off the floor would strand the actor with nowhere to walk.
+fn add_entry_points(pak: &pak::Pak<'_>, stem: &str, room: &mut Room) {
+    let Some(data) = pak.get(&format!("{stem}.DAT")) else {
+        return;
+    };
+    let Ok(parsed) = roomdat::parse(data) else {
+        return;
+    };
+    for (index, point) in parsed.entry_points.iter().enumerate() {
+        let placed = room.walk.clamp(*point).unwrap_or(*point);
+        if room
+            .entries
+            .iter()
+            .any(|e| e.position.distance(placed) < 1.0)
+        {
+            continue;
+        }
+        room.entries.push(EntryPoint {
+            id: format!("entry{index}"),
+            position: placed,
+            ..Default::default()
+        });
+    }
 }
 
 /// Pull a room's dialogue out of its script into the locale.
