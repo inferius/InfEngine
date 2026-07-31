@@ -22,6 +22,7 @@ mod playback;
 mod project;
 mod sheet;
 mod ui;
+mod ui_game;
 mod ui_play;
 mod view;
 

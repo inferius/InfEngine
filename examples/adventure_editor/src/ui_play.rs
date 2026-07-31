@@ -23,6 +23,8 @@ pub struct PlayActions {
     pub take_item: Option<String>,
     /// A script the tester asked to run.
     pub run_script: Option<String>,
+    /// The game window was asked for.
+    pub open_game: bool,
 }
 
 /// Draft text the panel keeps between frames.
@@ -52,6 +54,13 @@ pub fn panel(
                     }
                 } else if ui.button("play").clicked() {
                     actions.start = true;
+                }
+                if ui
+                    .button("game...")
+                    .on_hover_text("Title, starting room, languages, export")
+                    .clicked()
+                {
+                    actions.open_game = true;
                 }
                 if ui
                     .button("reset")

@@ -25,6 +25,7 @@ use crate::playback::Playback;
 use crate::project::Project;
 use crate::sheet::SheetDraft;
 use crate::ui::{self, UiActions, UiState};
+use crate::ui_game::{self, GameUi};
 use crate::ui_play::{self, PlayDraft};
 
 /// How close, in screen pixels, the cursor must be to grab a vertex.
@@ -87,6 +88,7 @@ pub struct Editor {
     play_draft: PlayDraft,
     /// The sheet being cut into frames, if any.
     sheet: Option<SheetDraft>,
+    game_ui: GameUi,
     status: String,
 }
 
@@ -103,6 +105,13 @@ impl Editor {
     pub fn new(root: PathBuf) -> Self {
         let project = Project::open(&root);
         let play = PlayMode::with_scripts(project.scripts.clone());
+        // A project with no manifest yet gets an empty one rather than
+        // none: the panel is how you write the first.
+        let game_ui = GameUi {
+            manifest: infengine_adventure::pack::GameManifest::load(&project.root)
+                .unwrap_or_default(),
+            ..Default::default()
+        };
         let status = if project.is_empty() {
             format!("no rooms under {}", project.root.display())
         } else {
@@ -140,6 +149,7 @@ impl Editor {
             play,
             play_draft: PlayDraft::default(),
             sheet: None,
+            game_ui,
             status,
         }
     }
@@ -383,6 +393,35 @@ impl Editor {
         }
     }
 
+    /// Apply what the game window asked for.
+    fn apply_game_actions(&mut self, actions: ui_game::GameActions) {
+        use infengine_adventure::pack;
+
+        if actions.save_manifest {
+            self.game_ui.status = match self.game_ui.manifest.save(&self.project.root) {
+                Ok(()) => format!("wrote {}", pack::MANIFEST_FILE),
+                Err(err) => err.to_string(),
+            };
+        }
+        if actions.check {
+            let plan = pack::plan(&self.project.root);
+            self.game_ui.status = format!("checked {} files", plan.files.len());
+            self.game_ui.plan = Some(plan);
+        }
+        if actions.export
+            && let Some(plan) = self.game_ui.plan.as_ref()
+        {
+            let dest = std::path::Path::new(self.game_ui.export_to.trim());
+            self.game_ui.status = match pack::export(&self.project.root, dest, plan) {
+                Ok(copied) => format!("copied {copied} files to {}", dest.display()),
+                Err(err) => {
+                    warn!(%err, "export failed");
+                    err.to_string()
+                }
+            };
+        }
+    }
+
     /// Apply what the play panel asked for.
     fn apply_play_actions(&mut self, actions: ui_play::PlayActions) {
         if actions.start {
@@ -412,6 +451,9 @@ impl Editor {
             && self.play.game.run_script(&id)
         {
             self.play.note(format!("run {id}"));
+        }
+        if actions.open_game {
+            self.game_ui.open = true;
         }
     }
 
@@ -811,6 +853,7 @@ impl AppHandler for Editor {
         // the room ends.
         let mut actions = UiActions::default();
         let mut play_actions = ui_play::PlayActions::default();
+        let mut game_actions = ui_game::GameActions::default();
         let mut content = None;
         if let Some(ui) = self.ui.as_mut() {
             let mut state = UiState {
@@ -837,8 +880,17 @@ impl AppHandler for Editor {
             let play = &mut self.play;
             let play_draft = &mut self.play_draft;
             let room_id = state.room.id.clone();
+            let game_ui = &mut self.game_ui;
+            let room_names: Vec<String> = state
+                .project
+                .rooms
+                .iter()
+                .map(|path| Project::room_label(path))
+                .collect();
+            let languages = self.languages.clone();
             ui.run(window.raw(), |ctx| {
                 play_actions = ui_play::panel(ctx, play, play_draft, &room_id);
+                game_actions = ui_game::window(ctx, game_ui, &room_names, &languages);
                 actions = ui::build(ctx, &mut state);
             });
             content = Some((state.content_min, state.content_max));
@@ -864,5 +916,6 @@ impl AppHandler for Editor {
 
         self.apply_actions(actions);
         self.apply_play_actions(play_actions);
+        self.apply_game_actions(game_actions);
     }
 }
