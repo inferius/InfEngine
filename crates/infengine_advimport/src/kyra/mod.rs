@@ -10,6 +10,7 @@
 //! Nothing here is a runtime dependency: this crate converts foreign
 //! data into our own format once, offline.
 
+pub mod adl;
 pub mod cps;
 pub mod decompile;
 pub mod emc;
