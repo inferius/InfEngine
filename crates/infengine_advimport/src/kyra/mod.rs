@@ -21,6 +21,7 @@ pub mod palette;
 pub mod wsa;
 pub mod roomdat;
 pub mod voc;
+pub mod xmi;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,8 @@ const SPRITE_DIR: &str = "sprites";
 const ANIM_DIR: &str = "animations";
 /// Where recorded dialogue goes.
 const VOICE_DIR: &str = "voice";
+/// Where music goes.
+const MUSIC_DIR: &str = "music";
 
 /// Height of the playable area of a screen.
 ///
@@ -161,6 +164,8 @@ pub fn import_dir(
             looking_for: "*.PAK".into(),
         });
     }
+
+    export_music(source, out_dir, &mut report);
 
     // One scan for the game palette before anything decodes, so every
     // room can borrow it.
@@ -356,6 +361,58 @@ pub fn import_pak(
     export_animations(&pak, &stem, fallback, out_dir, report)?;
 
     Ok(())
+}
+
+/// Convert the game's music into standard MIDI files.
+///
+/// The score ships three ways: XMIDI for a wavetable card, and AdLib
+/// driver data in `.ADL` and `.SND` for an OPL2 chip. Only the XMIDI is
+/// convertible to something standard - the AdLib banks would need a
+/// synthesiser emulated to produce any sound at all - so those are
+/// reported as untouched rather than quietly ignored.
+fn export_music(source: &Path, out_dir: &Path, report: &mut ImportReport) {
+    let Ok(bytes) = fs::read(source.join("XMI.PAK")) else {
+        return;
+    };
+    let Ok(pak) = pak::Pak::parse(&bytes) else {
+        return;
+    };
+    for (index, entry) in pak.with_extension("XMI") {
+        let Some(data) = pak.data_at(index) else {
+            continue;
+        };
+        let sequences = match xmi::to_midi(data) {
+            Ok(sequences) => sequences,
+            Err(err) => {
+                debug!(entry = %entry.name, %err, "XMI did not convert");
+                report.skipped.push(Skipped {
+                    name: entry.name.clone(),
+                    reason: err.to_string(),
+                });
+                continue;
+            }
+        };
+        let stem = entry
+            .name
+            .to_ascii_lowercase()
+            .replace(".xmi", "");
+        for (n, midi) in sequences.iter().enumerate() {
+            let relative = if sequences.len() == 1 {
+                format!("{MUSIC_DIR}/{stem}.mid")
+            } else {
+                format!("{MUSIC_DIR}/{stem}_{n}.mid")
+            };
+            let path = out_dir.join(&relative);
+            if let Some(parent) = path.parent()
+                && fs::create_dir_all(parent).is_err()
+            {
+                continue;
+            }
+            if fs::write(&path, midi).is_ok() {
+                report.music += 1;
+            }
+        }
+    }
 }
 
 /// Decode the `.APK` beside a room, which holds animations the `.PAK`

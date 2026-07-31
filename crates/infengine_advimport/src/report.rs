@@ -46,6 +46,8 @@ pub struct ImportReport {
     /// Recordings written but not attached to a line, because their
     /// number falls outside the room's dialogue.
     pub unlinked_voice: usize,
+    /// Music sequences written as MIDI.
+    pub music: usize,
     pub skipped: Vec<Skipped>,
 }
 
@@ -69,6 +71,7 @@ impl ImportReport {
         self.voice_lines += other.voice_lines;
         self.voice_bytes += other.voice_bytes;
         self.unlinked_voice += other.unlinked_voice;
+        self.music += other.music;
         self.skipped.extend(other.skipped);
     }
 
@@ -119,6 +122,9 @@ impl fmt::Display for ImportReport {
                     self.unlinked_voice
                 )?;
             }
+        }
+        if self.music > 0 {
+            writeln!(f, "{} music sequences", self.music)?;
         }
         if self.sprites > 0 || self.animations > 0 {
             writeln!(
