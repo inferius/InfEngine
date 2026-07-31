@@ -245,7 +245,6 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         inventories,
                         pending_inv_sends,
                         PVP_REACH,
-                        PVP_DAMAGE,
                         DAY_LENGTH_S,
                         &|idx| RECIPES.get(idx).map(|r| r.inputs),
                         &mut inbox,
@@ -551,12 +550,13 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                             // client already predicted the same
                             // wear locally; the snapshot confirms
                             // it). Same block-side gate as the
-                            // local path: no wear for liquid
-                            // scoops / zero-hardness cells
-                            // (Item.mineBlock destroySpeed != 0).
-                            if !crate::block::block_is_liquid(broken)
-                                && crate::block_hardness(broken) != 0.0
-                            {
+                            // local path (Item.mineBlock
+                            // destroySpeed != 0) - W473: read from
+                            // the real hardness table (instabreak
+                            // costs 0 wear, liquids stay exempt).
+                            if crate::block::mining_math::mine_wear_applies(
+                                broken.0,
+                            ) {
                                 net::wear_client_selected(
                                     inventories,
                                     pending_inv_sends,
@@ -1123,6 +1123,11 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                 _ => false,
             };
             if ok {
+                // W473: the remote attacker's damage reads their
+                // AUTHORITATIVE held item (same slot the wear
+                // path uses) - MC attack damage instead of the
+                // old flat 1.0x multiplier.
+                let mut held: u16 = 0;
                 // W471: wear the remote attacker's weapon on the
                 // authoritative inventory (the client predicted
                 // the same wear; the queued snapshot confirms).
@@ -1135,6 +1140,12 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                     let sel = sender_pose
                         .map(|p| p.sel)
                         .unwrap_or(net::SEL_NONE);
+                    held = inventories
+                        .get(&cid)
+                        .and_then(|inv| inv.inventory.get(sel as usize))
+                        .and_then(|s| s.as_ref())
+                        .map(|st| st.id)
+                        .unwrap_or(0);
                     net::wear_client_weapon(
                         inventories,
                         pending_inv_sends,
@@ -1142,7 +1153,12 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         sel,
                     );
                 }
-                vx.damage_mob(mob_id, Some(cid));
+                vx.damage_mob_scaled(
+                    mob_id,
+                    Some(cid),
+                    crate::block::mining_math::attack_damage(held)
+                        / crate::mob::MOB_HIT_DAMAGE,
+                );
             }
         }
         // Client-side: apply incoming mob events (visual flash +

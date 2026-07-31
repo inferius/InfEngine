@@ -17,10 +17,7 @@
 /// otherwise (no LMB / aim away / mid-session).
 pub(crate) fn tick_mining(vx: &mut crate::Voxel, lmb_active: bool, dt: f32) -> Option<[i32; 3]> {
     use crate::mining::{self, MiningState};
-    use crate::{
-        BlockId, block_hardness, block_material, submerged_liquid_eye,
-        tool_effectiveness,
-    };
+    use crate::{BlockId, block_material, submerged_liquid_eye};
     let mut mine_break: Option<[i32; 3]> = None;
     if lmb_active && let Some(hit) = vx.mine_target {
         let block = vx.world.get(hit.voxel);
@@ -39,27 +36,44 @@ pub(crate) fn tick_mining(vx: &mut crate::Voxel, lmb_active: bool, dt: f32) -> O
                     None => true,
                 };
                 if restart {
-                    let held = vx
-                        .inventory
-                        .get(vx.selected_slot)
-                        .and_then(|s| s.as_ref())
-                        .map(|st| BlockId(st.id))
-                        .unwrap_or(BlockId::AIR);
-                    let (mut mult, _drop_ok) = tool_effectiveness(held, block);
-                    if let Some(l) = submerged_liquid_eye(&vx.world, vx.player_pos) {
-                        mult *= l.submerged_mining_mul;
-                    }
                     vx.mining = Some(MiningState {
                         voxel: hit.voxel,
                         progress: 0.0,
-                        total: (block_hardness(block) * mult).max(0.05),
+                        // W473: MC progress units - done at 1.0.
+                        total: 1.0,
                         block,
                         fx_cooldown: 0.0,
                     });
                 }
                 if let Some(mut m) = vx.mining.take() {
+                    // W473: getDestroyProgress port. The rate is
+                    // re-evaluated every frame like MC's per-tick
+                    // check, so tool swaps keep accumulated
+                    // progress but change speed, and the water /
+                    // airborne penalties apply mid-session. MC
+                    // only slows EYES-IN-WATER mining (the
+                    // SUBMERGED_MINING_SPEED attribute is scoped
+                    // to FluidTags.WATER) - lava does not slow it.
+                    let held = vx
+                        .inventory
+                        .get(vx.selected_slot)
+                        .and_then(|s| s.as_ref())
+                        .map(|st| st.id)
+                        .unwrap_or(0);
+                    let eye_in_water =
+                        submerged_liquid_eye(&vx.world, vx.player_pos)
+                            .is_some_and(|l| {
+                                l.block_id == crate::block::WATER_ID
+                            });
+                    let rate =
+                        crate::block::mining_math::destroy_progress_per_second(
+                            held,
+                            block.0,
+                            eye_in_water,
+                            vx.grounded,
+                        );
                     let mining::MiningStep { fire_fx, done } =
-                        mining::step_mining_session(&mut m, dt);
+                        mining::step_mining_session(&mut m, dt, rate);
                     let voxel_center = [
                         m.voxel[0] as f32 + 0.5,
                         m.voxel[1] as f32 + 0.5,
@@ -89,13 +103,12 @@ pub(crate) fn tick_mining(vx: &mut crate::Voxel, lmb_active: bool, dt: f32) -> O
                         // (diggers + shears 1, swords 2, everything
                         // else 0). Source gate (`Item.mineBlock`):
                         // no wear when the block's destroy speed is
-                        // 0 - mapped here to zero-hardness cells and
-                        // liquid scoops (not real block mines).
-                        // Survival only - this branch never runs
-                        // under instabuild.
-                        if !crate::block::block_is_liquid(m.block)
-                            && block_hardness(m.block) != 0.0
-                        {
+                        // 0 - W473: read from the real hardness
+                        // table (instabreak blocks cost 0 wear;
+                        // liquid scoops stay exempt).
+                        if crate::block::mining_math::mine_wear_applies(
+                            m.block.0,
+                        ) {
                             let wear = vx
                                 .inventory
                                 .get(vx.selected_slot)

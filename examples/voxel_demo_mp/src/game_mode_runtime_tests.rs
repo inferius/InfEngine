@@ -426,26 +426,29 @@ fn creative_lmb_break_is_instant_zero_seconds() {
 
 #[test]
 fn survival_lmb_break_respects_tool_tier_timing() {
-    // W15.2: in Survival, block_hardness returns a positive
-    // value for every solid block, so the mining timer is > 0.
-    // Check a representative set.
+    // W15.2/W473: in Survival the mining session runs on the MC
+    // getDestroyProgress rate - finite and positive for regular
+    // solid blocks, so the timer is neither instant nor stuck.
     let v = voxel_in_mode(GameMode::Survival);
     assert!(!v.abilities.instabuild);
-    // Stone hardness > 0.
+    use crate::block::mining_math::destroy_progress_per_second;
+    // Stone: positive finite rate (bare hand).
+    let stone = destroy_progress_per_second(0, 1, false, true);
     assert!(
-        crate::mining::block_hardness(infengine_voxel::BlockId(1)) > 0.0,
-        "stone hardness must be positive"
+        stone > 0.0 && stone.is_finite(),
+        "stone must mine at a positive finite rate"
     );
-    // Wood log hardness > 0.
+    // Wood log: positive finite rate.
+    let log = destroy_progress_per_second(0, 5, false, true);
     assert!(
-        crate::mining::block_hardness(infengine_voxel::BlockId(5)) > 0.0,
-        "wood log hardness must be positive"
+        log > 0.0 && log.is_finite(),
+        "wood log must mine at a positive finite rate"
     );
-    // Air should still have a tiny positive swing delay (not zero)
-    // to prevent a divide-by-zero in the session normaliser.
+    // Air is instabreak in the table, but a mining session never
+    // starts on it (tick_mining requires a non-air target).
     assert!(
-        crate::mining::block_hardness(infengine_voxel::BlockId(0)) > 0.0,
-        "air swing delay must be > 0"
+        destroy_progress_per_second(0, 0, false, true).is_infinite(),
+        "air resolves to instabreak"
     );
 }
 

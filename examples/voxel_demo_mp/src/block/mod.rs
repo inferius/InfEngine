@@ -7,8 +7,10 @@
 //!
 //! mod.rs glues them back together with re-exports + the runtime
 //! lookup helpers (`block_type`, `block_has_flag`, ...). The atlas
-//! UV resolver + tool tiers + bucket helpers + material mapper
-//! also live here because they are the table's primary consumers.
+//! UV resolver + bucket helpers + material mapper also live here
+//! because they are the table's primary consumers; the mining /
+//! tool-tier / melee math lives in `mining_math` over the
+//! generated `hardness_table` (W473).
 //!
 //! Layout mirrors MC's `net/minecraft/world/level/block` package
 //! at a coarse level. Each block kind there has its own class;
@@ -29,7 +31,9 @@ pub(crate) mod rail_state;
 pub(crate) mod fire;
 pub(crate) mod flammability;
 pub(crate) mod furnace;
+pub(crate) mod hardness_table;
 pub(crate) mod hopper;
+pub(crate) mod mining_math;
 mod ids;
 pub(crate) mod light_emission;
 pub(crate) mod portal;
@@ -507,42 +511,6 @@ fn block_material_by_name(id: u16) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod material_tests {
-    use super::*;
-
-    fn id_of(name: &str) -> u16 {
-        BLOCK_TYPES
-            .iter()
-            .find(|bt| bt.name == name)
-            .unwrap_or_else(|| panic!("registry has no block named {name}"))
-            .id
-    }
-
-    /// W123: the name classifier recovers MC sound families for the
-    /// post-legacy roster (legacy low ids keep the id fast path).
-    #[test]
-    fn name_classifier_maps_core_families() {
-        for (name, want) in [
-            ("deepslate", "deepslate"),
-            ("deepslate_diamond_ore", "deepslate"),
-            ("blue_wool", "wool"),
-            ("copper_block", "metal"),
-            ("birch_planks", "wood"),
-            ("birch_leaves", "grass"),
-            ("glass_pane", "glass"),
-            ("diamond_ore", "stone"),
-        ] {
-            let got = block_material(BlockId(id_of(name)));
-            assert_eq!(got, want, "{name} should sound like {want}, got {got}");
-        }
-    }
-
-    // The "every emitted material has ENGINE_TO_MC dig+step rows"
-    // cross-check lives in resource_pack::sounds (bin-only module;
-    // the lib target doesn't compile resource_pack).
-}
-
 pub(crate) fn atlas_uv_rect(block: BlockId, normal: [i8; 3]) -> [f32; 4] {
     let Some(bt) = block_type(block.0) else {
         return [0.0, 0.0, 1.0, 1.0];
@@ -589,39 +557,13 @@ pub(crate) fn liquid_to_bucket_id(liquid: u16) -> Option<u16> {
 }
 
 // ---------------------------------------------------------------
-// Tool tiers + mining effectiveness.
+// Tool identification helpers.
+//
+// W473: the mining-speed / tool-tier / melee-damage math moved to
+// `mining_math` (a 1:1 `getDestroyProgress` + `ToolMaterial` port
+// over the generated `hardness_table`). The helpers left here only
+// answer "is this id a tool" for inventory / HUD purposes.
 // ---------------------------------------------------------------
-
-/// Tool tier for a slot's contents. 0 = bare hand, 1 = wood
-/// pickaxe, 2 = stone pickaxe, 3 = iron pickaxe. Determines what
-/// the player can break + how fast.
-pub(crate) fn tool_tier(block: BlockId) -> u8 {
-    match block.0 {
-        16 => 1, // wood pickaxe
-        17 => 2, // stone pickaxe
-        18 => 3, // iron pickaxe
-        _ => 0,
-    }
-}
-
-/// Minimum tool tier required to drop the block on break. A
-/// player can always swing at a block (no hard gate), but the
-/// drop only credits if their selected slot meets this tier.
-/// Coal lets a bare-hand swing succeed; stone needs wood+; iron
-/// needs stone+. Obsidian needs an iron pickaxe (tier 3) as a
-/// stand-in for MC's diamond requirement; bedrock requires
-/// tier-4 which no shipped tool reaches, making it unbreakable.
-pub(crate) fn block_required_tier(block: BlockId) -> u8 {
-    match block.0 {
-        1 | 8 => 1, // stone, cobble
-        13 => 1,    // coal ore
-        14 => 2,    // iron ore
-        NETHERRACK_ID => 1, // any pickaxe drops netherrack
-        OBSIDIAN_ID => 3,   // diamond-tier (iron is our top tier today)
-        BEDROCK_ID => 4,    // unbreakable in practice
-        _ => 0,
-    }
-}
 
 /// True if the block id represents a tool / non-placeable item.
 /// W53.4: extended to cover gold/diamond/netherite tier variants
@@ -691,113 +633,6 @@ pub(crate) fn tool_label(block: BlockId) -> Option<&'static str> {
     }
 }
 
-/// Damage multiplier per sword tier. Bare hand = 1.0, wood
-/// = 1.5, stone = 2.0, iron = 2.7. Selected slot drives the
-/// scale applied to the local PvP / mob hits.
-pub(crate) fn weapon_damage_mult(block: BlockId) -> f32 {
-    match block.0 {
-        23 => 1.5,
-        24 => 2.0,
-        25 => 2.7,
-        _ => 1.0,
-    }
-}
-
-/// Tier of a shovel slot, 0 = none.
-/// W294: tier of a hoe slot, 0 = none (332 wooden, 333 stone,
-/// 334 iron, 335 golden, 278 netherite).
-pub(crate) fn hoe_tier(block: BlockId) -> u8 {
-    match block.0 {
-        332 => 1,
-        333 | 335 => 2,
-        334 | 278 => 3,
-        _ => 0,
-    }
-}
-
-pub(crate) fn shovel_tier(block: BlockId) -> u8 {
-    match block.0 {
-        29 => 1,
-        30 => 2,
-        31 => 3,
-        _ => 0,
-    }
-}
-
-/// Tier of an axe slot, 0 = none.
-pub(crate) fn axe_tier(block: BlockId) -> u8 {
-    match block.0 {
-        32 => 1,
-        33 => 2,
-        34 => 3,
-        _ => 0,
-    }
-}
-
-/// Mining-speed category for a target block.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum BlockCategory {
-    Stone,
-    Soil,
-    Wood,
-    Other,
-}
-
-pub(crate) fn block_category(block: BlockId) -> BlockCategory {
-    match block.0 {
-        1 | 8 | 13 | 14 | 26 => BlockCategory::Stone,
-        2..=4 | 15 => BlockCategory::Soil, // dirt/grass/sand/snow
-        5..=7 => BlockCategory::Wood,
-        NETHERRACK_ID | OBSIDIAN_ID | BEDROCK_ID => BlockCategory::Stone,
-        _ => BlockCategory::Other,
-    }
-}
-
-/// Returns a (mining_mult, drop_ok) pair for the held tool vs
-/// the block being mined. Lower mult = faster. drop_ok = true
-/// when the player gets the broken block back.
-pub(crate) fn tool_effectiveness(
-    held: BlockId,
-    block: BlockId,
-) -> (f32, bool) {
-    // Liquids break instantly regardless of tool. Skips the
-    // category-mismatch 4x penalty so bare-hand scoop is fast
-    // for every registered liquid (water, lava, ...).
-    if block_is_liquid(block) {
-        return (0.25, true);
-    }
-    let cat = block_category(block);
-    let needed = block_required_tier(block);
-    let pick = tool_tier(held);
-    let shov = shovel_tier(held);
-    let axe = axe_tier(held);
-    let (matched_tier, matches) = match cat {
-        BlockCategory::Stone => (pick, pick > 0),
-        BlockCategory::Soil => (shov, shov > 0),
-        BlockCategory::Wood => (axe, axe > 0),
-        BlockCategory::Other => (0, false),
-    };
-    let drop_ok = pick >= needed;
-    let mult = if matches {
-        // Right tool category. Each extra tier shaves ~20% off
-        // the time; floor at 0.4 so iron stays distinctly
-        // faster than wood.
-        let base = 0.55;
-        let extra = (matched_tier as i32
-            - block_required_tier(block) as i32)
-            .max(0) as f32;
-        (base - extra * 0.20).max(0.4)
-    } else if pick >= needed {
-        // Sufficient pickaxe tier but wrong category (e.g.
-        // pickaxe on dirt). Normal speed.
-        1.0
-    } else {
-        // Wrong tool entirely; punishing slow.
-        4.0
-    };
-    (mult, drop_ok)
-}
-
 // ---------------------------------------------------------------
 // W36.1 - Per-block PBR overrides.
 // ---------------------------------------------------------------
@@ -833,4 +668,40 @@ pub(crate) fn block_pbr(id: u16) -> (f32, f32) {
         // Default: dielectric, almost matte.
         _ => (0.0, 0.95),
     }
+}
+
+#[cfg(test)]
+mod material_tests {
+    use super::*;
+
+    fn id_of(name: &str) -> u16 {
+        BLOCK_TYPES
+            .iter()
+            .find(|bt| bt.name == name)
+            .unwrap_or_else(|| panic!("registry has no block named {name}"))
+            .id
+    }
+
+    /// W123: the name classifier recovers MC sound families for the
+    /// post-legacy roster (legacy low ids keep the id fast path).
+    #[test]
+    fn name_classifier_maps_core_families() {
+        for (name, want) in [
+            ("deepslate", "deepslate"),
+            ("deepslate_diamond_ore", "deepslate"),
+            ("blue_wool", "wool"),
+            ("copper_block", "metal"),
+            ("birch_planks", "wood"),
+            ("birch_leaves", "grass"),
+            ("glass_pane", "glass"),
+            ("diamond_ore", "stone"),
+        ] {
+            let got = block_material(BlockId(id_of(name)));
+            assert_eq!(got, want, "{name} should sound like {want}, got {got}");
+        }
+    }
+
+    // The "every emitted material has ENGINE_TO_MC dig+step rows"
+    // cross-check lives in resource_pack::sounds (bin-only module;
+    // the lib target doesn't compile resource_pack).
 }

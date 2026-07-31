@@ -57,7 +57,9 @@ struct DurEntry {
 /// `pickaxe_wood`, plus the lone `gold_<kind>` shape) to the MC
 /// snake_case name (`wooden_pickaxe`). Names already in MC form
 /// pass through `None` here and hit the table directly.
-fn legacy_mc_name(engine: &str) -> Option<String> {
+/// W473: shared with `block::mining_math` (tool material / melee
+/// damage resolution walks the same name funnel).
+pub(crate) fn legacy_mc_name(engine: &str) -> Option<String> {
     if let Some((kind, tier)) = engine.rsplit_once('_')
         && matches!(kind, "pickaxe" | "sword" | "shovel" | "axe" | "hoe")
     {

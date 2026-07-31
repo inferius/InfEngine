@@ -17,20 +17,24 @@
 ///   `invulnerable`
 /// - PvP: host sends DamageMsg straight to the target client;
 ///   client sends a vx.pvp_hit request the server will validate
-/// - mob: host applies damage_mob_scaled directly with the held
-///   weapon's multiplier; client sends vx.mob_hit + paints an
+/// - mob: host applies damage_mob_scaled with the held weapon's
+///   MC attack damage; client sends vx.mob_hit + paints an
 ///   optimistic hurt flash + plays the hit SFX
+///
+/// W473: damage comes from `mining_math::attack_damage` - the MC
+/// `Attributes.ATTACK_DAMAGE` total (player base 1.0 + the held
+/// item's mainhand modifier: wood sword 4 ... netherite sword 8,
+/// axes 7-10). MC's attack cooldown / charge meter is an absent
+/// mechanic - every landed swing deals the full value.
 pub(crate) fn apply_combat(
     vx: &mut crate::Voxel,
     attack_player: Option<u32>,
     attack_mob: Option<u32>,
     is_client: bool,
 ) {
+    use crate::block::mining_math::attack_damage;
     use crate::net::NetRole;
-    use crate::{
-        BlockId, DamageMsg, MobHitMsg, PVP_DAMAGE, PvPHitMsg,
-        weapon_damage_mult,
-    };
+    use crate::{DamageMsg, MobHitMsg, PvPHitMsg};
     if (attack_player.is_some() || attack_mob.is_some())
         && !vx.abilities.invulnerable
     {
@@ -57,9 +61,8 @@ pub(crate) fn apply_combat(
             .inventory
             .get(vx.selected_slot)
             .and_then(|s| s.as_ref())
-            .map(|st| BlockId(st.id))
-            .unwrap_or(BlockId::AIR);
-        let mult = weapon_damage_mult(held);
+            .map(|st| st.id)
+            .unwrap_or(0);
         match &vx.net {
             NetRole::Client { client, .. } => {
                 let cfg = bincode::config::standard();
@@ -71,7 +74,7 @@ pub(crate) fn apply_combat(
             NetRole::Server { server, .. } => {
                 let cfg = bincode::config::standard();
                 let dmg = DamageMsg {
-                    amount: PVP_DAMAGE * mult,
+                    amount: attack_damage(held),
                 };
                 if let Ok(buf) = bincode::serde::encode_to_vec(dmg, cfg) {
                     server.send_bytes_to_client(target_id, "vx.damage", buf);
@@ -104,10 +107,16 @@ pub(crate) fn apply_combat(
                 .inventory
                 .get(vx.selected_slot)
                 .and_then(|s| s.as_ref())
-                .map(|st| BlockId(st.id))
-                .unwrap_or(BlockId::AIR);
-            let mult = weapon_damage_mult(held);
-            vx.damage_mob_scaled(mob_id, Some(0), mult);
+                .map(|st| st.id)
+                .unwrap_or(0);
+            // Express the absolute MC damage through the scaled
+            // API (same idiom as the projectile / explosion
+            // callers: mult = damage / MOB_HIT_DAMAGE).
+            vx.damage_mob_scaled(
+                mob_id,
+                Some(0),
+                attack_damage(held) / crate::mob::MOB_HIT_DAMAGE,
+            );
         }
     }
 }

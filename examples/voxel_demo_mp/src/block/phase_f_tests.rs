@@ -7,42 +7,46 @@ use infengine_voxel::BlockId;
 
 use super::{
     BEDROCK_ID, FLINT_AND_STEEL_ID, NETHERRACK_ID, OBSIDIAN_ID, PORTAL_ID,
-    block_category, block_is_aabb_passable, block_is_opaque,
+    block_is_aabb_passable, block_is_opaque,
     block_is_placement_blocked, block_is_ray_passable, block_is_replaceable,
-    block_is_transparent_render, block_required_tier, is_tool_block,
-    tool_effectiveness, tool_label,
+    block_is_transparent_render, is_tool_block, tool_label,
 };
-use crate::block::BlockCategory;
+use crate::block::mining_math::{
+    CLASS_PICKAXE, hardness_for, has_correct_tool_for_drops,
+};
 
 #[test]
-fn netherrack_is_stone_category_pickaxe_tier_1() {
-    assert_eq!(block_category(BlockId(NETHERRACK_ID)), BlockCategory::Stone);
-    assert_eq!(block_required_tier(BlockId(NETHERRACK_ID)), 1);
+fn netherrack_is_pickaxe_mineable_any_tier() {
+    // W473: MC row - 0.4 destroy time, requires a pickaxe for the
+    // drop but any tier qualifies (no needs_* tag).
+    let dig = hardness_for(NETHERRACK_ID);
+    assert_eq!(dig.destroy_time, 0.4);
+    assert!(dig.requires_correct_tool);
+    assert_eq!(dig.class_mask, CLASS_PICKAXE);
+    assert_eq!(dig.min_tier, 0);
+    assert!(has_correct_tool_for_drops(16, NETHERRACK_ID));
+    assert!(!has_correct_tool_for_drops(0, NETHERRACK_ID));
 }
 
 #[test]
-fn bedrock_required_tier_is_4_and_blocked_from_place() {
-    // tier 4 -> no shipped tool reaches it, so the block is
-    // effectively unbreakable. F_NO_PLACE keeps RMB from
-    // dropping bedrock onto another voxel.
-    assert_eq!(block_required_tier(BlockId(BEDROCK_ID)), 4);
+fn bedrock_is_unbreakable_and_blocked_from_place() {
+    // W473: MC strength(-1) - the mining session never completes
+    // in survival. F_NO_PLACE keeps RMB from dropping bedrock onto
+    // another voxel.
+    assert_eq!(hardness_for(BEDROCK_ID).destroy_time, -1.0);
     assert!(block_is_placement_blocked(BlockId(BEDROCK_ID)));
 }
 
 #[test]
-fn obsidian_required_tier_is_3_only_iron_pick_drops_it() {
-    // Iron pickaxe = tier 3. tool_effectiveness must report
-    // drop_ok = true with iron and false with stone.
-    assert_eq!(block_required_tier(BlockId(OBSIDIAN_ID)), 3);
-    let (_mult_iron, drop_iron) =
-        tool_effectiveness(BlockId(18), BlockId(OBSIDIAN_ID));
-    assert!(drop_iron, "iron pickaxe should drop obsidian");
-    let (_mult_stone, drop_stone) =
-        tool_effectiveness(BlockId(17), BlockId(OBSIDIAN_ID));
-    assert!(!drop_stone, "stone pickaxe must not drop obsidian");
-    let (_mult_wood, drop_wood) =
-        tool_effectiveness(BlockId(16), BlockId(OBSIDIAN_ID));
-    assert!(!drop_wood, "wood pickaxe must not drop obsidian");
+fn obsidian_needs_diamond_tier_for_drops() {
+    // W473: needs_diamond_tool = min_tier 4. Diamond (155) and
+    // netherite (274) picks drop it; iron (18) and below do not.
+    assert_eq!(hardness_for(OBSIDIAN_ID).min_tier, 4);
+    assert!(has_correct_tool_for_drops(155, OBSIDIAN_ID));
+    assert!(has_correct_tool_for_drops(274, OBSIDIAN_ID));
+    assert!(!has_correct_tool_for_drops(18, OBSIDIAN_ID));
+    assert!(!has_correct_tool_for_drops(17, OBSIDIAN_ID));
+    assert!(!has_correct_tool_for_drops(16, OBSIDIAN_ID));
 }
 
 #[test]

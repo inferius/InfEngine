@@ -34,7 +34,7 @@ pub(crate) fn apply_block_break(
     use crate::{
         BlockId, CHEST_ID, EditMsg, REDSTONE_TORCH_ID,
         REDSTONE_WALL_TORCH_ID, SOUL_TORCH_ID, SOUL_WALL_TORCH_ID, Voxel,
-        block, block_material, block_required_tier, tool_tier,
+        block, block_material,
     };
     let _ = std::marker::PhantomData::<Voxel>;
     // Capture the block we're about to break so we can
@@ -275,20 +275,23 @@ pub(crate) fn apply_block_break(
         // W10.2: Creative `instabuild` suppresses block drops.
         // Container contents (chest, furnace) still drop below.
         let suppress_drops = vx.abilities.instabuild;
-        // Tool gating: drop only when the selected slot's tool tier
-        // meets the block's requirement.
+        // W473: `Player.hasCorrectToolForDrops` - a block that
+        // requires a correct tool only drops when the held tool's
+        // class matches its mineable tag at a sufficient tier
+        // (needs_* tags), or the sword/shears cobweb rule applies.
         let held = vx
             .inventory
             .get(vx.selected_slot)
             .and_then(|s| s.as_ref())
             .map(|st| BlockId(st.id))
             .unwrap_or(BlockId::AIR);
-        let tier = tool_tier(held);
-        let needed = block_required_tier(broken);
+        let correct_tool = crate::block::mining_math::has_correct_tool_for_drops(
+            held.0, broken.0,
+        );
         // W65.4: immature crops have no item form - harvest before
         // maturity drops nothing (MC drops only seeds early; we keep
         // it simple). Mature crops fall through to the normal drop.
-        if !suppress_drops && tier >= needed {
+        if !suppress_drops && correct_tool {
             // W35.2: wall-torch variants drop the floor-torch item.
             let drop_id = match broken.0 {
                 x if x == REDSTONE_WALL_TORCH_ID => REDSTONE_TORCH_ID,

@@ -397,8 +397,8 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
     },
     // Bedrock. Indestructible floor block. F_NO_PLACE keeps
     // builders from accidentally stacking it on top of a frame;
-    // tool-tier-4 + the mining hardness path treat it as
-    // unbreakable in practice (no tool tier reaches 4 yet).
+    // W473: MC destroy time -1 (hardness table) makes the mining
+    // session never complete in survival.
     BlockType {
         id: 45, name: "bedrock", color: [0.25, 0.25, 0.27], transparent: false,
         flags: F_NO_PLACE,
@@ -406,10 +406,9 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         bottom: TileSpec { col: 0, row: 0, files: &["bedrock.png", "stone.png"], keep_alpha: false },
         sides: TileSpec { col: 0, row: 0, files: &["bedrock.png", "stone.png"], keep_alpha: false },
     },
-    // Obsidian. Drops only with a diamond (tier-3-equivalent)
-    // pickaxe. The chosen tier is `block_required_tier(46) = 3`,
-    // matching the iron pickaxe today since diamond tools don't
-    // exist yet. Same purple-black look as MC; renders opaque.
+    // Obsidian. W473: MC hardness table - 50.0 destroy time,
+    // drops only with a diamond+ pickaxe (needs_diamond_tool
+    // tier 4). Same purple-black look as MC; renders opaque.
     BlockType {
         id: 46, name: "obsidian", color: [0.10, 0.04, 0.16], transparent: false, flags: 0,
         top: TileSpec { col: 0, row: 0, files: &["obsidian.png", "stone.png"], keep_alpha: false },

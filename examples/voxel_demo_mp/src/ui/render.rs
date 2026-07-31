@@ -161,26 +161,31 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                         None
                     }
                 });
-                // Append a hint about the recommended tool when
-                // the held one doesn't match the block category.
-                let cat = block_category(b);
-                let hint = match cat {
-                    BlockCategory::Stone
-                        if tool_tier(held_for_label) == 0 =>
-                    {
+                // W473: append a hint when the held item would not
+                // drop the block (hasCorrectToolForDrops false) -
+                // named after the block's mineable class.
+                use crate::block::mining_math::{
+                    self, CLASS_AXE, CLASS_HOE, CLASS_PICKAXE, CLASS_SHOVEL,
+                };
+                let hint = if mining_math::has_correct_tool_for_drops(
+                    held_for_label.0,
+                    b.0,
+                ) {
+                    ""
+                } else {
+                    let mask = mining_math::hardness_for(b.0).class_mask;
+                    if mask & CLASS_PICKAXE != 0 {
                         " (need pickaxe)"
+                    } else if mask & CLASS_AXE != 0 {
+                        " (need axe)"
+                    } else if mask & CLASS_SHOVEL != 0 {
+                        " (need shovel)"
+                    } else if mask & CLASS_HOE != 0 {
+                        " (need hoe)"
+                    } else {
+                        // cobweb-style: only sword / shears drop it.
+                        " (need correct tool)"
                     }
-                    BlockCategory::Soil
-                        if shovel_tier(held_for_label) == 0 =>
-                    {
-                        " (use shovel)"
-                    }
-                    BlockCategory::Wood
-                        if axe_tier(held_for_label) == 0 =>
-                    {
-                        " (use axe)"
-                    }
-                    _ => "",
                 };
                 Some((format!("{name}{hint}"), pct))
             });

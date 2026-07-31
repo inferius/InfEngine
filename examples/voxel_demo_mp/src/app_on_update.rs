@@ -1180,7 +1180,12 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                     rmb,
                     vx.world.get(hit.voxel).0,
                     selected_block.map(|b| b.0),
-                    shovel_tier(held),
+                    // W473: any shovel material qualifies for the
+                    // path shortcut (class check, not tier).
+                    crate::block::mining_math::is_dig_class(
+                        held.0,
+                        crate::block::mining_math::CLASS_SHOVEL,
+                    ),
                     is_tool_block(held),
                     vx.abilities.may_build,
                 )

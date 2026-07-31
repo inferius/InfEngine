@@ -1,14 +1,18 @@
-//! Active mining session state + per-block hardness lookup.
+//! Active mining session state.
 //!
 //! `MiningState` is the small struct on `Voxel` that tracks a
 //! single hold-to-mine session: which voxel the player is
-//! breaking, how much progress they've made toward the total
-//! mine time, and the SFX/particle cooldown that paces the
-//! crack burst. The lookup table `block_hardness` is the
-//! baseline mine time in seconds per block kind, before
-//! tool-effectiveness multipliers (handled in `block::`) and
-//! submerged slowdown (handled in `player::submerged_*`)
-//! adjust it.
+//! breaking, how much cumulative destroy progress they have made,
+//! and the SFX/particle cooldown that paces the crack burst.
+//!
+//! W473: the per-block hardness lookup moved to the generated
+//! `block::hardness_table` + `block::mining_math` (a 1:1 port of
+//! MC `getDestroyProgress`). Progress now accumulates in MC
+//! progress units - the session completes at `progress >= total`
+//! with `total = 1.0`, and the per-second rate comes from
+//! `mining_math::destroy_progress_per_second` (re-evaluated every
+//! frame, so tool swaps / water / airborne modifiers apply
+//! mid-session like MC's per-tick check).
 //!
 //! The driving tick loop still lives in `Voxel::update_play`
 //! (the SFX + particle side effects need a deep `&mut self`
@@ -28,7 +32,10 @@ use infengine_voxel::BlockId;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MiningState {
     pub(crate) voxel: [i32; 3],
+    /// Cumulative MC destroy progress (0..=total).
     pub(crate) progress: f32,
+    /// Completion threshold - 1.0 in MC progress units. The crack
+    /// overlay + HUD percentage derive from `progress / total`.
     pub(crate) total: f32,
     pub(crate) block: BlockId,
     /// Time (seconds) since the last dig sound + crack particle
@@ -48,12 +55,28 @@ pub(crate) struct MiningStep {
     pub done: bool,
 }
 
-/// W47.13b: advance a `MiningState` by `dt` and report whether the
-/// dig FX should fire this frame + whether the session completed.
+/// W47.13b/W473: advance a `MiningState` by `dt` at the given
+/// per-second destroy-progress rate and report whether the dig FX
+/// should fire this frame + whether the session completed.
+///
+/// `rate_per_sec` comes from
+/// `block::mining_math::destroy_progress_per_second`: 0 for
+/// unbreakable blocks (the session never completes), infinity for
+/// instabreak blocks (completes immediately - handled explicitly
+/// so a zero `dt` frame cannot produce a NaN).
+///
 /// Pure arithmetic on the session struct; all side effects (SFX,
 /// particles, world edit) stay in the caller.
-pub(crate) fn step_mining_session(state: &mut MiningState, dt: f32) -> MiningStep {
-    state.progress += dt;
+pub(crate) fn step_mining_session(
+    state: &mut MiningState,
+    dt: f32,
+    rate_per_sec: f32,
+) -> MiningStep {
+    if rate_per_sec.is_infinite() {
+        state.progress = state.total;
+    } else {
+        state.progress += rate_per_sec * dt;
+    }
     state.fx_cooldown -= dt;
     let done = state.progress >= state.total;
     let fire_fx = state.fx_cooldown <= 0.0 || done;
@@ -63,40 +86,15 @@ pub(crate) fn step_mining_session(state: &mut MiningState, dt: f32) -> MiningSte
     MiningStep { fire_fx, done }
 }
 
-/// Seconds required to fully mine each block kind. Higher =
-/// tougher material. Air falls through to a tiny "miss" delay
-/// so the swing still produces feedback. Multiplied by
-/// `tool_effectiveness` (block module) and the submerged-eye
-/// liquid slowdown (player module) before driving the session.
-pub(crate) fn block_hardness(block: BlockId) -> f32 {
-    match block.0 {
-        0 => 0.05,        // air (no-op swing)
-        1 | 8 => 1.6,     // stone, cobble
-        2 | 3 => 0.55,    // dirt, grass
-        4 => 0.5,         // sand
-        5 => 1.0,         // wood log
-        6 => 0.25,        // leaves
-        7 => 0.9,         // planks
-        9 => 0.45,        // glass
-        10 => 0.1,        // torch
-        11 => 0.6,        // wool
-        12 => 0.4,        // meat
-        13 => 2.4,        // coal ore
-        14 => 3.2,        // iron ore
-        15 => 0.4,        // snow
-        _ => 0.8,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn fresh(total: f32) -> MiningState {
+    fn fresh() -> MiningState {
         MiningState {
             voxel: [0, 0, 0],
             progress: 0.0,
-            total,
+            total: 1.0,
             block: BlockId(1),
             fx_cooldown: 0.0,
         }
@@ -104,8 +102,8 @@ mod tests {
 
     #[test]
     fn first_step_fires_fx_and_resets_cooldown() {
-        let mut s = fresh(1.0);
-        let step = step_mining_session(&mut s, 0.05);
+        let mut s = fresh();
+        let step = step_mining_session(&mut s, 0.05, 1.0);
         assert!(step.fire_fx);
         assert!(!step.done);
         assert!((s.fx_cooldown - 0.22).abs() < 1e-5);
@@ -113,17 +111,18 @@ mod tests {
 
     #[test]
     fn step_completes_when_progress_meets_total() {
-        let mut s = fresh(0.10);
-        let step = step_mining_session(&mut s, 0.20);
+        let mut s = fresh();
+        // 0.2 s at 10 progress/s covers the 1.0 total.
+        let step = step_mining_session(&mut s, 0.20, 10.0);
         assert!(step.done);
         assert!(step.fire_fx);
     }
 
     #[test]
     fn mid_session_no_fx_when_cooldown_positive() {
-        let mut s = fresh(1.0);
+        let mut s = fresh();
         s.fx_cooldown = 0.18;
-        let step = step_mining_session(&mut s, 0.05);
+        let step = step_mining_session(&mut s, 0.05, 1.0);
         assert!(!step.fire_fx);
         assert!(!step.done);
         assert!((s.fx_cooldown - 0.13).abs() < 1e-5);
@@ -131,11 +130,33 @@ mod tests {
 
     #[test]
     fn cooldown_resets_on_completion_even_with_positive_cooldown() {
-        let mut s = fresh(0.10);
+        let mut s = fresh();
         s.fx_cooldown = 0.50;
-        let step = step_mining_session(&mut s, 0.20);
+        let step = step_mining_session(&mut s, 0.20, 10.0);
         assert!(step.done);
         assert!(step.fire_fx);
         assert!((s.fx_cooldown - 0.22).abs() < 1e-5);
+    }
+
+    /// W473: an unbreakable block (rate 0 - bedrock) never
+    /// completes no matter how long the button is held.
+    #[test]
+    fn zero_rate_never_completes() {
+        let mut s = fresh();
+        for _ in 0..10_000 {
+            let step = step_mining_session(&mut s, 0.1, 0.0);
+            assert!(!step.done);
+        }
+        assert_eq!(s.progress, 0.0);
+    }
+
+    /// W473: an instabreak block (infinite rate - torch) completes
+    /// on the first frame, even a zero-dt one.
+    #[test]
+    fn infinite_rate_completes_immediately() {
+        let mut s = fresh();
+        let step = step_mining_session(&mut s, 0.0, f32::INFINITY);
+        assert!(step.done);
+        assert!(!s.progress.is_nan());
     }
 }

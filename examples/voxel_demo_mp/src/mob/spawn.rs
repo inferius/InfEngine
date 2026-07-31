@@ -372,21 +372,24 @@ pub(crate) fn pick_kind_for(
             });
         }
     }
-    // W298: ceiled dims use the NETHER pool - MC nether_wastes
-    // weights (zombified_piglin 100 / ghast 50 / magma_cube 2) with
-    // the engine's stand-in kinds until those mobs are ported (same
-    // once-logged policy as the fortress spawner stand-ins). Any
-    // light level, no grass gate - zombified piglins spawn in full
-    // glowstone light in vanilla.
+    // W298/W300/W327: ceiled dims use the NETHER pool - the real
+    // MC nether_wastes weights (zombified_piglin 100 / ghast 50 /
+    // magma_cube 2), all three kinds ported. Any light level, no
+    // grass gate - zombified piglins spawn in full glowstone light
+    // in vanilla.
     let dim_def =
         crate::worldgen::dim_registry::dim_def_or_overworld(&voxel.current_dim);
     if dim_def.has_ceiling {
-        static NETHER_STANDIN_LOGGED: std::sync::Once = std::sync::Once::new();
-        NETHER_STANDIN_LOGGED.call_once(|| {
+        static NETHER_POOL_LOGGED: std::sync::Once = std::sync::Once::new();
+        NETHER_POOL_LOGGED.call_once(|| {
+            // W473: the old text claimed ZOMBIE/SKELETON/SPIDER
+            // stand-ins; the pool below has spawned the real kinds
+            // since W300/W327. Striders + regular piglins have no
+            // pool slot yet (not ported).
             tracing::info!(
-                "W298: nether spawns use ZOMBIE/SKELETON/SPIDER as \
-                 zombified-piglin/ghast/magma-cube stand-ins until \
-                 those mobs are ported"
+                "W298: nether pool active - zombified_piglin 100 / \
+                 ghast 50 / magma_cube 2 (strider + piglin pool \
+                 slots pending their ports)"
             );
         });
         let roll = rng.next_f32() * 152.0;

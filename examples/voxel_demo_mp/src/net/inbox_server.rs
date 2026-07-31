@@ -107,7 +107,6 @@ pub(crate) fn process_server_inbox(
     inventories: &mut HashMap<u32, ClientInv>,
     pending_inv_sends: &mut HashSet<u32>,
     pvp_reach: f32,
-    pvp_damage: f32,
     day_length_s: f32,
     recipes_lookup: &dyn Fn(usize) -> Option<&'static [(u16, u8)]>,
     ctx: &mut ServerInboxCtx<'_>,
@@ -534,13 +533,29 @@ pub(crate) fn process_server_inbox(
                         let dz = ap[2] - tp[2];
                         let d2 = dx * dx + dy * dy + dz * dz;
                         if d2 <= (pvp_reach + 1.0).powi(2) {
+                            let sel = attacker
+                                .map(|p| p.sel)
+                                .unwrap_or(SEL_NONE);
+                            // W473: the damage reads the remote
+                            // attacker's AUTHORITATIVE held item
+                            // (MC Attributes.ATTACK_DAMAGE total)
+                            // instead of the old flat 1.5.
+                            let held = inventories
+                                .get(&client_id)
+                                .and_then(|inv| {
+                                    inv.inventory.get(sel as usize)
+                                })
+                                .and_then(|s| s.as_ref())
+                                .map(|st| st.id)
+                                .unwrap_or(0);
+                            let damage =
+                                crate::block::mining_math::attack_damage(
+                                    held,
+                                );
                             // W471: wear the remote attacker's
                             // weapon on the AUTHORITATIVE copy
                             // (the attacker's own client applies
                             // the same wear as prediction).
-                            let sel = attacker
-                                .map(|p| p.sel)
-                                .unwrap_or(SEL_NONE);
                             wear_client_weapon(
                                 inventories,
                                 pending_inv_sends,
@@ -549,9 +564,9 @@ pub(crate) fn process_server_inbox(
                             );
                             if m.target_id == 0 {
                                 // Host is the target.
-                                *ctx.pvp_self_damage += pvp_damage;
+                                *ctx.pvp_self_damage += damage;
                             } else {
-                                let dmg = DamageMsg { amount: pvp_damage };
+                                let dmg = DamageMsg { amount: damage };
                                 if let Ok(buf) =
                                     bincode::serde::encode_to_vec(dmg, cfg)
                                 {

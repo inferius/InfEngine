@@ -18,11 +18,12 @@
 //! - Future "no block form" items (stick, ingot, ...) land here
 //!   without needing a block-table slot at all.
 //!
-//! Existing `block::is_tool_block` / `block::tool_label` /
-//! `block::block_required_tier` etc. stay in place. This module is
-//! an ADDITIVE layer; the mining / placement / hotbar code keeps
-//! reading the block table directly while the new inventory plumbing
-//! (chest contents, crafting outputs, ...) consults `item_type`.
+//! Existing `block::is_tool_block` / `block::tool_label` stay in
+//! place (tool math lives in `block::mining_math` since W473). This
+//! module is an ADDITIVE layer; the mining / placement / hotbar
+//! code keeps reading the block table directly while the new
+//! inventory plumbing (chest contents, crafting outputs, ...)
+//! consults `item_type`.
 
 pub(crate) mod durability;
 pub(crate) mod durability_table;

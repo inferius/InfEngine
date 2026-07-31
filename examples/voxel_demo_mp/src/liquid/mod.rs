@@ -104,10 +104,6 @@ pub(crate) struct Liquid {
     /// jump. Models buoyancy: water > gravity = drift up;
     /// lava < gravity = slow sink. Capped at +1.0 m/s.
     pub(crate) swim_buoyancy: f32,
-    /// Mining-time multiplier applied to every block the
-    /// player breaks while submerged. Water 5.0, lava 5.0 -
-    /// MC slows underwater mining drastically.
-    pub(crate) submerged_mining_mul: f32,
     /// HP damage per second the player takes while submerged.
     /// Water 0.0, lava 4.0.
     pub(crate) submerged_damage_per_sec: f32,
@@ -148,7 +144,6 @@ pub(crate) const LIQUIDS: &[Liquid] = &[
         swim_fall_cap: -1.8,
         swim_jump_vel: 2.2,
         swim_buoyancy: 12.0,
-        submerged_mining_mul: 5.0,
         submerged_damage_per_sec: 0.0,
         drains_air: true,
         submerged_tint: [0.10, 0.30, 0.60, 0.40],
@@ -175,7 +170,6 @@ pub(crate) const LIQUIDS: &[Liquid] = &[
         swim_fall_cap: -0.5,
         swim_jump_vel: 1.0,
         swim_buoyancy: 4.0,
-        submerged_mining_mul: 5.0,
         submerged_damage_per_sec: 4.0,
         drains_air: false,
         submerged_tint: [1.00, 0.35, 0.05, 0.55],

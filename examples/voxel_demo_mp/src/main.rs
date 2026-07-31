@@ -41,16 +41,15 @@ use infengine_window::{AppHandler, EngineWindow, FrameContext, Key, WindowConfig
 mod block;
 use block::{
     ATLAS_COLS, ATLAS_ROWS, BLOCK_TYPES, BUCKET_EMPTY_ID,
-    BlockCategory, CHEST_ID, LAVA_ID,
+    CHEST_ID, LAVA_ID,
     REDSTONE_TORCH_ID, REDSTONE_WALL_TORCH_ID, SOUL_TORCH_ID, SOUL_WALL_TORCH_ID,
-    TILE_PX, TORCH_ID, TileSpec, atlas_uv_rect, axe_tier,
-    block_category, block_is_liquid,
+    TILE_PX, TORCH_ID, TileSpec, atlas_uv_rect,
+    block_is_liquid,
     block_is_opaque, block_is_placement_blocked, block_is_ray_passable,
     block_is_replaceable, block_is_transparent_render,
-    block_material, block_required_tier,
+    block_material,
     block_type, bucket_liquid_id, is_tool_block,
-    liquid_to_bucket_id, shovel_tier, tool_effectiveness, tool_label,
-    tool_tier, weapon_damage_mult,
+    liquid_to_bucket_id, tool_label,
 };
 mod liquid;
 use liquid::{
@@ -253,7 +252,7 @@ use chat::autocomplete::{
     self as autocomplete, ChatCompletionPopup, CompletionContext,
 };
 use chat::{CHAT_FADE_SECS, CHAT_HISTORY_MAX, CHAT_LOG_MAX, line_is_muted};
-use mining::{MiningState, block_hardness};
+use mining::MiningState;
 use mob::{
     KIND_CHICKEN, KIND_ZOMBIE,
     MOB_ATTACK_REACH, MOB_CAP_DEFAULT, MOB_DEATH_FADE, MOB_HIT_DAMAGE,
@@ -273,12 +272,14 @@ use tracing::{info, warn};
 // gone - `container::ui::GridInteract::base_index` does the same
 // job inside the widget.
 
-// `MiningState` + `block_hardness` moved to `mining.rs`.
+// `MiningState` moved to `mining.rs`; the per-block hardness +
+// tool math lives in `block::mining_math` (W473).
 
 // `MobState` struct + all `MOB_*`, `KIND_*`, `ZOMBIE_*` constants
 // moved to the `mob` module (see `mob/mod.rs`); re-imported below.
 
-const PVP_DAMAGE: f32 = 1.5;
+// W473: `PVP_DAMAGE` (flat 1.5) is gone - melee damage comes from
+// `block::mining_math::attack_damage` (MC ATTACK_DAMAGE totals).
 const PVP_REACH: f32 = 5.5;
 
 /// Number of stacked chunk layers along the Y axis. Each chunk is

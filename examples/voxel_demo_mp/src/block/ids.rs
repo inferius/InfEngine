@@ -74,9 +74,13 @@ pub(crate) const IRON_INGOT_ID: u16 = 43;
 /// Netherrack: bulk material of the nether dimension. Phase F.
 pub(crate) const NETHERRACK_ID: u16 = 44;
 /// Bedrock: indestructible floor block of the nether. Phase F.
+/// W473: unbreakability comes from the MC hardness table
+/// (destroy time -1); runtime code resolves it there, so the
+/// const is test-only now.
+#[allow(dead_code)]
 pub(crate) const BEDROCK_ID: u16 = 45;
-/// Obsidian: portal frame material. Diamond-tier mining (3+).
-/// Phase F.
+/// Obsidian: portal frame material. Diamond-tier mining (W473:
+/// needs_diamond_tool tier 4 in the hardness table). Phase F.
 pub(crate) const OBSIDIAN_ID: u16 = 46;
 /// Portal block: cosmetic + cross-dim trigger. Phase F.
 #[allow(dead_code)] // wired up in F.5+

@@ -177,8 +177,9 @@ pub enum RmbAction {
 /// - `target_id`: id of the voxel under the crosshair.
 /// - `held_id`: id of the block in the selected hotbar slot,
 ///   `None` if the slot is empty.
-/// - `held_shovel_tier`: `shovel_tier(held)` evaluated by the
-///   caller. 0 if the held item is not a shovel.
+/// - `held_is_shovel`: W473 - whether the held item is a shovel of
+///   any material (`mining_math::is_dig_class(CLASS_SHOVEL)`),
+///   evaluated by the caller.
 /// - `held_is_tool_block`: `is_tool_block(held)` evaluated by the
 ///   caller. Tool / weapon blocks suppress the PlaceBlock branch.
 /// - `may_build`: `self.abilities.may_build`. Adventure-mode
@@ -198,7 +199,7 @@ pub fn classify_rmb_action(
     rmb: bool,
     target_id: u16,
     held_id: Option<u16>,
-    held_shovel_tier: u8,
+    held_is_shovel: bool,
     held_is_tool_block: bool,
     may_build: bool,
 ) -> RmbAction {
@@ -209,15 +210,21 @@ pub fn classify_rmb_action(
     if !rmb {
         return RmbAction::None;
     }
-    // 1. Shovel + grass -> path. Held must be a shovel (tier > 0)
-    //    AND target must be the grass block.
-    if target_id == 3 && held_shovel_tier > 0 {
+    // 1. Shovel + grass -> path. Held must be a shovel AND target
+    //    must be the grass block.
+    if target_id == 3 && held_is_shovel {
         return RmbAction::PathGrass;
     }
     // 1b. W294: hoe + dirt/grass -> farmland (HoeItem TILLABLES).
+    // W473: class check via mining_math (covers every material).
     if (target_id == 2 || target_id == 3)
         && held_id
-            .map(|h| crate::block::hoe_tier(crate::BlockId(h)) > 0)
+            .map(|h| {
+                crate::block::mining_math::is_dig_class(
+                    h,
+                    crate::block::mining_math::CLASS_HOE,
+                )
+            })
             .unwrap_or(false)
     {
         return RmbAction::TillFarmland;
@@ -385,7 +392,7 @@ mod tests {
     #[test]
     fn rmb_false_always_none() {
         assert_eq!(
-            classify_rmb_action(false, FURNACE_ID, Some(1), 0, false, true),
+            classify_rmb_action(false, FURNACE_ID, Some(1), false, false, true),
             RmbAction::None,
         );
     }
@@ -393,7 +400,7 @@ mod tests {
     #[test]
     fn shovel_on_grass_wins_path() {
         assert_eq!(
-            classify_rmb_action(true, 3, Some(50), 2, false, true),
+            classify_rmb_action(true, 3, Some(50), true, false, true),
             RmbAction::PathGrass,
         );
     }
@@ -403,7 +410,7 @@ mod tests {
         // Held is some non-shovel non-tool block (e.g. dirt id 2)
         // - cascade reaches the generic place branch.
         assert_eq!(
-            classify_rmb_action(true, 3, Some(2), 0, false, true),
+            classify_rmb_action(true, 3, Some(2), false, false, true),
             RmbAction::PlaceBlock,
         );
     }
@@ -411,7 +418,7 @@ mod tests {
     #[test]
     fn furnace_target_opens_regardless_of_held() {
         assert_eq!(
-            classify_rmb_action(true, FURNACE_ID, Some(50), 3, false, true),
+            classify_rmb_action(true, FURNACE_ID, Some(50), true, false, true),
             RmbAction::OpenFurnace,
         );
     }
@@ -422,11 +429,11 @@ mod tests {
     fn smoker_and_blast_furnace_open_furnace() {
         use crate::block::{BLAST_FURNACE_ID, SMOKER_ID};
         assert_eq!(
-            classify_rmb_action(true, SMOKER_ID, None, 0, false, true),
+            classify_rmb_action(true, SMOKER_ID, None, false, false, true),
             RmbAction::OpenFurnace,
         );
         assert_eq!(
-            classify_rmb_action(true, BLAST_FURNACE_ID, None, 0, false, true),
+            classify_rmb_action(true, BLAST_FURNACE_ID, None, false, false, true),
             RmbAction::OpenFurnace,
         );
     }
@@ -434,7 +441,7 @@ mod tests {
     #[test]
     fn chest_target_opens_regardless_of_held() {
         assert_eq!(
-            classify_rmb_action(true, CHEST_ID, None, 0, false, true),
+            classify_rmb_action(true, CHEST_ID, None, false, false, true),
             RmbAction::OpenChest,
         );
     }
@@ -445,15 +452,15 @@ mod tests {
         // W366: the dyed beds previously fell through to placement
         // (the R20 "cannot sleep in a village bed" report).
         assert_eq!(
-            classify_rmb_action(true, 35, None, 0, false, true),
+            classify_rmb_action(true, 35, None, false, false, true),
             RmbAction::SleepBed,
         );
         assert_eq!(
-            classify_rmb_action(true, 580, None, 0, false, true),
+            classify_rmb_action(true, 580, None, false, false, true),
             RmbAction::SleepBed,
         );
         assert_eq!(
-            classify_rmb_action(true, 591, None, 0, false, true),
+            classify_rmb_action(true, 591, None, false, false, true),
             RmbAction::SleepBed,
         );
     }
@@ -461,7 +468,7 @@ mod tests {
     #[test]
     fn flint_and_steel_routes_to_ignite() {
         assert_eq!(
-            classify_rmb_action(true, 1, Some(FLINT_AND_STEEL_ID), 0, false, true),
+            classify_rmb_action(true, 1, Some(FLINT_AND_STEEL_ID), false, false, true),
             RmbAction::IgnitePortal,
         );
     }
@@ -469,7 +476,7 @@ mod tests {
     #[test]
     fn empty_bucket_routes_to_bucket_use() {
         assert_eq!(
-            classify_rmb_action(true, 1, Some(BUCKET_EMPTY_ID), 0, false, true),
+            classify_rmb_action(true, 1, Some(BUCKET_EMPTY_ID), false, false, true),
             RmbAction::BucketUse,
         );
     }
@@ -477,7 +484,7 @@ mod tests {
     #[test]
     fn water_bucket_routes_to_bucket_use() {
         assert_eq!(
-            classify_rmb_action(true, 1, Some(BUCKET_WATER_ID), 0, false, true),
+            classify_rmb_action(true, 1, Some(BUCKET_WATER_ID), false, false, true),
             RmbAction::BucketUse,
         );
     }
@@ -485,7 +492,7 @@ mod tests {
     #[test]
     fn lava_bucket_routes_to_bucket_use() {
         assert_eq!(
-            classify_rmb_action(true, 1, Some(BUCKET_LAVA_ID), 0, false, true),
+            classify_rmb_action(true, 1, Some(BUCKET_LAVA_ID), false, false, true),
             RmbAction::BucketUse,
         );
     }
@@ -493,7 +500,7 @@ mod tests {
     #[test]
     fn empty_hand_blocks_place() {
         assert_eq!(
-            classify_rmb_action(true, 1, None, 0, false, true),
+            classify_rmb_action(true, 1, None, false, false, true),
             RmbAction::None,
         );
     }
@@ -501,7 +508,7 @@ mod tests {
     #[test]
     fn tool_block_blocks_place() {
         assert_eq!(
-            classify_rmb_action(true, 1, Some(99), 0, true, true),
+            classify_rmb_action(true, 1, Some(99), false, true, true),
             RmbAction::None,
         );
     }
@@ -509,7 +516,7 @@ mod tests {
     #[test]
     fn may_build_false_blocks_place() {
         assert_eq!(
-            classify_rmb_action(true, 1, Some(2), 0, false, false),
+            classify_rmb_action(true, 1, Some(2), false, false, false),
             RmbAction::None,
         );
     }
@@ -517,7 +524,7 @@ mod tests {
     #[test]
     fn place_block_with_regular_block() {
         assert_eq!(
-            classify_rmb_action(true, 1, Some(2), 0, false, true),
+            classify_rmb_action(true, 1, Some(2), false, false, true),
             RmbAction::PlaceBlock,
         );
     }
