@@ -54,13 +54,20 @@ enum Command {
     },
 
     /// Import The Legend of Kyrandia.
+    ///
+    /// A translated release ships the same archives with the dialogue
+    /// rewritten, so run this once per language against each copy and
+    /// the lines land under matching ids.
     Kyra {
         /// Directory holding the retail `.PAK` files. A GOG install puts
         /// them in `DAT`.
         source: PathBuf,
-        /// Where to write `rooms/` and `images/`.
+        /// Where to write `rooms/`, `images/` and `loca/`.
         #[arg(long, short)]
         out: PathBuf,
+        /// Language tag for the text in these archives.
+        #[arg(long, short, default_value = "en")]
+        language: String,
     },
 }
 
@@ -110,8 +117,12 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Command::Kyra { source, out } => {
-            let report = kyra::import_dir(&source, &out)?;
+        Command::Kyra {
+            source,
+            out,
+            language,
+        } => {
+            let report = kyra::import_dir(&source, &out, &language)?;
             println!("{report}");
             if report.is_empty() {
                 eprintln!(

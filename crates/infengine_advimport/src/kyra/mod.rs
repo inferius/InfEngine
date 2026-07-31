@@ -11,6 +11,7 @@
 //! data into our own format once, offline.
 
 pub mod cps;
+pub mod emc;
 pub mod format40;
 pub mod format80;
 pub mod msc;
@@ -23,10 +24,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use glam::Vec2;
+use infengine_adventure::loca::{self, Line, Locale};
 use infengine_adventure::{Layer, Room};
 use tracing::{debug, warn};
 
 use crate::report::{ImportReport, Skipped};
+use crate::encoding::Encoding;
 use crate::ImportError;
 use palette::Palette;
 
@@ -92,7 +95,29 @@ pub fn find_global_palette(source: &Path) -> Option<Palette> {
 /// it in `DAT`). Missing or unreadable individual archives are recorded
 /// in the report rather than aborting the run: a partial import is more
 /// useful than none.
-pub fn import_dir(source: &Path, out_dir: &Path) -> Result<ImportReport, ImportError> {
+/// Text encoding to assume for a language whose files are not UTF-8.
+///
+/// The Czech release writes its dialogue in CP1250; the original is
+/// ASCII. Guessing per byte would be unreliable on short lines, so the
+/// language decides.
+pub fn encoding_for(language: &str) -> Encoding {
+    match language {
+        "cs" | "sk" | "pl" | "hu" | "sl" | "hr" | "ro" => Encoding::Cp1250,
+        _ => Encoding::Latin1,
+    }
+}
+
+/// Import a retail directory as one language.
+///
+/// A translated release ships the same archives with the text rewritten,
+/// so importing a second language means pointing this at that copy with
+/// a different tag - the rooms and art come out identical and the lines
+/// land under the same ids.
+pub fn import_dir(
+    source: &Path,
+    out_dir: &Path,
+    language: &str,
+) -> Result<ImportReport, ImportError> {
     let mut report = ImportReport::default();
 
     let mut archives: Vec<PathBuf> = fs::read_dir(source)
@@ -123,8 +148,9 @@ pub fn import_dir(source: &Path, out_dir: &Path) -> Result<ImportReport, ImportE
         warn!("no palette found; images will be written as greyscale");
     }
 
+    let mut locale = Locale::new(language, language);
     for archive in &archives {
-        match import_pak(archive, out_dir, global.as_ref(), &mut report) {
+        match import_pak(archive, out_dir, global.as_ref(), &mut locale, language, &mut report) {
             Ok(()) => report.archives += 1,
             Err(err) => {
                 warn!(archive = %archive.display(), %err, "skipping unreadable archive");
@@ -136,6 +162,17 @@ pub fn import_dir(source: &Path, out_dir: &Path) -> Result<ImportReport, ImportE
         }
     }
 
+    if !locale.is_empty() {
+        report.languages = 1;
+        report.lines = locale.len();
+        loca::save_locale(&locale, &out_dir.join(loca::LOCALE_DIR)).map_err(|err| {
+            ImportError::WriteRoom {
+                path: format!("{}/{}", loca::LOCALE_DIR, language),
+                detail: err.to_string(),
+            }
+        })?;
+    }
+
     Ok(report)
 }
 
@@ -144,6 +181,8 @@ pub fn import_pak(
     archive: &Path,
     out_dir: &Path,
     global_palette: Option<&Palette>,
+    locale: &mut Locale,
+    language: &str,
     report: &mut ImportReport,
 ) -> Result<(), ImportError> {
     let bytes = fs::read(archive).map_err(|source| ImportError::ReadFile {
@@ -240,12 +279,43 @@ pub fn import_pak(
         })?;
 
         report.rooms += 1;
+        collect_lines(&pak, stem_of_entry, &name, language, locale);
         debug!(archive = %stem, entry = %entry.name, "imported background");
     }
 
     export_animations(&pak, &stem, fallback, out_dir, report)?;
 
     Ok(())
+}
+
+/// Pull a room's dialogue out of its script into the locale.
+///
+/// Lines are keyed by room and position, which the translated releases
+/// preserve - that is what makes the Czech text land on the same ids as
+/// the English.
+fn collect_lines(
+    pak: &pak::Pak<'_>,
+    stem: &str,
+    room_id: &str,
+    language: &str,
+    locale: &mut Locale,
+) {
+    let Some(data) = pak.get(&format!("{stem}.EMC")) else {
+        return;
+    };
+    let script = match emc::decode(data, encoding_for(language)) {
+        Ok(script) => script,
+        Err(err) => {
+            debug!(stem, %err, "room script did not decode");
+            return;
+        }
+    };
+    for (index, text) in script.texts.iter().enumerate() {
+        if text.trim().is_empty() {
+            continue;
+        }
+        locale.insert(emc::Script::line_id(room_id, index), Line::text(text));
+    }
 }
 
 /// Decode every `.WSA` in the archive and write it as a sprite sheet.
