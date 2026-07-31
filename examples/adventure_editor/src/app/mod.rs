@@ -94,6 +94,8 @@ pub struct Editor {
     /// The sheet being cut into frames, if any.
     sheet: Option<SheetDraft>,
     game_ui: GameUi,
+    /// Saved games in the project, refreshed when one is written.
+    slots: Vec<infengine_adventure::save::SlotInfo>,
     screen_ui: ScreenUi,
     graph_ui: GraphUi,
     status: String,
@@ -169,6 +171,7 @@ impl Editor {
             play_draft: PlayDraft::default(),
             sheet: None,
             game_ui,
+            slots: Vec::new(),
             screen_ui,
             graph_ui: GraphUi::default(),
             status,
@@ -479,6 +482,86 @@ impl Editor {
         };
     }
 
+    /// Where saved games go.
+    ///
+    /// The project directory, which is right for the editor: a test save
+    /// belongs with the thing being tested. A shipped game would pass
+    /// somewhere writable per user instead, which is why `save` takes a
+    /// directory rather than working one out.
+    fn save_dir(&self) -> std::path::PathBuf {
+        self.project.root.join(infengine_adventure::save::SAVE_DIR)
+    }
+
+    fn refresh_slots(&mut self) {
+        self.slots = infengine_adventure::save::list(&self.save_dir());
+    }
+
+    /// Write the play state to a slot.
+    ///
+    /// `u32::MAX` means "the next free one", so saving twice in a row
+    /// does not quietly overwrite the first.
+    fn save_slot(&mut self, slot: u32) {
+        use infengine_adventure::save;
+
+        let dir = self.save_dir();
+        let slot = if slot == u32::MAX {
+            save::next_free(&dir)
+        } else {
+            slot
+        };
+        let name = if self.play_draft.save_name.trim().is_empty() {
+            self.play.game.state.room.clone()
+        } else {
+            self.play_draft.save_name.trim().to_string()
+        };
+        let entry = save::Save::new(
+            self.game_ui.manifest.title.clone(),
+            name,
+            self.play.game.state.clone(),
+        );
+        match save::write(&dir, slot, &entry) {
+            Ok(_) => {
+                self.play_draft.save_name.clear();
+                self.status = format!("saved to slot {slot}");
+                self.play.note(format!("saved to slot {slot}"));
+            }
+            Err(err) => {
+                warn!(%err, "could not save");
+                self.status = err.to_string();
+            }
+        }
+        self.refresh_slots();
+    }
+
+    /// Read a slot back and put the game where it was.
+    fn load_slot(&mut self, slot: u32) {
+        use infengine_adventure::save;
+
+        // An empty expected title accepts whatever is there: the editor
+        // is often testing a project whose manifest has no title yet.
+        let title = self.game_ui.manifest.title.clone();
+        let entry = match save::read(&self.save_dir(), slot, &title) {
+            Ok(entry) => entry,
+            Err(err) => {
+                warn!(%err, "could not load");
+                self.status = err.to_string();
+                return;
+            }
+        };
+        let room = entry.state.room.clone();
+        self.play.game.state = entry.state;
+        self.play.subtitle = None;
+        self.play.game.runner.stop();
+        // The room the save was in has to be the one on screen, or the
+        // actor stands in a room it was never in.
+        if !room.is_empty() && room != self.room.id {
+            self.enter_room_by_id(&room, None);
+        }
+        self.play.active = true;
+        self.play.note(format!("loaded slot {slot} in {room}"));
+        self.status = format!("loaded slot {slot}");
+    }
+
     /// Apply what the game window asked for.
     fn apply_game_actions(&mut self, actions: ui_game::GameActions) {
         use infengine_adventure::pack;
@@ -543,6 +626,18 @@ impl Editor {
         }
         if actions.open_screens {
             self.screen_ui.open = true;
+        }
+        if let Some(slot) = actions.save_slot {
+            self.save_slot(slot);
+        }
+        if let Some(slot) = actions.load_slot {
+            self.load_slot(slot);
+        }
+        if let Some(slot) = actions.delete_slot {
+            if let Err(err) = infengine_adventure::save::remove(&self.save_dir(), slot) {
+                warn!(%err, "could not remove the save");
+            }
+            self.refresh_slots();
         }
         if let Some(id) = actions.open_graph {
             self.graph_ui.open = true;
@@ -639,6 +734,7 @@ impl AppHandler for Editor {
         if !self.project.is_empty() {
             self.open_room(0);
         }
+        self.refresh_slots();
     }
 
     fn on_window_event(&mut self, window: &EngineWindow, event: &WindowEvent) {
@@ -838,6 +934,7 @@ impl AppHandler for Editor {
             let play = &mut self.play;
             let play_draft = &mut self.play_draft;
             let room_id = state.room.id.clone();
+            let slots = &self.slots;
             let game_ui = &mut self.game_ui;
             let room_names: Vec<String> = state
                 .project
@@ -854,7 +951,7 @@ impl AppHandler for Editor {
                 ids
             };
             ui.run(window.raw(), |ctx| {
-                play_actions = ui_play::panel(ctx, play, play_draft, &room_id);
+                play_actions = ui_play::panel(ctx, play, play_draft, &room_id, slots);
                 game_actions = ui_game::window(ctx, game_ui, &room_names, &languages);
                 screen_actions = ui_screen::window(ctx, screen_ui, &languages);
                 graph_actions = ui_graph::window(ctx, graph_ui, &script_ids);

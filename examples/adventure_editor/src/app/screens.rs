@@ -85,6 +85,14 @@ impl Editor {
                     self.status = format!("no script called {script}");
                 }
             }
+            ScreenAction::SaveGame { slot } => self.save_slot(slot),
+            ScreenAction::LoadGame { slot } => {
+                // The menu closes first: loading puts a different room
+                // on screen and leaving the menu over it reads as the
+                // load having failed.
+                self.screen_ui.preview = None;
+                self.load_slot(slot);
+            }
             ScreenAction::None => {}
         }
     }

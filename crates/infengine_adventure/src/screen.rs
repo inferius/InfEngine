@@ -53,6 +53,10 @@ pub enum ScreenAction {
     /// Pick the language recordings are played in. Separate from the
     /// text one on purpose - see `LanguageChoice`.
     SetVoiceLanguage { language: String },
+    /// Write the game to a slot.
+    SaveGame { slot: u32 },
+    /// Read a slot back.
+    LoadGame { slot: u32 },
     /// Run a script, for anything the list above does not cover.
     RunScript { script: String },
     /// Nothing. A decorative widget that happens to be clickable-shaped.
@@ -70,6 +74,8 @@ impl ScreenAction {
             ScreenAction::Quit => "quit".into(),
             ScreenAction::SetTextLanguage { language } => format!("text = {language}"),
             ScreenAction::SetVoiceLanguage { language } => format!("voice = {language}"),
+            ScreenAction::SaveGame { slot } => format!("save to {slot}"),
+            ScreenAction::LoadGame { slot } => format!("load {slot}"),
             ScreenAction::RunScript { script } => format!("run {script}"),
             ScreenAction::None => "nothing".into(),
         }

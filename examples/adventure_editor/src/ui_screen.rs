@@ -324,6 +324,8 @@ fn action_editor(
                     ScreenAction::Open {
                         screen: String::new(),
                     },
+                    ScreenAction::SaveGame { slot: 0 },
+                    ScreenAction::LoadGame { slot: 0 },
                     ScreenAction::RunScript {
                         script: String::new(),
                     },
@@ -359,6 +361,12 @@ fn action_editor(
             ui.horizontal(|ui| {
                 ui.label("script");
                 *dirty |= ui.text_edit_singleline(script).changed();
+            });
+        }
+        ScreenAction::SaveGame { slot } | ScreenAction::LoadGame { slot } => {
+            ui.horizontal(|ui| {
+                ui.label("slot");
+                *dirty |= ui.add(egui::DragValue::new(slot).range(0..=99)).changed();
             });
         }
         _ => {}

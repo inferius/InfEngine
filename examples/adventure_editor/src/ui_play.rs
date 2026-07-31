@@ -6,6 +6,7 @@
 //! log of what the scripts actually did.
 
 use infengine_adventure::Verb;
+use infengine_adventure::save::SlotInfo;
 
 use crate::play::PlayMode;
 
@@ -27,6 +28,12 @@ pub struct PlayActions {
     pub open_game: bool,
     /// The screen editor was asked for.
     pub open_screens: bool,
+    /// Write the play state to a slot.
+    pub save_slot: Option<u32>,
+    /// Read a slot back.
+    pub load_slot: Option<u32>,
+    /// Throw a slot away.
+    pub delete_slot: Option<u32>,
     /// The script graph was asked for, optionally on a script.
     pub open_graph: Option<String>,
 }
@@ -36,6 +43,7 @@ pub struct PlayActions {
 pub struct PlayDraft {
     pub flag: String,
     pub item: String,
+    pub save_name: String,
 }
 
 /// The play-mode side panel and, while playing, the subtitle.
@@ -44,6 +52,7 @@ pub fn panel(
     play: &mut PlayMode,
     draft: &mut PlayDraft,
     room: &str,
+    slots: &[SlotInfo],
 ) -> PlayActions {
     let mut actions = PlayActions::default();
 
@@ -109,6 +118,8 @@ pub fn panel(
             flags_section(ui, play, draft, &mut actions);
             ui.separator();
             inventory_section(ui, play, draft, &mut actions);
+            ui.separator();
+            saves_section(ui, draft, slots, &mut actions);
             ui.separator();
             log_section(ui, play);
         });
@@ -243,6 +254,54 @@ fn inventory_section(
         if ui.button("+").clicked() && !draft.item.trim().is_empty() {
             actions.give_item = Some(draft.item.trim().to_string());
             draft.item.clear();
+        }
+    });
+}
+
+/// Saved games, for testing a scene from where it actually happens.
+///
+/// A tester setting flags by hand gets one scene; a save gets the whole
+/// state the game really produced, which is not the same thing and is
+/// usually the one a bug lives in.
+fn saves_section(
+    ui: &mut egui::Ui,
+    draft: &mut PlayDraft,
+    slots: &[SlotInfo],
+    actions: &mut PlayActions,
+) {
+    ui.heading(format!("Saves ({})", slots.len()));
+    egui::ScrollArea::vertical()
+        .id_salt("save_list")
+        .max_height(140.0)
+        .show(ui, |ui| {
+            for info in slots {
+                ui.horizontal(|ui| {
+                    if ui.small_button("load").clicked() {
+                        actions.load_slot = Some(info.slot);
+                    }
+                    if ui.small_button("x").clicked() {
+                        actions.delete_slot = Some(info.slot);
+                    }
+                    let label = if info.name.is_empty() {
+                        format!("{:03}  {}", info.slot, info.room)
+                    } else {
+                        format!("{:03}  {}  ({})", info.slot, info.name, info.room)
+                    };
+                    ui.label(egui::RichText::new(label).small());
+                });
+            }
+        });
+
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut draft.save_name)
+                .hint_text("save as")
+                .desired_width(140.0),
+        );
+        if ui.button("save").clicked() {
+            // No slot number typed: the next free one, so saving twice
+            // does not silently overwrite the first.
+            actions.save_slot = Some(u32::MAX);
         }
     });
 }
