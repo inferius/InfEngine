@@ -40,6 +40,15 @@ const IMAGE_DIR: &str = "images";
 const SPRITE_DIR: &str = "sprites";
 /// Where animation sheets go.
 const ANIM_DIR: &str = "animations";
+
+/// Height of the playable area of a screen.
+///
+/// A background decodes to 320x200, but only the top 144 rows are the
+/// room - the same height as its walk mask. Kyrandia parks sprite frames
+/// in the rows below, so drawing the whole image puts a strip of
+/// animation frames under the scene and makes the room 56 pixels taller
+/// than the floor it contains.
+const PLAY_HEIGHT: u32 = msc::MASK_HEIGHT as u32;
 /// Subdirectory that receives room stubs.
 const ROOM_DIR: &str = "rooms";
 
@@ -254,18 +263,35 @@ pub fn import_pak(
             .iter()
             .all(|ext| names.iter().any(|n| *n == format!("{stem_of_entry}{ext}")));
 
-        let dir = if is_room { IMAGE_DIR } else { SPRITE_DIR };
-        let image_rel = format!("{dir}/{name}.png");
-        write_png(&out_dir.join(&image_rel), image.width, image.height, &rgba)?;
-        report.images += 1;
-
         if !is_room {
+            let image_rel = format!("{SPRITE_DIR}/{name}.png");
+            write_png(&out_dir.join(&image_rel), image.width, image.height, &rgba)?;
+            report.images += 1;
             report.sprites += 1;
             debug!(archive = %stem, entry = %entry.name, "imported picture, not a room");
             continue;
         }
 
-        let mut room = background_room(&name, image.width, image.height, &image_rel);
+        // A13.1: the room is the top of the image; whatever sits below
+        // is frame storage, not scenery.
+        let room_height = image.height.min(PLAY_HEIGHT);
+        let image_rel = format!("{IMAGE_DIR}/{name}.png");
+        write_png(
+            &out_dir.join(&image_rel),
+            image.width,
+            room_height,
+            &crop_rows(&rgba, image.width, room_height),
+        )?;
+        report.images += 1;
+
+        if let Some(strip) = frame_strip(&image, &rgba, room_height) {
+            let strip_rel = format!("{SPRITE_DIR}/{name}_frames.png");
+            write_png(&out_dir.join(&strip_rel), image.width, strip.0, &strip.1)?;
+            report.images += 1;
+            report.sprites += 1;
+        }
+
+        let mut room = background_room(&name, image.width, room_height, &image_rel);
         // A5.2: the game's own walkable region, so an imported room
         // arrives with a floor instead of an empty one to trace by hand.
         if let Some(area) = walk_area_for(&pak, stem_of_entry) {
@@ -287,6 +313,34 @@ pub fn import_pak(
     export_animations(&pak, &stem, fallback, out_dir, report)?;
 
     Ok(())
+}
+
+/// Keep the first `rows` rows of an RGBA image.
+fn crop_rows(rgba: &[u8], width: u32, rows: u32) -> Vec<u8> {
+    let span = width as usize * 4;
+    rgba[..(rows as usize * span).min(rgba.len())].to_vec()
+}
+
+/// The frame-storage strip below the room, if it holds anything.
+///
+/// Emptiness is judged on palette indices rather than on colour: index
+/// zero is the key colour, and testing for black instead would throw
+/// away a strip whose frames happen to be dark.
+fn frame_strip(
+    image: &cps::CpsImage,
+    rgba: &[u8],
+    room_height: u32,
+) -> Option<(u32, Vec<u8>)> {
+    if image.height <= room_height {
+        return None;
+    }
+    let width = image.width as usize;
+    let start = room_height as usize * width;
+    if image.indices[start..].iter().all(|i| *i == 0) {
+        return None;
+    }
+    let rows = image.height - room_height;
+    Some((rows, rgba[start * 4..].to_vec()))
 }
 
 /// Give the room the positions the game starts the actor at.
