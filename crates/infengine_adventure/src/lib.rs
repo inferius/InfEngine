@@ -33,13 +33,15 @@ pub mod io;
 pub mod loca;
 pub mod mask;
 pub mod path;
+pub mod plural;
 pub mod room;
 pub mod scale;
 pub mod walk;
 
 pub use interact::{EntryPoint, Exit, Facing, Hotspot, Shape, Verb};
 pub use io::{RoomIoError, load, save};
-pub use loca::{Line, Locale, Locales};
+pub use loca::{LanguageChoice, Line, Locale, Locales, Spoken};
+pub use plural::Category as PluralCategory;
 pub use mask::trace as trace_walk_mask;
 pub use path::{PathError, find_path, path_length, point_along};
 pub use room::{Layer, LayerKind, Room};

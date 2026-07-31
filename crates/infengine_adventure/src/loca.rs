@@ -29,6 +29,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::plural::{self, Category};
+
+/// Placeholder a counted line substitutes the number into.
+pub const COUNT_PLACEHOLDER: &str = "{n}";
+
 /// Conventional file suffix for a language file.
 pub const LOCALE_SUFFIX: &str = ".loca.ron";
 /// Conventional directory holding them.
@@ -49,6 +54,14 @@ pub struct Line {
     /// Lip sync data that goes with the recording.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lipsync: Option<String>,
+    /// Extra grammatical forms for lines that count something.
+    ///
+    /// Which forms exist is the translator's decision, not the
+    /// programmer's: English fills in `one`, Czech also fills in `few`,
+    /// Japanese fills in none. [`text`](Self::text) is the `other` form
+    /// and the fallback for any category left out.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plurals: BTreeMap<Category, String>,
 }
 
 impl Line {
@@ -74,6 +87,84 @@ impl Line {
     pub fn is_voiced(&self) -> bool {
         self.voice.is_some()
     }
+
+    /// Add a grammatical form.
+    pub fn with_form(mut self, category: Category, text: impl Into<String>) -> Self {
+        self.plurals.insert(category, text.into());
+        self
+    }
+
+    /// The wording for `category`, falling back to the default form.
+    pub fn form(&self, category: Category) -> &str {
+        self.plurals
+            .get(&category)
+            .map_or(self.text.as_str(), String::as_str)
+    }
+
+    /// The wording for `count` in `language`, with the number
+    /// substituted for [`COUNT_PLACEHOLDER`].
+    pub fn counted(&self, language: &str, count: u64) -> String {
+        let category = plural::category_for(language, count);
+        self.form(category)
+            .replace(COUNT_PLACEHOLDER, &count.to_string())
+    }
+
+    /// Does this line carry any form beyond the default?
+    pub fn is_counted(&self) -> bool {
+        !self.plurals.is_empty()
+    }
+}
+
+/// Which language to read and which to listen to.
+///
+/// Kept apart on purpose: playing the original voice under translated
+/// subtitles is a normal thing to want, and so is the reverse when a
+/// dub exists but the subtitles do not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanguageChoice {
+    /// Language of subtitles and on-screen text.
+    pub text: String,
+    /// Language of recorded dialogue.
+    pub voice: String,
+}
+
+impl LanguageChoice {
+    /// Read and listen in the same language.
+    pub fn same(language: impl Into<String>) -> Self {
+        let language = language.into();
+        Self {
+            text: language.clone(),
+            voice: language,
+        }
+    }
+
+    pub fn new(text: impl Into<String>, voice: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            voice: voice.into(),
+        }
+    }
+
+    /// Are subtitles and voice the same language?
+    pub fn is_matched(&self) -> bool {
+        self.text == self.voice
+    }
+}
+
+impl Default for LanguageChoice {
+    fn default() -> Self {
+        Self::same("en")
+    }
+}
+
+/// One line assembled for playback, with text and audio possibly drawn
+/// from different languages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spoken<'a> {
+    pub text: &'a str,
+    pub speaker: Option<&'a str>,
+    pub voice: Option<&'a str>,
+    pub lipsync: Option<&'a str>,
 }
 
 /// Every line in one language.
@@ -184,6 +275,33 @@ impl Locales {
     /// screen instead of silently showing nothing.
     pub fn text<'a>(&'a self, id: &'a str, language: &str) -> &'a str {
         self.line(id, language).map_or(id, |l| l.text.as_str())
+    }
+
+    /// A line assembled under a [`LanguageChoice`]: words from one
+    /// language, recording from the other.
+    ///
+    /// The speaker comes with the text, since that is what labels the
+    /// subtitle. Audio is only taken when that language actually has a
+    /// recording; a missing dub leaves the line silent rather than
+    /// playing a different language's audio under the subtitle by
+    /// accident.
+    pub fn spoken(&self, id: &str, choice: &LanguageChoice) -> Option<Spoken<'_>> {
+        let written = self.line(id, &choice.text)?;
+        let heard = self.line(id, &choice.voice);
+        Some(Spoken {
+            text: written.text.as_str(),
+            speaker: written.speaker.as_deref(),
+            voice: heard.and_then(|l| l.voice.as_deref()),
+            lipsync: heard.and_then(|l| l.lipsync.as_deref()),
+        })
+    }
+
+    /// Text for `id` counting `count` things, in `language`.
+    pub fn counted(&self, id: &str, language: &str, count: u64) -> String {
+        match self.line(id, language) {
+            Some(line) => line.counted(language, count),
+            None => id.to_string(),
+        }
     }
 
     /// Ids present in the fallback language but missing from
@@ -440,6 +558,131 @@ mod tests {
         let all = sample();
         assert_eq!(all.get("cs").expect("cs").voiced_count(), 1);
         assert_eq!(all.get("en").expect("en").voiced_count(), 0);
+    }
+
+    #[test]
+    fn a_counted_line_picks_the_form_the_language_needs() {
+        // The case that started this: Czech needs a form English has no
+        // equivalent for, and the translator supplies it without the
+        // English file or the code changing.
+        let mut english = Locale::new("en", "English");
+        english.insert(
+            "items",
+            Line::text("{n} items").with_form(Category::One, "{n} item"),
+        );
+        let mut czech = Locale::new("cs", "Čeština");
+        czech.insert(
+            "items",
+            Line::text("{n} věcí")
+                .with_form(Category::One, "{n} věc")
+                .with_form(Category::Few, "{n} věci"),
+        );
+        let mut all = Locales::new("en");
+        all.insert(english);
+        all.insert(czech);
+
+        assert_eq!(all.counted("items", "cs", 1), "1 věc");
+        assert_eq!(all.counted("items", "cs", 3), "3 věci");
+        assert_eq!(all.counted("items", "cs", 5), "5 věcí");
+        assert_eq!(all.counted("items", "cs", 0), "0 věcí");
+
+        assert_eq!(all.counted("items", "en", 1), "1 item");
+        assert_eq!(all.counted("items", "en", 3), "3 items");
+    }
+
+    #[test]
+    fn a_language_that_supplies_no_forms_still_reads_correctly() {
+        let mut japanese = Locale::new("ja", "日本語");
+        japanese.insert("items", Line::text("アイテム{n}個"));
+        let mut all = Locales::new("ja");
+        all.insert(japanese);
+        assert_eq!(all.counted("items", "ja", 1), "アイテム1個");
+        assert_eq!(all.counted("items", "ja", 7), "アイテム7個");
+    }
+
+    #[test]
+    fn a_missing_form_falls_back_to_the_default_wording() {
+        // A half-finished translation must not render blank.
+        let line = Line::text("{n} věcí").with_form(Category::One, "{n} věc");
+        assert_eq!(line.counted("cs", 3), "3 věcí", "few is not filled in yet");
+        assert!(line.is_counted());
+        assert!(!Line::text("plain").is_counted());
+    }
+
+    #[test]
+    fn an_unknown_counted_id_still_shows_itself() {
+        let all = sample();
+        assert_eq!(all.counted("nope", "cs", 3), "nope");
+    }
+
+    #[test]
+    fn voice_and_subtitles_can_be_different_languages() {
+        // Czech subtitles over the English recording, which is a normal
+        // thing for a player to want.
+        let all = sample();
+        let choice = LanguageChoice::new("cs", "en");
+        assert!(!choice.is_matched());
+
+        let spoken = all.spoken("greet", &choice).expect("line");
+        assert_eq!(spoken.text, "Dobrý den.", "subtitle in Czech");
+        assert_eq!(spoken.speaker, Some("Darren"));
+        assert_eq!(spoken.voice, None, "English has no recording here");
+
+        let reversed = all
+            .spoken("greet", &LanguageChoice::new("en", "cs"))
+            .expect("line");
+        assert_eq!(reversed.text, "Hello there.", "subtitle in English");
+        assert_eq!(
+            reversed.voice,
+            Some("voice/cs/greet.ogg"),
+            "audio from Czech"
+        );
+    }
+
+    #[test]
+    fn matched_languages_take_both_from_the_same_place() {
+        let all = sample();
+        let spoken = all
+            .spoken("greet", &LanguageChoice::same("cs"))
+            .expect("line");
+        assert_eq!(spoken.text, "Dobrý den.");
+        assert_eq!(spoken.voice, Some("voice/cs/greet.ogg"));
+        assert!(LanguageChoice::same("cs").is_matched());
+    }
+
+    #[test]
+    fn a_line_the_chosen_text_language_lacks_still_falls_back() {
+        let all = sample();
+        let spoken = all
+            .spoken("urn", &LanguageChoice::new("cs", "cs"))
+            .expect("falls back");
+        assert_eq!(spoken.text, "A cracked urn.");
+    }
+
+    #[test]
+    fn an_unknown_id_has_nothing_to_speak() {
+        let all = sample();
+        assert!(all.spoken("nope", &LanguageChoice::default()).is_none());
+    }
+
+    #[test]
+    fn plural_forms_survive_a_file_round_trip() {
+        let dir = std::env::temp_dir().join("infengine_loca_plural_test");
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut czech = Locale::new("cs", "Čeština");
+        czech.insert(
+            "items",
+            Line::text("{n} věcí")
+                .with_form(Category::One, "{n} věc")
+                .with_form(Category::Few, "{n} věci"),
+        );
+        let path = save_locale(&czech, &dir).expect("save");
+        let back = load_locale(&path).expect("load");
+        assert_eq!(czech, back);
+        assert_eq!(back.get("items").expect("line").counted("cs", 2), "2 věci");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

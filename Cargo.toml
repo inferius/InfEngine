@@ -100,6 +100,10 @@ rapier3d = "0.28"
 gltf = "1"
 netcorehost = "0.18"
 
+# Localisation: official Unicode CLDR plural rules (ICU4X).
+icu_plurals = { version = "2", features = ["compiled_data"] }
+icu_locale_core = "2"
+
 # CLI / signals
 clap = { version = "4", features = ["derive"] }
 ctrlc = "3"
