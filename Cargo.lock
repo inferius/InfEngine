@@ -2355,6 +2355,7 @@ dependencies = [
  "glam 0.30.10",
  "image",
  "infengine_adventure",
+ "ron",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",

@@ -15,6 +15,7 @@ workspace = true
 infengine_adventure = { path = "../infengine_adventure" }
 glam = { workspace = true }
 image = { workspace = true }
+ron = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

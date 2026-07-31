@@ -11,6 +11,7 @@
 //! data into our own format once, offline.
 
 pub mod cps;
+pub mod decompile;
 pub mod emc;
 pub mod format40;
 pub mod format80;
@@ -20,6 +21,7 @@ pub mod pak;
 pub mod palette;
 pub mod wsa;
 pub mod roomdat;
+pub mod vm;
 pub mod voc;
 pub mod xmi;
 
@@ -47,6 +49,8 @@ const ANIM_DIR: &str = "animations";
 const VOICE_DIR: &str = "voice";
 /// Where music goes.
 const MUSIC_DIR: &str = "music";
+/// Where decompiled room logic goes.
+const SCRIPT_DIR: &str = "scripts";
 
 /// Height of the playable area of a screen.
 ///
@@ -355,6 +359,7 @@ pub fn import_pak(
 
         report.rooms += 1;
         collect_lines(&pak, stem_of_entry, &name, language, locale);
+        export_scripts(&pak, stem_of_entry, &name, language, out_dir, report)?;
         debug!(archive = %stem, entry = %entry.name, "imported background");
     }
 
@@ -582,6 +587,59 @@ fn add_entry_points(pak: &pak::Pak<'_>, stem: &str, room: &mut Room) {
             ..Default::default()
         });
     }
+}
+
+/// Decompile a room's bytecode into our own actions and write it out.
+///
+/// The result is deliberately not a runnable copy of Kyrandia's logic:
+/// most calls come through as `Unknown` because the engine's function
+/// table is largely unidentified. Counting them is the point - the
+/// editor can show how much of a room is still to be worked out instead
+/// of presenting a half-translated script as finished.
+fn export_scripts(
+    pak: &pak::Pak<'_>,
+    stem: &str,
+    room_id: &str,
+    language: &str,
+    out_dir: &Path,
+    report: &mut ImportReport,
+) -> Result<(), ImportError> {
+    let Some(data) = pak.get(&format!("{stem}.EMC")) else {
+        return Ok(());
+    };
+    let Ok(parsed) = emc::decode(data, encoding_for(language)) else {
+        return Ok(());
+    };
+    let decompiled = decompile::decompile(room_id, &parsed);
+    if decompiled.is_empty() {
+        return Ok(());
+    }
+
+    let text = ron::ser::to_string_pretty(
+        &decompiled.scripts,
+        ron::ser::PrettyConfig::new().indentor("  ").struct_names(true),
+    )
+    .map_err(|err| ImportError::WriteRoom {
+        path: format!("{SCRIPT_DIR}/{room_id}"),
+        detail: err.to_string(),
+    })?;
+    let path = out_dir.join(SCRIPT_DIR).join(format!("{room_id}.script.ron"));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| ImportError::WriteFile {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+    fs::write(&path, text).map_err(|source| ImportError::WriteFile {
+        path: path.display().to_string(),
+        source,
+    })?;
+
+    report.scripts += decompiled.scripts.len();
+    report.unknown_actions += decompiled.unknown_count();
+    report.scene_links += decompiled.scene_targets.len();
+    report.plumbing_dropped += decompiled.plumbing_dropped;
+    Ok(())
 }
 
 /// Pull a room's dialogue out of its script into the locale.

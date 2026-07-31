@@ -48,6 +48,14 @@ pub struct ImportReport {
     pub unlinked_voice: usize,
     /// Music sequences written as MIDI.
     pub music: usize,
+    /// Scripts decompiled into our own actions.
+    pub scripts: usize,
+    /// Steps inside them that are still untranslated.
+    pub unknown_actions: usize,
+    /// Scene links found in those scripts.
+    pub scene_links: usize,
+    /// Calls dropped as the original engine's rendering plumbing.
+    pub plumbing_dropped: usize,
     pub skipped: Vec<Skipped>,
 }
 
@@ -72,6 +80,10 @@ impl ImportReport {
         self.voice_bytes += other.voice_bytes;
         self.unlinked_voice += other.unlinked_voice;
         self.music += other.music;
+        self.scripts += other.scripts;
+        self.unknown_actions += other.unknown_actions;
+        self.scene_links += other.scene_links;
+        self.plumbing_dropped += other.plumbing_dropped;
         self.skipped.extend(other.skipped);
     }
 
@@ -125,6 +137,13 @@ impl fmt::Display for ImportReport {
         }
         if self.music > 0 {
             writeln!(f, "{} music sequences", self.music)?;
+        }
+        if self.scripts > 0 {
+            writeln!(
+                f,
+                "{} scripts, {} scene links, {} steps still untranslated, {} dropped as engine plumbing",
+                self.scripts, self.scene_links, self.unknown_actions, self.plumbing_dropped
+            )?;
         }
         if self.sprites > 0 || self.animations > 0 {
             writeln!(
