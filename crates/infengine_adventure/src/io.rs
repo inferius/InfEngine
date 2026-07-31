@@ -51,6 +51,11 @@ fn pretty() -> ron::ser::PrettyConfig {
 }
 
 /// Serialize a room to a RON string.
+/// Directory holding room files, relative to the project root.
+pub const ROOM_DIR: &str = "rooms";
+/// Suffix identifying a room file.
+pub const ROOM_SUFFIX: &str = ".room.ron";
+
 pub fn to_string(room: &Room) -> Result<String, RoomIoError> {
     ron::ser::to_string_pretty(room, pretty()).map_err(|source| RoomIoError::Serialize {
         id: room.id.clone(),

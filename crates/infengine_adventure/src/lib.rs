@@ -35,10 +35,12 @@ pub mod interact;
 pub mod io;
 pub mod loca;
 pub mod mask;
+pub mod pack;
 pub mod path;
 pub mod plural;
 pub mod room;
 pub mod scale;
+pub mod sound;
 pub mod script_io;
 pub mod walk;
 
