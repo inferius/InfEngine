@@ -19,6 +19,8 @@ pub struct UiActions {
     pub open_room: Option<usize>,
     /// Animation the user asked to preview.
     pub play_animation: Option<String>,
+    /// Line the user asked to hear.
+    pub play_line: Option<String>,
     pub save: bool,
     pub reload: bool,
     pub fit_view: bool,
@@ -45,6 +47,16 @@ pub struct UiState<'a> {
     pub playback: &'a mut Playback,
     /// Animations this room owns, then the ones tied to no room.
     pub animations: &'a [Animation],
+    /// Languages the project ships, sorted.
+    pub languages: &'a [String],
+    /// Language whose text is shown.
+    pub text_language: &'a mut String,
+    /// Language whose recordings are played. Kept apart because
+    /// checking a translation against the original delivery is a
+    /// normal thing to want.
+    pub voice_language: &'a mut String,
+    /// This room's lines: id, text, and whether audio exists.
+    pub lines: &'a [(String, String, bool)],
 }
 
 impl std::fmt::Debug for UiState<'_> {
@@ -220,6 +232,8 @@ fn inspector_panel(ctx: &egui::Context, state: &mut UiState<'_>, actions: &mut U
                     ui.separator();
                     animation_section(ui, state, actions);
                     ui.separator();
+                    lines_section(ui, state, actions);
+                    ui.separator();
                     selection_section(ui, state, actions);
                     ui.separator();
                     problems_section(ui, state);
@@ -342,6 +356,63 @@ fn animation_section(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut U
     ui.add(egui::Slider::new(&mut state.playback.speed, 0.1..=4.0).text("speed"));
 }
 
+/// The room's dialogue, with the recording for each line.
+fn lines_section(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions) {
+    let voiced = state.lines.iter().filter(|(_, _, has)| *has).count();
+    ui.heading(format!("Lines ({}, {voiced} voiced)", state.lines.len()));
+
+    if state.languages.len() > 1 {
+        ui.horizontal(|ui| {
+            ui.label("text");
+            language_picker(ui, "text_lang", state.languages, state.text_language);
+            ui.label("voice");
+            language_picker(ui, "voice_lang", state.languages, state.voice_language);
+        });
+    }
+
+    if state.lines.is_empty() {
+        ui.label(egui::RichText::new("This room says nothing.").weak());
+        return;
+    }
+
+    egui::ScrollArea::vertical()
+        .id_salt("line_list")
+        .max_height(220.0)
+        .show(ui, |ui| {
+            for (id, text, has_voice) in state.lines {
+                ui.horizontal_top(|ui| {
+                    // A line with no recording gets a disabled button
+                    // rather than none, so the column stays aligned and
+                    // the gap is visible.
+                    if ui
+                        .add_enabled(*has_voice, egui::Button::new("play"))
+                        .clicked()
+                    {
+                        actions.play_line = Some(id.clone());
+                    }
+                    ui.label(egui::RichText::new(text).small())
+                        .on_hover_text(id);
+                });
+            }
+        });
+}
+
+fn language_picker(
+    ui: &mut egui::Ui,
+    salt: &str,
+    languages: &[String],
+    current: &mut String,
+) {
+    egui::ComboBox::from_id_salt(salt)
+        .selected_text(current.clone())
+        .width(60.0)
+        .show_ui(ui, |ui| {
+            for language in languages {
+                ui.selectable_value(current, language.clone(), language);
+            }
+        });
+}
+
 fn selection_section(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions) {
     ui.heading("Selection");
     match state.selection {
@@ -440,6 +511,7 @@ mod tests {
                 .map(|n| std::path::PathBuf::from(format!("a/{n}.room.ron")))
                 .collect(),
             animations: Default::default(),
+            locales: Default::default(),
         }
     }
 

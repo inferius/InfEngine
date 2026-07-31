@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use glam::Vec2;
+use infengine_adventure::loca::LanguageChoice;
 use infengine_adventure::{Animation, Room, find_path};
+use infengine_audio::AudioSystem;
 use infengine_editor::EditorUi;
 use infengine_render::{Renderer, Texture2dHandle, TextureFilter};
 use infengine_window::raw_winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -70,6 +72,13 @@ pub struct Editor {
     room_animations: Vec<Animation>,
     /// Sheet textures, keyed by the image path they came from.
     anim_textures: HashMap<String, Texture2dHandle>,
+    audio: Option<AudioSystem>,
+    languages: Vec<String>,
+    language: LanguageChoice,
+    /// This room's lines: id, text in the chosen language, and
+    /// whether a recording exists in the chosen voice language.
+    lines: Vec<(String, String, bool)>,
+    last_language: LanguageChoice,
     status: String,
 }
 
@@ -114,6 +123,11 @@ impl Editor {
             playback: Playback::default(),
             room_animations: Vec::new(),
             anim_textures: HashMap::new(),
+            audio: AudioSystem::new().ok(),
+            languages: Vec::new(),
+            language: LanguageChoice::default(),
+            lines: Vec::new(),
+            last_language: LanguageChoice::default(),
             status,
         }
     }
@@ -136,6 +150,7 @@ impl Editor {
                 self.view.fit();
                 self.load_textures();
                 self.collect_animations();
+                self.collect_lines();
                 self.status = format!("opened {}", self.room.id);
                 info!(room = %self.room.id, "opened");
             }
@@ -193,6 +208,66 @@ impl Editor {
             .collect();
     }
 
+    /// Gather the open room's dialogue in the chosen languages.
+    fn collect_lines(&mut self) {
+        if self.languages.is_empty() {
+            self.languages = self
+                .project
+                .locales
+                .languages()
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+            if let Some(first) = self.languages.first() {
+                self.language = LanguageChoice::same(first);
+            }
+        }
+        let ids = self
+            .project
+            .lines_for_room(&self.room.id, &self.language.text);
+        self.lines = ids
+            .into_iter()
+            .map(|id| {
+                let text = self
+                    .project
+                    .locales
+                    .text(&id, &self.language.text)
+                    .to_string();
+                let voiced = self
+                    .project
+                    .locales
+                    .line(&id, &self.language.voice)
+                    .is_some_and(|line| line.is_voiced());
+                (id, text, voiced)
+            })
+            .collect();
+    }
+
+    /// Play the recording for a line, in the chosen voice language.
+    fn play_line(&mut self, id: &str) {
+        let Some(path) = self
+            .project
+            .locales
+            .line(id, &self.language.voice)
+            .and_then(|line| line.voice.clone())
+        else {
+            self.status = format!("{id} has no recording");
+            return;
+        };
+        let Some(audio) = self.audio.as_mut() else {
+            self.status = "no audio device".into();
+            return;
+        };
+        let full = self.project.resolve(&path);
+        match audio.load_sound(&full).and_then(|s| audio.play_sound(&s)) {
+            Ok(()) => self.status = format!("playing {path}"),
+            Err(err) => {
+                warn!(%err, "could not play the recording");
+                self.status = err.to_string();
+            }
+        }
+    }
+
     /// Upload a sheet if it is not already loaded, and return it.
     fn animation_texture(&mut self, image: &str) -> Option<Texture2dHandle> {
         if let Some(handle) = self.anim_textures.get(image) {
@@ -246,6 +321,9 @@ impl Editor {
         }
         if let Some(id) = actions.play_animation {
             self.playback.select(id);
+        }
+        if let Some(id) = actions.play_line {
+            self.play_line(&id);
         }
     }
 
@@ -550,6 +628,10 @@ impl AppHandler for Editor {
                 room_filter: &mut self.room_filter,
                 playback: &mut self.playback,
                 animations: &self.room_animations,
+                languages: &self.languages,
+                text_language: &mut self.language.text,
+                voice_language: &mut self.language.voice,
+                lines: &self.lines,
                 content_min: egui::Vec2::ZERO,
                 content_max: egui::Vec2::ZERO,
             };
@@ -567,6 +649,14 @@ impl AppHandler for Editor {
             let _ = renderer.render(|device, queue, encoder, view, size| {
                 ui.render(device, queue, encoder, view, size);
             });
+        }
+
+        // The picker writes straight into the choice, so notice the
+        // change here rather than routing it through an action.
+        let chosen = self.language.clone();
+        if chosen != self.last_language {
+            self.last_language = chosen;
+            self.collect_lines();
         }
 
         self.apply_actions(actions);

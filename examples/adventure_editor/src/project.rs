@@ -9,6 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use infengine_adventure::anim::{self, AnimationSet};
+use infengine_adventure::loca::{self, Locales};
 
 /// Directory inside a project that holds room files.
 pub const ROOMS_DIR: &str = "rooms";
@@ -27,6 +28,8 @@ pub struct Project {
     /// sheet says nothing about its own frame count, so without the
     /// index nothing here can be played at all.
     pub animations: AnimationSet,
+    /// Every language the project ships.
+    pub locales: Locales,
 }
 
 impl Project {
@@ -58,11 +61,39 @@ impl Project {
             .collect();
         rooms.sort();
         let animations = anim::load_index(&root.join(anim::ANIMATION_DIR)).unwrap_or_default();
+        // The fallback is whichever language sorts first, since a
+        // project has no say in the matter until one is configured.
+        let locales = loca::load_dir(&root.join(loca::LOCALE_DIR), "").unwrap_or_default();
         Self {
             root,
             rooms,
             animations,
+            locales,
         }
+    }
+
+    /// Localisation ids belonging to a room, in order.
+    ///
+    /// The importer keys a room's dialogue as `<room>.<index>`, so the
+    /// room's lines are exactly the ids under that prefix. Sorting is
+    /// what the zero padding in the index is for.
+    pub fn lines_for_room(&self, room: &str, language: &str) -> Vec<String> {
+        let Some(locale) = self
+            .locales
+            .get(language)
+            .or_else(|| self.locales.get(&self.locales.fallback))
+        else {
+            return Vec::new();
+        };
+        let prefix = format!("{room}.");
+        let mut ids: Vec<String> = locale
+            .lines
+            .keys()
+            .filter(|id| id.starts_with(&prefix))
+            .cloned()
+            .collect();
+        ids.sort();
+        ids
     }
 
     /// Resolve a layer's image path against the project root.
@@ -111,6 +142,7 @@ mod tests {
             project.animations.is_empty(),
             "a project with no index has no animations"
         );
+        assert!(project.locales.is_empty());
         assert_eq!(Project::room_label(&project.rooms[0]), "a_room");
         assert_eq!(Project::room_label(&project.rooms[1]), "b_room");
         let _ = fs::remove_dir_all(&dir);
@@ -140,6 +172,27 @@ mod tests {
     fn a_missing_directory_opens_empty_instead_of_failing() {
         let project = Project::open(Path::new("definitely/not/here"));
         assert!(project.is_empty());
+    }
+
+    #[test]
+    fn a_rooms_lines_are_the_ids_under_its_prefix() {
+        use infengine_adventure::loca::{Line, Locale};
+
+        let dir = temp_project("lines");
+        let mut english = Locale::new("en", "English");
+        english.insert("hall.00", Line::text("first"));
+        english.insert("hall.01", Line::text("second"));
+        english.insert("crypt.00", Line::text("elsewhere"));
+        loca::save_locale(&english, &dir.join(loca::LOCALE_DIR)).expect("save");
+
+        let project = Project::open(&dir);
+        assert_eq!(project.lines_for_room("hall", "en"), vec!["hall.00", "hall.01"]);
+        assert!(project.lines_for_room("nowhere", "en").is_empty());
+        // A language the project does not have falls back rather than
+        // showing an empty room.
+        assert_eq!(project.lines_for_room("hall", "de").len(), 2);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
