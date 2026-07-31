@@ -337,21 +337,46 @@ pub fn exit_target(label: &str) -> Option<String> {
 
 /// Match a target name against the rooms that were imported.
 ///
-/// Exact match first, then a unique room whose id starts with the
-/// target - `Promenade` legitimately means `PromenadeDay` when that is
-/// the only candidate. An ambiguous prefix resolves to nothing rather
-/// than picking one at random and wiring the map up wrong.
-pub fn resolve_room(target: &str, known: &[String]) -> Option<String> {
+/// Exact match first, then a room whose id starts with the target -
+/// `Promenade` legitimately means `PromenadeBright` when that is the
+/// only candidate.
+///
+/// Where several match, they are almost always the same place at
+/// different times of day: `promenade` is both `promenadebright` and
+/// `promenadedark`, and in Black Mirror 3 both `wcmuseumside_day` and
+/// `wcmuseumside_light`. Walking through a door does not change the
+/// time, so the variant the player is already in wins - which is what
+/// `from` is for. Without it two thirds of Black Mirror 3's doors lead
+/// nowhere.
+///
+/// If nothing shares the source's variant, the exit is left unresolved
+/// rather than pointed at whichever candidate sorted first.
+pub fn resolve_room(target: &str, known: &[String], from: &str) -> Option<String> {
     let lower = target.to_ascii_lowercase();
     if known.contains(&lower) {
         return Some(lower);
     }
-    let mut matches = known.iter().filter(|r| r.starts_with(&lower));
-    let first = matches.next()?;
-    if matches.next().is_some() {
-        return None;
+    let matches: Vec<&String> = known.iter().filter(|r| r.starts_with(&lower)).collect();
+    match matches.len() {
+        0 => None,
+        1 => Some(matches[0].clone()),
+        _ => {
+            let from = from.to_ascii_lowercase();
+            let best = matches
+                .iter()
+                .max_by_key(|candidate| common_suffix(candidate, &from))?;
+            (common_suffix(best, &from) > 0).then(|| (*best).clone())
+        }
     }
-    Some(first.clone())
+}
+
+/// How many characters two ids end with in common.
+fn common_suffix(a: &str, b: &str) -> usize {
+    a.bytes()
+        .rev()
+        .zip(b.bytes().rev())
+        .take_while(|(x, y)| x == y)
+        .count()
 }
 
 #[cfg(test)]
@@ -516,14 +541,14 @@ mod tests {
     #[test]
     fn a_target_resolves_to_an_exact_room_first() {
         let known = vec!["beachbright".to_string(), "beach".to_string()];
-        assert_eq!(resolve_room("Beach", &known).as_deref(), Some("beach"));
+        assert_eq!(resolve_room("Beach", &known, "").as_deref(), Some("beach"));
     }
 
     #[test]
     fn a_unique_prefix_resolves() {
         let known = vec!["promenadeday".to_string(), "beach".to_string()];
         assert_eq!(
-            resolve_room("Promenade", &known).as_deref(),
+            resolve_room("Promenade", &known, "").as_deref(),
             Some("promenadeday")
         );
     }
@@ -533,13 +558,13 @@ mod tests {
         // Wiring the map to whichever one sorted first would be worse
         // than leaving the exit unresolved.
         let known = vec!["beachbright".to_string(), "beachdark".to_string()];
-        assert_eq!(resolve_room("Beach", &known), None);
+        assert_eq!(resolve_room("Beach", &known, ""), None);
     }
 
     #[test]
     fn an_unknown_target_resolves_to_nothing() {
-        assert_eq!(resolve_room("Nowhere", &["beach".to_string()]), None);
-        assert_eq!(resolve_room("Beach", &[]), None);
+        assert_eq!(resolve_room("Nowhere", &["beach".to_string()], ""), None);
+        assert_eq!(resolve_room("Beach", &[], ""), None);
     }
 
     #[test]

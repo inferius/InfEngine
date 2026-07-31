@@ -28,6 +28,8 @@ pub struct ImportReport {
     pub rooms: usize,
     /// Rooms that arrived with a walkable floor traced from a mask.
     pub masks: usize,
+    /// Arrival spots worked out from the doors that lead into a room.
+    pub entry_points: usize,
     /// Images that are pictures rather than rooms: title cards, cutscene
     /// stills, item close-ups.
     pub sprites: usize,
@@ -71,6 +73,7 @@ impl ImportReport {
         self.images += other.images;
         self.rooms += other.rooms;
         self.masks += other.masks;
+        self.entry_points += other.entry_points;
         self.sprites += other.sprites;
         self.animations += other.animations;
         self.frames += other.frames;
@@ -118,6 +121,9 @@ impl fmt::Display for ImportReport {
             "{} archives, {} images, {} rooms ({} with a traced floor)",
             self.archives, self.images, self.rooms, self.masks
         )?;
+        if self.entry_points > 0 {
+            writeln!(f, "{} arrival points from facing doors", self.entry_points)?;
+        }
         if self.languages > 0 {
             writeln!(
                 f,

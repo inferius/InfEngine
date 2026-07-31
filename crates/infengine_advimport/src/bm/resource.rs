@@ -231,17 +231,103 @@ fn split_rows(tiles: Vec<RawTile>) -> Vec<Vec<RawTile>> {
     rows
 }
 
+/// Glue rows back together that were split too eagerly.
+///
+/// The descending-width rule opens a new row whenever a tile is not
+/// narrower than the one before it, which is right for a row that is a
+/// binary decomposition of the width - 1024, 256, 32 - and wrong the
+/// moment a row repeats a width. Those come out as several short rows
+/// in a group, so any run of rows that are the same height and add up
+/// to the full width is one row.
+///
+/// Merging only ever joins rows that were adjacent and equal in height,
+/// so a texture the split got right passes through untouched.
+fn merge_short_rows(rows: Vec<Vec<RawTile>>, width: u32) -> Vec<Vec<RawTile>> {
+    let mut merged: Vec<Vec<RawTile>> = Vec::new();
+    let mut current: Vec<RawTile> = Vec::new();
+    let mut total = 0u32;
+
+    for row in rows {
+        let row_width: u32 = row.iter().map(|t| t.width).sum();
+        let same_height = current
+            .first()
+            .is_none_or(|first| row.first().is_some_and(|t| t.height == first.height));
+
+        if !current.is_empty() && (!same_height || total + row_width > width) {
+            merged.push(std::mem::take(&mut current));
+            total = 0;
+        }
+        total += row_width;
+        current.extend(row);
+        if total >= width {
+            merged.push(std::mem::take(&mut current));
+            total = 0;
+        }
+    }
+    if !current.is_empty() {
+        merged.push(current);
+    }
+    merged
+}
+
+/// Widths the image might be.
+///
+/// The first line of the picture is some number of the leading rows
+/// joined together, and they must all be the same height because they
+/// sit side by side. So the candidates are the running totals of that
+/// opening group - for rows of 288 and 32 at height 256, either 288 or
+/// 320 - and the right one is whichever makes every later row come out
+/// the same.
+fn candidate_widths(rows: &[Vec<RawTile>]) -> Vec<u32> {
+    let Some(height) = rows.first().and_then(|r| r.first()).map(|t| t.height) else {
+        return Vec::new();
+    };
+    let mut widths = Vec::new();
+    let mut total = 0;
+    for row in rows {
+        if row.first().is_none_or(|t| t.height != height) {
+            break;
+        }
+        total += row.iter().map(|t| t.width).sum::<u32>();
+        widths.push(total);
+    }
+    widths
+}
+
 /// Read a texture: locate its tiles and stitch them into one image.
 pub fn read_texture(data: &[u8], after_name: usize) -> Result<Texture, ResourceError> {
-    let rows = split_rows(read_tiles(data, after_name)?);
-    let width: u32 = rows[0].iter().map(|t| t.width).sum();
-    let height: u32 = rows.iter().map(|r| r[0].height).sum();
-    if rows
-        .iter()
-        .any(|r| r.iter().map(|t| t.width).sum::<u32>() != width)
-    {
+    let split = split_rows(read_tiles(data, after_name)?);
+
+    // Try the narrowest first. A wider guess can always be made to
+    // "work" by swallowing two lines of the picture into one, so the
+    // first width that comes out square is the honest one.
+    let mut rows = Vec::new();
+    let mut width = 0;
+    for candidate in candidate_widths(&split) {
+        let merged = merge_short_rows(split.clone(), candidate);
+        if merged
+            .iter()
+            .all(|r| r.iter().map(|t| t.width).sum::<u32>() == candidate)
+        {
+            rows = merged;
+            width = candidate;
+            break;
+        }
+    }
+    if rows.is_empty() {
+        tracing::debug!(
+            rows = ?split
+                .iter()
+                .map(|r| (
+                    r.iter().map(|t| t.width).sum::<u32>(),
+                    r.first().map(|t| t.height).unwrap_or(0),
+                ))
+                .collect::<Vec<_>>(),
+            "no width makes this texture square"
+        );
         return Err(ResourceError::RaggedGrid);
     }
+    let height: u32 = rows.iter().map(|r| r[0].height).sum();
 
     let mut rgba = vec![0u8; width as usize * height as usize * 4];
     let mut oy = 0usize;
@@ -269,6 +355,68 @@ pub fn read_texture(data: &[u8], after_name: usize) -> Result<Texture, ResourceE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn raw(width: u32, height: u32) -> RawTile {
+        RawTile {
+            width,
+            height,
+            rgba: vec![0u8; (width * height * 4) as usize],
+        }
+    }
+
+    fn widths(rows: &[Vec<RawTile>]) -> Vec<Vec<u32>> {
+        rows.iter()
+            .map(|r| r.iter().map(|t| t.width).collect())
+            .collect()
+    }
+
+    #[test]
+    fn a_grid_the_split_got_right_passes_through_untouched() {
+        // The usual shape: each row is a binary decomposition of 1312.
+        let rows = vec![
+            vec![raw(1024, 512), raw(256, 512), raw(32, 512)],
+            vec![raw(1024, 256), raw(256, 256), raw(32, 256)],
+        ];
+        let merged = merge_short_rows(rows, 1312);
+        assert_eq!(
+            widths(&merged),
+            vec![vec![1024, 256, 32], vec![1024, 256, 32]]
+        );
+    }
+
+    #[test]
+    fn rows_cut_in_two_by_a_repeated_width_are_joined_again() {
+        // Two tiles of the same width open a new row under the
+        // descending rule, which is what leaves a texture ragged.
+        let rows = vec![
+            vec![raw(256, 64)],
+            vec![raw(256, 64)],
+            vec![raw(256, 32)],
+            vec![raw(256, 32)],
+        ];
+        let merged = merge_short_rows(rows, 512);
+        assert_eq!(widths(&merged), vec![vec![256, 256], vec![256, 256]]);
+    }
+
+    #[test]
+    fn rows_of_different_heights_are_never_joined() {
+        // Side by side means the same height. Joining across heights
+        // would stitch two different lines of the picture together.
+        let rows = vec![vec![raw(256, 64)], vec![raw(256, 32)]];
+        let merged = merge_short_rows(rows, 512);
+        assert_eq!(widths(&merged), vec![vec![256], vec![256]]);
+    }
+
+    #[test]
+    fn merging_never_overshoots_the_width() {
+        let rows = vec![vec![raw(256, 32)], vec![raw(256, 32)], vec![raw(256, 32)]];
+        let merged = merge_short_rows(rows, 512);
+        assert_eq!(
+            widths(&merged),
+            vec![vec![256, 256], vec![256]],
+            "the third tile starts a new line rather than making one 768 wide"
+        );
+    }
 
     /// Build a DDS blob of one solid colour, uncompressed BGRA32.
     fn tile_blob(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
@@ -401,13 +549,32 @@ mod tests {
     }
 
     #[test]
-    fn a_ragged_grid_is_rejected_rather_than_stitched_wrong() {
-        let mut data = named("x/bad.tga");
+    fn a_repeated_width_does_not_end_the_row() {
+        // 4, 2, 4 all at the same height. The descending rule cuts after
+        // the 2, but one row of ten explains every tile and nothing else
+        // does. Refusing this is what lost 122 of Black Mirror 2's
+        // textures and 254 of Black Mirror 3's.
+        let mut data = named("x/wide.tga");
         let at = data.len();
         data.extend_from_slice(&chained(&[
             tile_blob(4, 2, [1, 0, 0, 255]),
             tile_blob(2, 2, [2, 0, 0, 255]),
             tile_blob(4, 2, [3, 0, 0, 255]),
+        ]));
+        let tex = read_texture(&data, at).expect("one row of ten");
+        assert_eq!((tex.width, tex.height), (10, 2));
+    }
+
+    #[test]
+    fn a_grid_no_width_explains_is_still_rejected() {
+        // The last tile is a different height, so it cannot join the
+        // opening row, and on its own it is four wide against six.
+        let mut data = named("x/bad.tga");
+        let at = data.len();
+        data.extend_from_slice(&chained(&[
+            tile_blob(4, 2, [1, 0, 0, 255]),
+            tile_blob(2, 2, [2, 0, 0, 255]),
+            tile_blob(4, 1, [3, 0, 0, 255]),
         ]));
         assert_eq!(read_texture(&data, at), Err(ResourceError::RaggedGrid));
     }

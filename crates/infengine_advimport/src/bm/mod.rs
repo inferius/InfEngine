@@ -17,6 +17,7 @@
 //! module writes out as PNG.
 
 pub mod dds;
+pub mod entries;
 pub mod meta;
 pub mod resource;
 pub mod scene;
@@ -295,6 +296,8 @@ pub fn import_dir(source: &Path, out_dir: &Path) -> Result<ImportReport, ImportE
     if report.rooms == 0 {
         warn!("no scene parsed; the format may differ in this release");
     }
+
+    report.entry_points = derive_entry_points(out_dir);
     Ok(report)
 }
 
@@ -426,6 +429,50 @@ fn relink_layers(room: &mut Room, written: &HashMap<String, String>) {
 }
 
 /// Convert one scene file into a room.
+/// Second pass: give every room the spots you arrive at.
+///
+/// Reads the rooms back rather than keeping them all in memory during
+/// the first pass. An entry point comes from *another* room's exit, so
+/// it cannot be worked out until every room exists - and re-reading a
+/// few hundred small files costs less than the restructuring would.
+fn derive_entry_points(out_dir: &Path) -> usize {
+    use std::collections::BTreeMap;
+
+    let dir = out_dir.join(ROOM_DIR);
+    let Ok(listing) = fs::read_dir(&dir) else {
+        return 0;
+    };
+    let mut paths: Vec<PathBuf> = listing
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".room.ron"))
+        })
+        .collect();
+    paths.sort();
+
+    let mut rooms: BTreeMap<String, Room> = BTreeMap::new();
+    for path in &paths {
+        match infengine_adventure::load(path) {
+            Ok(room) => {
+                rooms.insert(room.id.clone(), room);
+            }
+            Err(err) => debug!(path = %path.display(), %err, "room not re-read"),
+        }
+    }
+
+    let added = entries::derive(&mut rooms);
+    for room in rooms.values() {
+        let path = dir.join(format!("{}.room.ron", room.id));
+        if let Err(err) = infengine_adventure::save(room, &path) {
+            warn!(path = %path.display(), %err, "could not write the entry points back");
+        }
+    }
+    added
+}
+
 pub fn import_scene(
     path: &Path,
     out_dir: &Path,
@@ -461,7 +508,7 @@ pub fn to_room(parsed: &scene::Scene, game: &GameMeta) -> Room {
         project.and_then(|p| p.number("h")).unwrap_or(0.0),
     );
 
-    let mut room = Room::new(id, size);
+    let mut room = Room::new(id.clone(), size);
     room.name = parsed.name.clone();
 
     for element in parsed.of_kind("Layer") {
@@ -498,7 +545,7 @@ pub fn to_room(parsed: &scene::Scene, game: &GameMeta) -> Room {
         let is_exit = found.is_some_and(|m| m.kind == meta::HotSpotKind::Exit);
         if is_exit {
             let target = meta::exit_target(label)
-                .and_then(|t| meta::resolve_room(&t, &game.rooms))
+                .and_then(|t| meta::resolve_room(&t, &game.rooms, &id))
                 .unwrap_or_default();
             room.exits.push(Exit {
                 id: label.to_string(),
