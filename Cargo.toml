@@ -18,6 +18,7 @@ members = [
     "crates/infengine_blueprint",
     "crates/infengine_voxel",
     "crates/infengine_net",
+    "crates/infengine_opl",
     "crates/infengine_particles",
     "crates/infengine_master_server",
     "crates/infengine_sdk",
