@@ -157,6 +157,10 @@ impl Element {
 pub struct Scene {
     pub name: String,
     pub elements: Vec<Element>,
+    /// Byte offset where attribute scanning stopped. Everything after
+    /// this is the resource section, so the texture reader starts there
+    /// instead of re-scanning the graph.
+    pub graph_end: usize,
 }
 
 impl Scene {
@@ -236,11 +240,13 @@ pub fn parse(data: &[u8]) -> Result<Scene, SceneError> {
     let mut scene = Scene {
         name,
         elements: Vec::new(),
+        graph_end: atoms.graph_start,
     };
 
     // Vertex under construction: `Point` opens one, and the `x`/`y` that
     // follow belong to it rather than to the element itself.
     let mut pending: Option<(Option<f32>, Option<f32>)> = None;
+    let mut last_attribute: Option<usize> = None;
     let mut i = atoms.graph_start;
 
     while i + 12 <= data.len() {
@@ -270,6 +276,7 @@ pub fn parse(data: &[u8]) -> Result<Scene, SceneError> {
             let value = f32::from_bits(raw);
             store(&mut scene, &mut pending, atom, Value::Number(value));
             i += 12;
+            last_attribute = Some(i);
             continue;
         }
 
@@ -286,6 +293,7 @@ pub fn parse(data: &[u8]) -> Result<Scene, SceneError> {
                 Value::Text(text.to_string()),
             );
             i += 12 + len as usize;
+            last_attribute = Some(i);
             continue;
         }
 
@@ -303,6 +311,7 @@ pub fn parse(data: &[u8]) -> Result<Scene, SceneError> {
     }
 
     flush_point(&mut scene, &mut pending);
+    scene.graph_end = last_attribute.unwrap_or(atoms.graph_start);
     Ok(scene)
 }
 

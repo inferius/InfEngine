@@ -12,13 +12,15 @@
 //! | `Layer` scroll | [`LayerKind::Parallax`] |
 //! | `HotSpot` + `Point` list | [`Hotspot`] with a polygon shape |
 //!
-//! What this backend does *not* yet produce: pixels. Layer images are
-//! named as `.tga` but stored as DDS inside the same `.dat`, and pulling
-//! them out is a separate step. Rooms therefore import with correct
-//! geometry and references, and the images resolve once that lands.
+//! Art comes out too: the tail of each `.dat` holds the scene's textures
+//! as tiled DDS blobs, which [`resource`] stitches back together and this
+//! module writes out as PNG.
 
+pub mod dds;
+pub mod resource;
 pub mod scene;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -69,7 +71,7 @@ pub fn import_dir(source: &Path, out_dir: &Path) -> Result<ImportReport, ImportE
 
     let mut report = ImportReport::default();
     for path in &scenes {
-        match import_scene(path, out_dir) {
+        match import_scene(path, out_dir, &mut report) {
             Ok(()) => {
                 report.archives += 1;
                 report.rooms += 1;
@@ -93,8 +95,139 @@ pub fn import_dir(source: &Path, out_dir: &Path) -> Result<ImportReport, ImportE
     Ok(report)
 }
 
+/// Subdirectory that receives decoded images.
+const IMAGE_DIR: &str = "images";
+
+/// Extract every texture a scene holds and write it as a PNG.
+///
+/// Returns a map from the lowercased file name a `Layer` refers to
+/// (`s097_lighthouseday.tga`) to the project-relative PNG path we wrote.
+/// A texture that does not decode is recorded and skipped: one broken
+/// resource must not cost the whole scene.
+fn export_textures(
+    data: &[u8],
+    parsed: &scene::Scene,
+    scene_name: &str,
+    out_dir: &Path,
+    report: &mut ImportReport,
+) -> HashMap<String, String> {
+    let declared = declared_sizes(parsed);
+    let mut written = HashMap::new();
+    for found in resource::find_resources(data, parsed.graph_end) {
+        let key = found.file_name();
+        if written.contains_key(&key) {
+            continue;
+        }
+        let texture = match resource::read_texture(data, found.after_name) {
+            Ok(texture) => texture,
+            Err(err) => {
+                debug!(resource = %found.path, %err, "texture skipped");
+                report.skipped.push(Skipped {
+                    name: found.path.clone(),
+                    reason: err.to_string(),
+                });
+                continue;
+            }
+        };
+        // Tiles pad the texture out to a sum of powers of two, so the
+        // stored image is wider and taller than the art. Crop to what the
+        // layer declares; without this every background carries a strip
+        // of undefined padding along its right and bottom edges.
+        let texture = match declared.get(&key) {
+            Some(&(w, h)) => texture.cropped(w, h),
+            None => texture,
+        };
+        let stem = key.rsplit_once('.').map(|(s, _)| s).unwrap_or(&key);
+        let relative = format!("{IMAGE_DIR}/{scene_name}/{stem}.png");
+        let path = out_dir.join(&relative);
+        if let Err(err) = write_png(&path, &texture) {
+            warn!(%err, "could not write texture");
+            report.skipped.push(Skipped {
+                name: relative.clone(),
+                reason: err.to_string(),
+            });
+            continue;
+        }
+        report.images += 1;
+        written.insert(key, relative);
+    }
+    written
+}
+
+/// Size each layer declares for its image, keyed by lowercased file
+/// name. A sheet shared by several layers keeps the largest, so nothing
+/// is cropped away from a neighbour.
+fn declared_sizes(parsed: &scene::Scene) -> HashMap<String, (u32, u32)> {
+    let mut out: HashMap<String, (u32, u32)> = HashMap::new();
+    for element in parsed.of_kind("Layer") {
+        let Some(file) = element.text("file") else {
+            continue;
+        };
+        let (Some(w), Some(h)) = (element.number("w"), element.number("h")) else {
+            continue;
+        };
+        if w <= 0.0 || h <= 0.0 {
+            continue;
+        }
+        let key = file
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(file)
+            .to_ascii_lowercase();
+        let size = (w as u32, h as u32);
+        out.entry(key)
+            .and_modify(|slot| *slot = (slot.0.max(size.0), slot.1.max(size.1)))
+            .or_insert(size);
+    }
+    out
+}
+
+fn write_png(path: &Path, texture: &resource::Texture) -> Result<(), ImportError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| ImportError::WriteFile {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+    let buffer =
+        image::RgbaImage::from_raw(texture.width, texture.height, texture.rgba.clone())
+            .ok_or_else(|| ImportError::Format {
+                path: path.display().to_string(),
+                detail: format!(
+                    "{}x{} does not match {} bytes",
+                    texture.width,
+                    texture.height,
+                    texture.rgba.len()
+                ),
+            })?;
+    buffer.save(path).map_err(|source| ImportError::EncodeImage {
+        path: path.display().to_string(),
+        detail: source.to_string(),
+    })
+}
+
+/// Point each layer at the PNG we wrote for it, cropping the padded
+/// texture down to the size the layer declares.
+fn relink_layers(room: &mut Room, written: &HashMap<String, String>) {
+    for layer in &mut room.layers {
+        let key = layer
+            .image
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&layer.image)
+            .to_ascii_lowercase();
+        if let Some(relative) = written.get(&key) {
+            layer.image = relative.clone();
+        }
+    }
+}
+
 /// Convert one scene file into a room.
-pub fn import_scene(path: &Path, out_dir: &Path) -> Result<(), ImportError> {
+pub fn import_scene(
+    path: &Path,
+    out_dir: &Path,
+    report: &mut ImportReport,
+) -> Result<(), ImportError> {
     let bytes = fs::read(path).map_err(|err| ImportError::ReadFile {
         path: path.display().to_string(),
         source: err,
@@ -104,7 +237,9 @@ pub fn import_scene(path: &Path, out_dir: &Path) -> Result<(), ImportError> {
         detail: err.to_string(),
     })?;
 
-    let room = to_room(&parsed);
+    let mut room = to_room(&parsed);
+    let written = export_textures(&bytes, &parsed, &room.id, out_dir, report);
+    relink_layers(&mut room, &written);
     let file_name = format!("{}.room.ron", room.id);
     let room_path = out_dir.join(ROOM_DIR).join(file_name);
     infengine_adventure::save(&room, &room_path).map_err(|err| ImportError::WriteRoom {
@@ -214,6 +349,7 @@ mod tests {
 
     fn sample_scene() -> Scene {
         Scene {
+            graph_end: 0,
             name: "LighthouseDay".into(),
             elements: vec![
                 element(
@@ -276,6 +412,7 @@ mod tests {
     #[test]
     fn a_scene_without_a_project_node_still_imports() {
         let scene = Scene {
+            graph_end: 0,
             name: "Bare".into(),
             elements: Vec::new(),
         };
@@ -326,6 +463,7 @@ mod tests {
     #[test]
     fn a_layer_without_an_image_is_dropped() {
         let scene = Scene {
+            graph_end: 0,
             name: "S".into(),
             elements: vec![element(
                 "Layer",
@@ -359,6 +497,7 @@ mod tests {
         assert!(hotspot_shape(&[]).is_none());
         assert!(hotspot_shape(&[Vec2::new(1.0, 1.0)]).is_none());
         let scene = Scene {
+            graph_end: 0,
             name: "S".into(),
             elements: vec![element(
                 "HotSpot",
