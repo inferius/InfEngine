@@ -28,6 +28,13 @@ pub struct ImportReport {
     pub rooms: usize,
     /// Rooms that arrived with a walkable floor traced from a mask.
     pub masks: usize,
+    /// Images that are pictures rather than rooms: title cards, cutscene
+    /// stills, item close-ups.
+    pub sprites: usize,
+    /// Animations written as sprite sheets.
+    pub animations: usize,
+    /// Frames across those animations.
+    pub frames: usize,
     pub skipped: Vec<Skipped>,
 }
 
@@ -43,6 +50,9 @@ impl ImportReport {
         self.images += other.images;
         self.rooms += other.rooms;
         self.masks += other.masks;
+        self.sprites += other.sprites;
+        self.animations += other.animations;
+        self.frames += other.frames;
         self.skipped.extend(other.skipped);
     }
 
@@ -77,6 +87,13 @@ impl fmt::Display for ImportReport {
             "{} archives, {} images, {} rooms ({} with a traced floor)",
             self.archives, self.images, self.rooms, self.masks
         )?;
+        if self.sprites > 0 || self.animations > 0 {
+            writeln!(
+                f,
+                "{} pictures that are not rooms, {} animations ({} frames)",
+                self.sprites, self.animations, self.frames
+            )?;
+        }
         if self.skipped.is_empty() {
             return write!(f, "nothing skipped");
         }
@@ -121,6 +138,7 @@ mod tests {
             rooms: 2,
             masks: 1,
             skipped: vec![skip("x", "bad")],
+            ..Default::default()
         };
         a.absorb(ImportReport {
             archives: 3,
@@ -128,6 +146,7 @@ mod tests {
             rooms: 4,
             masks: 3,
             skipped: vec![skip("y", "worse")],
+            ..Default::default()
         });
         assert_eq!(a.archives, 4);
         assert_eq!(a.images, 6);
@@ -163,6 +182,7 @@ mod tests {
                 skip("a", "not a full screen (12 pixels)"),
                 skip("b", "not a full screen (48 pixels)"),
             ],
+            ..Default::default()
         };
         let text = report.to_string();
         assert!(text.contains("2 archives, 5 images, 5 rooms (5 with a traced floor)"));
@@ -180,6 +200,7 @@ mod tests {
             rooms: 1,
             masks: 1,
             skipped: Vec::new(),
+            ..Default::default()
         };
         assert!(report.to_string().contains("nothing skipped"));
     }

@@ -92,6 +92,29 @@ fn copy_within(
 /// its uncompressed size), and doubles as the guard against a corrupt
 /// stream allocating without bound.
 pub fn decompress(src: &[u8], expected_size: usize) -> Result<Vec<u8>, Format80Error> {
+    let out = run(src, expected_size)?;
+    if out.len() != expected_size {
+        return Err(Format80Error::OutputTruncated {
+            got: out.len(),
+            expected: expected_size,
+        });
+    }
+    Ok(out)
+}
+
+/// Decompress until the stream ends, producing at most `limit` bytes.
+///
+/// Some containers do not record the decompressed size - a WSA frame is
+/// a delta whose length is whatever it turns out to be - so the caller
+/// supplies only an upper bound and takes what comes out. A short result
+/// is legitimate here rather than an error.
+pub fn decompress_up_to(src: &[u8], limit: usize) -> Result<Vec<u8>, Format80Error> {
+    run(src, limit)
+}
+
+/// The shared decoding loop. Stops at the end marker, at the end of the
+/// input, or once `limit` bytes have been produced.
+fn run(src: &[u8], expected_size: usize) -> Result<Vec<u8>, Format80Error> {
     let mut out: Vec<u8> = Vec::with_capacity(expected_size);
     let mut pos = 0usize;
 
@@ -169,12 +192,6 @@ pub fn decompress(src: &[u8], expected_size: usize) -> Result<Vec<u8>, Format80E
         }
     }
 
-    if out.len() != expected_size {
-        return Err(Format80Error::OutputTruncated {
-            got: out.len(),
-            expected: expected_size,
-        });
-    }
     Ok(out)
 }
 
@@ -290,6 +307,24 @@ mod tests {
         let mut stream = literal(b"AB");
         stream.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
         assert_eq!(decompress(&stream, 2).expect("decode"), b"AB");
+    }
+
+    #[test]
+    fn decompress_up_to_accepts_a_short_result() {
+        // A WSA frame's delta has no declared size, so stopping early is
+        // the normal case rather than a truncation.
+        let mut stream = literal(b"AB");
+        stream.push(0x80);
+        assert_eq!(decompress_up_to(&stream, 4096).expect("decode"), b"AB");
+    }
+
+    #[test]
+    fn decompress_up_to_still_honours_its_limit() {
+        let stream = vec![0xFE, 0xFF, 0xFF, 0x00];
+        assert!(matches!(
+            decompress_up_to(&stream, 16),
+            Err(Format80Error::OutputOverflow { .. })
+        ));
     }
 
     #[test]

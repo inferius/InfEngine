@@ -11,10 +11,12 @@
 //! data into our own format once, offline.
 
 pub mod cps;
+pub mod format40;
 pub mod format80;
 pub mod msc;
 pub mod pak;
 pub mod palette;
+pub mod wsa;
 pub mod roomdat;
 
 use std::fs;
@@ -30,6 +32,11 @@ use palette::Palette;
 
 /// Subdirectory of the output that receives decoded images.
 const IMAGE_DIR: &str = "images";
+/// Where images that are not room backgrounds go: title cards, cutscene
+/// stills, item close-ups.
+const SPRITE_DIR: &str = "sprites";
+/// Where animation sheets go.
+const ANIM_DIR: &str = "animations";
 /// Subdirectory that receives room stubs.
 const ROOM_DIR: &str = "rooms";
 
@@ -158,6 +165,12 @@ pub fn import_pak(
         .map(|s| s.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_else(|| "unnamed".into());
 
+    let names: Vec<String> = pak
+        .entries()
+        .iter()
+        .map(|e| e.name.to_ascii_uppercase())
+        .collect();
+
     for (index, entry) in pak.with_extension("CPS") {
         let Some(data) = pak.data_at(index) else {
             continue;
@@ -191,9 +204,27 @@ pub fn import_pak(
         let room_palette = room_override(&pak, stem_of_entry, fallback);
         let rgba = image.to_rgba(room_palette.as_ref().or(fallback));
         let name = entry.name.to_ascii_lowercase().replace(".cps", "");
-        let image_rel = format!("{IMAGE_DIR}/{name}.png");
-        let image_path = out_dir.join(&image_rel);
-        write_png(&image_path, image.width, image.height, &rgba)?;
+
+        // A9.3: only a real room gets a room file. The game marks one by
+        // shipping the whole set beside the picture - the .DAT with its
+        // palette and mask name, the .MSC walk mask, the .EMC script.
+        // Title cards, cutscene stills and item close-ups are pictures
+        // with none of those, and turning them into rooms filled the
+        // editor's list with things nobody can walk around in.
+        let is_room = [".DAT", ".MSC", ".EMC"]
+            .iter()
+            .all(|ext| names.iter().any(|n| *n == format!("{stem_of_entry}{ext}")));
+
+        let dir = if is_room { IMAGE_DIR } else { SPRITE_DIR };
+        let image_rel = format!("{dir}/{name}.png");
+        write_png(&out_dir.join(&image_rel), image.width, image.height, &rgba)?;
+        report.images += 1;
+
+        if !is_room {
+            report.sprites += 1;
+            debug!(archive = %stem, entry = %entry.name, "imported picture, not a room");
+            continue;
+        }
 
         let mut room = background_room(&name, image.width, image.height, &image_rel);
         // A5.2: the game's own walkable region, so an imported room
@@ -208,11 +239,51 @@ pub fn import_pak(
             detail: source.to_string(),
         })?;
 
-        report.images += 1;
         report.rooms += 1;
         debug!(archive = %stem, entry = %entry.name, "imported background");
     }
 
+    export_animations(&pak, &stem, fallback, out_dir, report)?;
+
+    Ok(())
+}
+
+/// Decode every `.WSA` in the archive and write it as a sprite sheet.
+///
+/// Frames are laid out left to right in one PNG, which is what both an
+/// editor and a sprite renderer want; palette index 0 becomes
+/// transparent, since that is what the animations key their background
+/// on.
+fn export_animations(
+    pak: &pak::Pak<'_>,
+    archive: &str,
+    fallback: Option<&Palette>,
+    out_dir: &Path,
+    report: &mut ImportReport,
+) -> Result<(), ImportError> {
+    for (index, entry) in pak.with_extension("WSA") {
+        let Some(data) = pak.data_at(index) else {
+            continue;
+        };
+        let animation = match wsa::decode(data) {
+            Ok(animation) => animation,
+            Err(err) => {
+                debug!(entry = %entry.name, %err, "WSA did not decode");
+                report.skipped.push(Skipped {
+                    name: entry.name.clone(),
+                    reason: err.to_string(),
+                });
+                continue;
+            }
+        };
+        let (width, height, rgba) = animation.to_sheet_rgba(fallback);
+        let name = entry.name.to_ascii_lowercase().replace(".wsa", "");
+        let path = out_dir.join(format!("{ANIM_DIR}/{archive}_{name}.png"));
+        write_png(&path, width, height, &rgba)?;
+        report.images += 1;
+        report.animations += 1;
+        report.frames += animation.frame_count();
+    }
     Ok(())
 }
 
