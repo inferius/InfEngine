@@ -25,6 +25,8 @@ pub struct PlayActions {
     pub run_script: Option<String>,
     /// The game window was asked for.
     pub open_game: bool,
+    /// The screen editor was asked for.
+    pub open_screens: bool,
 }
 
 /// Draft text the panel keeps between frames.
@@ -61,6 +63,9 @@ pub fn panel(
                     .clicked()
                 {
                     actions.open_game = true;
+                }
+                if ui.button("screens...").clicked() {
+                    actions.open_screens = true;
                 }
                 if ui
                     .button("reset")

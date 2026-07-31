@@ -27,6 +27,7 @@ use crate::sheet::SheetDraft;
 use crate::ui::{self, UiActions, UiState};
 use crate::ui_game::{self, GameUi};
 use crate::ui_play::{self, PlayDraft};
+use crate::ui_screen::{self, ScreenUi};
 
 /// How close, in screen pixels, the cursor must be to grab a vertex.
 const GRAB_PIXELS: f32 = 7.0;
@@ -89,6 +90,7 @@ pub struct Editor {
     /// The sheet being cut into frames, if any.
     sheet: Option<SheetDraft>,
     game_ui: GameUi,
+    screen_ui: ScreenUi,
     status: String,
 }
 
@@ -110,6 +112,18 @@ impl Editor {
         let game_ui = GameUi {
             manifest: infengine_adventure::pack::GameManifest::load(&project.root)
                 .unwrap_or_default(),
+            ..Default::default()
+        };
+        let (screens, screen_errors) =
+            infengine_adventure::screen::load_dir(&project.root.join(
+                infengine_adventure::screen::SCREEN_DIR,
+            ));
+        for err in &screen_errors {
+            warn!(%err, "a screen did not load");
+        }
+        let screen_ui = ScreenUi {
+            selected: (!screens.is_empty()).then_some(0),
+            screens,
             ..Default::default()
         };
         let status = if project.is_empty() {
@@ -150,6 +164,7 @@ impl Editor {
             play_draft: PlayDraft::default(),
             sheet: None,
             game_ui,
+            screen_ui,
             status,
         }
     }
@@ -393,6 +408,88 @@ impl Editor {
         }
     }
 
+    /// Apply what the screen editor asked for.
+    fn apply_screen_actions(&mut self, actions: ui_screen::ScreenActions) {
+        use infengine_adventure::screen;
+
+        let dir = self.project.root.join(screen::SCREEN_DIR);
+        if let Some(id) = actions.create {
+            let size = if self.room.size.x > 0.0 {
+                self.room.size
+            } else {
+                Vec2::new(320.0, 200.0)
+            };
+            self.screen_ui.screens.push(screen::Screen::new(id, size));
+            self.screen_ui.screens.sort_by(|a, b| a.id.cmp(&b.id));
+            self.screen_ui.selected_widget = None;
+            self.screen_ui.dirty = true;
+        }
+        if actions.save
+            && let Some(current) = self.screen_ui.current().cloned()
+        {
+            self.screen_ui.status = match screen::save(&current, &dir) {
+                Ok(()) => {
+                    self.screen_ui.dirty = false;
+                    format!("saved {}", current.id)
+                }
+                Err(err) => err.to_string(),
+            };
+        }
+        if actions.reload {
+            let (screens, errors) = screen::load_dir(&dir);
+            self.screen_ui.selected = (!screens.is_empty()).then_some(0);
+            self.screen_ui.screens = screens;
+            self.screen_ui.selected_widget = None;
+            self.screen_ui.dirty = false;
+            self.screen_ui.status = if errors.is_empty() {
+                "reloaded".into()
+            } else {
+                errors[0].to_string()
+            };
+        }
+        if let Some(fired) = actions.fired {
+            self.fire_screen_action(fired);
+        }
+    }
+
+    /// Carry out what a previewed button does.
+    fn fire_screen_action(&mut self, action: infengine_adventure::screen::ScreenAction) {
+        use infengine_adventure::screen::ScreenAction;
+
+        match action {
+            ScreenAction::NewGame => {
+                let start = self.game_ui.manifest.start_room.clone();
+                self.screen_ui.preview = None;
+                if start.is_empty() {
+                    self.status = "no starting room set - see the game window".into();
+                    return;
+                }
+                self.play.game.state = Default::default();
+                self.enter_room_by_id(&start, None);
+                self.start_play();
+            }
+            ScreenAction::Resume | ScreenAction::Close => {
+                self.screen_ui.preview = None;
+            }
+            ScreenAction::Open { screen } => {
+                if !self.screen_ui.show(&screen) {
+                    self.status = format!("no screen called {screen}");
+                }
+            }
+            // The editor is not the thing that quits; saying so is more
+            // use than doing nothing silently.
+            ScreenAction::Quit => self.status = "quit (ignored in the editor)".into(),
+            ScreenAction::SetTextLanguage { language } => self.language.text = language,
+            ScreenAction::SetVoiceLanguage { language } => self.language.voice = language,
+            ScreenAction::RunScript { script } => {
+                if !self.play.game.run_script(&script) {
+                    self.status = format!("no script called {script}");
+                }
+            }
+            ScreenAction::None => {}
+        }
+    }
+
     /// Apply what the game window asked for.
     fn apply_game_actions(&mut self, actions: ui_game::GameActions) {
         use infengine_adventure::pack;
@@ -454,6 +551,9 @@ impl Editor {
         }
         if actions.open_game {
             self.game_ui.open = true;
+        }
+        if actions.open_screens {
+            self.screen_ui.open = true;
         }
     }
 
@@ -852,8 +952,14 @@ impl AppHandler for Editor {
         // Build the UI, then apply what it asked for after the borrow of
         // the room ends.
         let mut actions = UiActions::default();
+        // Snapshotted before the UI borrows the language pickers: the
+        // screen preview only reads it, but the borrow checker cannot
+        // see that through the closure.
+        let language = self.language.clone();
+        let locales = self.project.locales.clone();
         let mut play_actions = ui_play::PlayActions::default();
         let mut game_actions = ui_game::GameActions::default();
+        let mut screen_actions = ui_screen::ScreenActions::default();
         let mut content = None;
         if let Some(ui) = self.ui.as_mut() {
             let mut state = UiState {
@@ -888,9 +994,15 @@ impl AppHandler for Editor {
                 .map(|path| Project::room_label(path))
                 .collect();
             let languages = self.languages.clone();
+            let screen_ui = &mut self.screen_ui;
             ui.run(window.raw(), |ctx| {
                 play_actions = ui_play::panel(ctx, play, play_draft, &room_id);
                 game_actions = ui_game::window(ctx, game_ui, &room_names, &languages);
+                screen_actions = ui_screen::window(ctx, screen_ui, &languages);
+                if let Some(screen) = screen_ui.preview_screen() {
+                    screen_actions.fired =
+                        ui_screen::preview(ctx, screen, &locales, &language);
+                }
                 actions = ui::build(ctx, &mut state);
             });
             content = Some((state.content_min, state.content_max));
@@ -917,5 +1029,6 @@ impl AppHandler for Editor {
         self.apply_actions(actions);
         self.apply_play_actions(play_actions);
         self.apply_game_actions(game_actions);
+        self.apply_screen_actions(screen_actions);
     }
 }
