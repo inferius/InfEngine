@@ -1,0 +1,17 @@
+[package]
+name = "infengine_advgraph"
+description = "Adventure scripts as blueprint graphs: converts InfEngine's adventure Action IR to and from an editable node graph."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+glam = { workspace = true }
+infengine_adventure = { path = "../infengine_adventure" }
+infengine_blueprint = { path = "../infengine_blueprint" }

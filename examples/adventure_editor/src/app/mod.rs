@@ -29,6 +29,7 @@ use crate::project::Project;
 use crate::sheet::SheetDraft;
 use crate::ui::{self, UiActions, UiState};
 use crate::ui_game::{self, GameUi};
+use crate::ui_graph::{self, GraphUi};
 use crate::ui_play::{self, PlayDraft};
 use crate::ui_screen::{self, ScreenUi};
 
@@ -94,6 +95,7 @@ pub struct Editor {
     sheet: Option<SheetDraft>,
     game_ui: GameUi,
     screen_ui: ScreenUi,
+    graph_ui: GraphUi,
     status: String,
 }
 
@@ -168,6 +170,7 @@ impl Editor {
             sheet: None,
             game_ui,
             screen_ui,
+            graph_ui: GraphUi::default(),
             status,
         }
     }
@@ -411,6 +414,71 @@ impl Editor {
         }
     }
 
+    /// Put a script on the graph canvas.
+    fn open_graph(&mut self, id: &str) {
+        match self.project.scripts.get(id) {
+            Some(script) => self.graph_ui.load(script),
+            None => self.graph_ui.status = format!("no script called {id}"),
+        }
+    }
+
+    /// Apply what the script graph asked for.
+    fn apply_graph_actions(&mut self, actions: ui_graph::GraphActions) {
+        if let Some(id) = actions.open_script {
+            self.open_graph(&id);
+        }
+        if actions.save {
+            self.save_graph();
+        }
+        if actions.run
+            && let Some(script) = self.graph_ui.to_script()
+        {
+            // Straight from the canvas, unsaved: trying an edit should
+            // not mean committing to it first.
+            self.play.game.runner.start(&script);
+            self.play.note(format!("run {} from the canvas", script.id));
+            self.graph_ui.status = format!("running {}", script.id);
+        }
+    }
+
+    /// Write the canvas back out as a script file.
+    ///
+    /// Scripts are grouped per room on disk, so saving one means
+    /// rewriting the file it belongs to with every script in it.
+    fn save_graph(&mut self) {
+        use infengine_adventure::script_io;
+
+        let Some(script) = self.graph_ui.to_script() else {
+            return;
+        };
+        let id = script.id.clone();
+        self.project.scripts.insert(id.clone(), script);
+
+        let room = id.split_once('.').map(|(room, _)| room).unwrap_or(&id).to_string();
+        let mut group: Vec<_> = self
+            .project
+            .scripts
+            .values()
+            .filter(|script| script.id.starts_with(&format!("{room}.")) || script.id == room)
+            .cloned()
+            .collect();
+        group.sort_by(|a, b| a.id.cmp(&b.id));
+
+        let dir = self.project.root.join(script_io::SCRIPT_DIR);
+        self.graph_ui.status = match script_io::save_room(&room, &group, &dir) {
+            Ok(()) => {
+                self.graph_ui.dirty = false;
+                // The game holds its own copy, so it has to be told.
+                self.play.game = infengine_adventure::Game::new(self.project.scripts.clone());
+                format!("saved {} scripts to {room}", group.len())
+            }
+            Err(err) => {
+                warn!(%err, "could not save the script");
+                err.to_string()
+            }
+        };
+    }
+
     /// Apply what the game window asked for.
     fn apply_game_actions(&mut self, actions: ui_game::GameActions) {
         use infengine_adventure::pack;
@@ -475,6 +543,12 @@ impl Editor {
         }
         if actions.open_screens {
             self.screen_ui.open = true;
+        }
+        if let Some(id) = actions.open_graph {
+            self.graph_ui.open = true;
+            if !id.is_empty() {
+                self.open_graph(&id);
+            }
         }
     }
 
@@ -737,6 +811,7 @@ impl AppHandler for Editor {
         let mut play_actions = ui_play::PlayActions::default();
         let mut game_actions = ui_game::GameActions::default();
         let mut screen_actions = ui_screen::ScreenActions::default();
+        let mut graph_actions = ui_graph::GraphActions::default();
         let mut content = None;
         if let Some(ui) = self.ui.as_mut() {
             let mut state = UiState {
@@ -772,10 +847,17 @@ impl AppHandler for Editor {
                 .collect();
             let languages = self.languages.clone();
             let screen_ui = &mut self.screen_ui;
+            let graph_ui = &mut self.graph_ui;
+            let script_ids: Vec<String> = {
+                let mut ids: Vec<String> = state.project.scripts.keys().cloned().collect();
+                ids.sort();
+                ids
+            };
             ui.run(window.raw(), |ctx| {
                 play_actions = ui_play::panel(ctx, play, play_draft, &room_id);
                 game_actions = ui_game::window(ctx, game_ui, &room_names, &languages);
                 screen_actions = ui_screen::window(ctx, screen_ui, &languages);
+                graph_actions = ui_graph::window(ctx, graph_ui, &script_ids);
                 if let Some(screen) = screen_ui.preview_screen() {
                     screen_actions.fired =
                         ui_screen::preview(ctx, screen, &locales, &language);
@@ -807,5 +889,6 @@ impl AppHandler for Editor {
         self.apply_play_actions(play_actions);
         self.apply_game_actions(game_actions);
         self.apply_screen_actions(screen_actions);
+        self.apply_graph_actions(graph_actions);
     }
 }

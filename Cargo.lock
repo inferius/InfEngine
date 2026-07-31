@@ -32,7 +32,9 @@ dependencies = [
  "egui",
  "glam 0.30.10",
  "infengine_adventure",
+ "infengine_advgraph",
  "infengine_audio",
+ "infengine_blueprint",
  "infengine_editor",
  "infengine_render",
  "infengine_window",
@@ -2345,6 +2347,15 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "infengine_advgraph"
+version = "0.0.1"
+dependencies = [
+ "glam 0.30.10",
+ "infengine_adventure",
+ "infengine_blueprint",
 ]
 
 [[package]]

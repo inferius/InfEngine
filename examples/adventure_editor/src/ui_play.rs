@@ -27,6 +27,8 @@ pub struct PlayActions {
     pub open_game: bool,
     /// The screen editor was asked for.
     pub open_screens: bool,
+    /// The script graph was asked for, optionally on a script.
+    pub open_graph: Option<String>,
 }
 
 /// Draft text the panel keeps between frames.
@@ -66,6 +68,9 @@ pub fn panel(
                 }
                 if ui.button("screens...").clicked() {
                     actions.open_screens = true;
+                }
+                if ui.button("graph...").clicked() {
+                    actions.open_graph = Some(String::new());
                 }
                 if ui
                     .button("reset")
@@ -152,6 +157,9 @@ fn scripts_section(
                         .clicked()
                     {
                         actions.run_script = Some(id.clone());
+                    }
+                    if ui.button("graph").clicked() {
+                        actions.open_graph = Some(id.clone());
                     }
                     // The count is the honest part: a script that is a
                     // third untranslated should not look ready.

@@ -23,6 +23,7 @@ mod project;
 mod sheet;
 mod ui;
 mod ui_game;
+mod ui_graph;
 mod ui_play;
 mod ui_screen;
 mod view;
