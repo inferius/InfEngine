@@ -93,6 +93,10 @@ pub struct RoomData {
     /// Where the actor stands on entering, one per direction. Rooms
     /// with a single way in repeat the same position four times.
     pub entry_points: Vec<Vec2>,
+    /// Offset where the palette override ends, which is where the
+    /// frame table begins. Kept so the caller can read that block
+    /// without re-finding the marker.
+    pub after_palette: usize,
 }
 
 impl RoomData {
@@ -138,6 +142,7 @@ pub fn parse(data: &[u8]) -> Result<RoomData, RoomDatError> {
         mask_name,
         palette_override: window.to_vec(),
         entry_points: read_entry_points(data, nul + 1 + start + OVERRIDE_BYTES),
+        after_palette: nul + 1 + start + OVERRIDE_BYTES,
     })
 }
 

@@ -14,6 +14,7 @@ pub mod cps;
 pub mod emc;
 pub mod format40;
 pub mod format80;
+pub mod frames;
 pub mod msc;
 pub mod pak;
 pub mod palette;
@@ -49,6 +50,14 @@ const ANIM_DIR: &str = "animations";
 /// animation frames under the scene and makes the room 56 pixels taller
 /// than the floor it contains.
 const PLAY_HEIGHT: u32 = msc::MASK_HEIGHT as u32;
+
+/// Shortest a room can plausibly be.
+///
+/// The frame table is read heuristically and a few rooms report a frame
+/// near the top of the picture, which would crop the room to nothing.
+/// A room that short is the reader being wrong rather than the game
+/// storing frames over its own scenery, so the play area's height wins.
+const MIN_ROOM_HEIGHT: u32 = 96;
 /// Subdirectory that receives room stubs.
 const ROOM_DIR: &str = "rooms";
 
@@ -272,9 +281,18 @@ pub fn import_pak(
             continue;
         }
 
-        // A13.1: the room is the top of the image; whatever sits below
-        // is frame storage, not scenery.
-        let room_height = image.height.min(PLAY_HEIGHT);
+        // A13.2: the room ends where its frame storage begins. The
+        // room's own table says where that is, which is better than a
+        // fixed line - the bridge stores its river frames from row 136,
+        // eight rows above the play area's nominal bottom.
+        let stored = room_frames(&pak, stem_of_entry, image.width, image.height);
+        let room_height = frames::storage_top(&stored)
+            .map(u32::from)
+            .filter(|top| *top >= MIN_ROOM_HEIGHT)
+            .unwrap_or(PLAY_HEIGHT)
+            .min(image.height)
+            .min(PLAY_HEIGHT)
+            .max(1);
         let image_rel = format!("{IMAGE_DIR}/{name}.png");
         write_png(
             &out_dir.join(&image_rel),
@@ -284,11 +302,18 @@ pub fn import_pak(
         )?;
         report.images += 1;
 
-        if let Some(strip) = frame_strip(&image, &rgba, room_height) {
-            let strip_rel = format!("{SPRITE_DIR}/{name}_frames.png");
-            write_png(&out_dir.join(&strip_rel), image.width, strip.0, &strip.1)?;
+        // Each animation the room stores comes out as its own sheet,
+        // frames left to right, rather than as one undifferentiated
+        // strip: a room commonly holds two or three separate loops.
+        for (index, group) in frames::group_by_size(&stored).iter().enumerate() {
+            let Some(sheet) = cut_sheet(&rgba, image.width, group) else {
+                continue;
+            };
+            let rel = format!("{ANIM_DIR}/{name}_{index}.png");
+            write_png(&out_dir.join(&rel), sheet.0, sheet.1, &sheet.2)?;
             report.images += 1;
-            report.sprites += 1;
+            report.animations += 1;
+            report.frames += group.len();
         }
 
         let mut room = background_room(&name, image.width, room_height, &image_rel);
@@ -315,32 +340,60 @@ pub fn import_pak(
     Ok(())
 }
 
+/// The frame table a room stores, if it has one.
+fn room_frames(
+    pak: &pak::Pak<'_>,
+    stem: &str,
+    width: u32,
+    height: u32,
+) -> Vec<frames::Frame> {
+    let Some(data) = pak.get(&format!("{stem}.DAT")) else {
+        return Vec::new();
+    };
+    let Ok(parsed) = roomdat::parse(data) else {
+        return Vec::new();
+    };
+    let Some(table) = frames::table_bytes(data, parsed.after_palette) else {
+        return Vec::new();
+    };
+    frames::read(table, width as u16, height as u16)
+}
+
+/// Cut a group of frames out of the image and lay them out left to
+/// right as one sheet.
+fn cut_sheet(
+    rgba: &[u8],
+    image_width: u32,
+    group: &[frames::Frame],
+) -> Option<(u32, u32, Vec<u8>)> {
+    let first = group.first()?;
+    let (fw, fh) = (first.width as u32, first.height as u32);
+    if fw == 0 || fh == 0 {
+        return None;
+    }
+    let sheet_w = fw * group.len() as u32;
+    let mut out = vec![0u8; sheet_w as usize * fh as usize * 4];
+    for (index, frame) in group.iter().enumerate() {
+        let ox = index as u32 * fw;
+        for row in 0..fh {
+            let src = ((frame.y as u32 + row) as usize * image_width as usize
+                + frame.x as usize)
+                * 4;
+            let dst = ((row * sheet_w) + ox) as usize * 4;
+            let span = fw as usize * 4;
+            if src + span > rgba.len() {
+                continue;
+            }
+            out[dst..dst + span].copy_from_slice(&rgba[src..src + span]);
+        }
+    }
+    Some((sheet_w, fh, out))
+}
+
 /// Keep the first `rows` rows of an RGBA image.
 fn crop_rows(rgba: &[u8], width: u32, rows: u32) -> Vec<u8> {
     let span = width as usize * 4;
     rgba[..(rows as usize * span).min(rgba.len())].to_vec()
-}
-
-/// The frame-storage strip below the room, if it holds anything.
-///
-/// Emptiness is judged on palette indices rather than on colour: index
-/// zero is the key colour, and testing for black instead would throw
-/// away a strip whose frames happen to be dark.
-fn frame_strip(
-    image: &cps::CpsImage,
-    rgba: &[u8],
-    room_height: u32,
-) -> Option<(u32, Vec<u8>)> {
-    if image.height <= room_height {
-        return None;
-    }
-    let width = image.width as usize;
-    let start = room_height as usize * width;
-    if image.indices[start..].iter().all(|i| *i == 0) {
-        return None;
-    }
-    let rows = image.height - room_height;
-    Some((rows, rgba[start * 4..].to_vec()))
 }
 
 /// Give the room the positions the game starts the actor at.
