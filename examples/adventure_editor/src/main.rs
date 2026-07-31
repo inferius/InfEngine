@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod assets;
 mod draw;
 mod edit;
 mod play;

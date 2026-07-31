@@ -12,11 +12,12 @@ use infengine_adventure::loca::LanguageChoice;
 use infengine_adventure::{Animation, Room, find_path};
 use infengine_audio::AudioSystem;
 use infengine_editor::EditorUi;
-use infengine_render::{Renderer, Texture2dHandle, TextureFilter};
+use infengine_render::{Renderer, Texture2dHandle};
 use infengine_window::raw_winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use infengine_window::{AppHandler, EngineWindow, FrameContext, Key};
 use tracing::{info, warn};
 
+use crate::assets;
 use crate::draw::{self, Overlays};
 use crate::edit::{self, Selection, Tool};
 use crate::play::{self, PlayMode};
@@ -172,35 +173,12 @@ impl Editor {
         }
     }
 
-    /// Upload every layer image the room references.
-    ///
-    /// Textures are keyed by the room-relative path, so two layers
-    /// sharing a sheet upload it once.
     fn load_textures(&mut self) {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
-        for handle in self.textures.values() {
-            renderer.destroy_texture(*handle);
-        }
-        self.textures.clear();
-        self.missing_images.clear();
-
-        for layer in &self.room.layers {
-            if self.textures.contains_key(&layer.image) {
-                continue;
-            }
-            let path = self.project.resolve(&layer.image);
-            match renderer.create_texture_from_file(&path, TextureFilter::Nearest) {
-                Ok(handle) => {
-                    self.textures.insert(layer.image.clone(), handle);
-                }
-                Err(err) => {
-                    warn!(image = %layer.image, %err, "layer image did not load");
-                    self.missing_images.push(layer.image.clone());
-                }
-            }
-        }
+        self.missing_images =
+            assets::upload_layers(renderer, &self.project, &mut self.textures, &self.room);
     }
 
     /// Gather the animations offered for the open room.
@@ -265,18 +243,9 @@ impl Editor {
             self.status = format!("{id} has no recording");
             return;
         };
-        let Some(audio) = self.audio.as_mut() else {
-            self.status = "no audio device".into();
-            return;
+        self.status = match assets::play_file(self.audio.as_mut(), &self.project, &path) {
+            Ok(message) | Err(message) => message,
         };
-        let full = self.project.resolve(&path);
-        match audio.load_sound(&full).and_then(|s| audio.play_sound(&s)) {
-            Ok(()) => self.status = format!("playing {path}"),
-            Err(err) => {
-                warn!(%err, "could not play the recording");
-                self.status = err.to_string();
-            }
-        }
     }
 
     /// Start cutting a loose image into frames.
@@ -334,21 +303,8 @@ impl Editor {
 
     /// Upload a sheet if it is not already loaded, and return it.
     fn animation_texture(&mut self, image: &str) -> Option<Texture2dHandle> {
-        if let Some(handle) = self.anim_textures.get(image) {
-            return Some(*handle);
-        }
         let renderer = self.renderer.as_mut()?;
-        let path = self.project.resolve(image);
-        match renderer.create_texture_from_file(&path, TextureFilter::Nearest) {
-            Ok(handle) => {
-                self.anim_textures.insert(image.to_string(), handle);
-                Some(handle)
-            }
-            Err(err) => {
-                warn!(image, %err, "animation sheet did not load");
-                None
-            }
-        }
+        assets::texture_for(renderer, &self.project, &mut self.anim_textures, image)
     }
 
     /// Enter play mode in the open room.
@@ -418,15 +374,12 @@ impl Editor {
         }
     }
 
-    /// Play a file given as a project-relative path.
+    /// Play a file given as a project-relative path, noting failures in
+    /// the play log rather than the status line - during a test run the
+    /// log is the thing being read.
     fn play_file(&mut self, relative: &str) {
-        let Some(audio) = self.audio.as_mut() else {
-            return;
-        };
-        let full = self.project.resolve(relative);
-        if let Err(err) = audio.load_sound(&full).and_then(|s| audio.play_sound(&s)) {
-            warn!(file = relative, %err, "could not play");
-            self.play.note(format!("could not play {relative}"));
+        if let Err(message) = assets::play_file(self.audio.as_mut(), &self.project, relative) {
+            self.play.note(message);
         }
     }
 
