@@ -1,0 +1,20 @@
+[package]
+name = "infengine_loca"
+description = "Localisation for InfEngine: language files, voice and subtitle languages picked apart, and CLDR plural rules."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+icu_plurals = { workspace = true }
+icu_locale_core = { workspace = true }
+serde = { workspace = true }
+ron = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

@@ -9,6 +9,7 @@ members = [
     "crates/infengine_assets",
     "crates/infengine_audio",
     "crates/infengine_editor",
+    "crates/infengine_loca",
     "crates/infengine_physics",
     "crates/infengine_scripting",
     "crates/infengine_editor_app",

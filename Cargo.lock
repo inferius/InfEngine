@@ -2340,8 +2340,7 @@ name = "infengine_adventure"
 version = "0.0.1"
 dependencies = [
  "glam 0.30.10",
- "icu_locale_core",
- "icu_plurals",
+ "infengine_loca",
  "ron",
  "serde",
  "thiserror 2.0.18",
@@ -2421,6 +2420,18 @@ dependencies = [
  "tracing",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "infengine_loca"
+version = "0.0.1"
+dependencies = [
+ "icu_locale_core",
+ "icu_plurals",
+ "ron",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

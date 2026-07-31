@@ -33,11 +33,17 @@ pub mod game;
 pub mod geom;
 pub mod interact;
 pub mod io;
-pub mod loca;
 pub mod mask;
+/// Localisation, re-exported from [`infengine_loca`].
+///
+/// It lives in its own crate because a menu or a quest log needs the
+/// same thing and should not have to depend on an adventure runtime.
+/// The path stays here so nothing that already writes
+/// `infengine_adventure::loca` has to change.
+pub use infengine_loca as loca;
+
 pub mod pack;
 pub mod path;
-pub mod plural;
 pub mod room;
 pub mod scale;
 pub mod sound;
@@ -50,7 +56,7 @@ pub use game::{Actor, Click, Game, GameState, Runner};
 pub use interact::{EntryPoint, Exit, Facing, Hotspot, Shape, Verb};
 pub use io::{RoomIoError, load, save};
 pub use loca::{LanguageChoice, Line, Locale, Locales, Spoken};
-pub use plural::Category as PluralCategory;
+pub use infengine_loca::plural::Category as PluralCategory;
 pub use mask::trace as trace_walk_mask;
 pub use path::{PathError, find_path, path_length, point_along};
 pub use room::{Layer, LayerKind, Room};

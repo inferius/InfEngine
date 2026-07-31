@@ -1,4 +1,14 @@
-//! A10.1: text, voice and languages.
+//! A23.1: text, voice and languages, for any InfEngine game.
+//!
+//! Nothing here knows what an adventure game is. It was written for one
+//! and then moved out, because a menu label, a quest name and a tooltip
+//! all need the same thing: a stable id, one file per language, and a
+//! plural rule that is right in every language rather than in English.
+//!
+//! Adding a language is dropping a file in a directory. That is the
+//! whole design goal, and everything else follows from it - no registry
+//! to edit, no build step, no central list of languages that a
+//! translator has to be given access to.
 //!
 //! Every line the game can say - a subtitle, a hotspot name, a menu
 //! label - is stored once per language under a stable id. Voice and lip
@@ -23,13 +33,17 @@
 //! missing everywhere renders as its own id, so a typo in a key shows up
 //! on screen as `hall_door_locked` rather than as nothing at all.
 
+#![forbid(unsafe_code)]
+
+pub mod plural;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::plural::{self, Category};
+use crate::plural::Category;
 
 /// Placeholder a counted line substitutes the number into.
 pub const COUNT_PLACEHOLDER: &str = "{n}";
