@@ -16,9 +16,12 @@
 //! from the format's public documentation. The reading of them is our
 //! own.
 
-use infengine_adventure::{Action, Script};
+use glam::Vec2;
+use infengine_adventure::interact::{Hotspot, Shape};
+use infengine_adventure::{Action, Script, Verb};
 
 use super::emc;
+use super::regions;
 use super::vm::{self, CallSite};
 
 /// Speaks a line of dialogue.
@@ -58,6 +61,9 @@ const PLUMBING: &[i32] = &[
     58, // read a character's facing
     64, // flip the drawing page
 ];
+
+/// The verb a click carries in a game that has no verb menu.
+const CLICK: Verb = Verb::Use;
 
 /// How many calls a single script may hold before the decompiler stops.
 ///
@@ -239,6 +245,73 @@ pub fn decompile(room: &str, script: &emc::Script) -> RoomScripts {
         if !compiled.is_empty() {
             out.scripts.push(compiled);
         }
+    }
+    out
+}
+
+/// The clickable things a room's script defines, and what each does.
+///
+/// Kyrandia has no verb menu - a click on a thing runs that thing's
+/// code - so each hotspot gets one script under a single verb rather
+/// than a table of them.
+///
+/// That verb is `Use` rather than the engine's default of `Walk`.
+/// `Walk` means "there is nothing here, go to it", which is what the
+/// floor does; every rectangle found here is something the game has an
+/// answer for, and importing them all as walk targets would say the
+/// opposite of what the script proves.
+///
+/// Rectangles that do not fit the room are dropped. They come from calls
+/// whose arguments were computed, where the constants left further up
+/// the stack read as a rectangle the size of a scene number, and putting
+/// one on the room would place a clickable thing where the game has
+/// none.
+pub fn hotspots(
+    room: &str,
+    script: &emc::Script,
+    size: (i32, i32),
+) -> Vec<(Hotspot, Script)> {
+    let instructions = vm::disassemble(&script.code);
+    let mut out = Vec::new();
+
+    for region in regions::regions(&instructions) {
+        if !region.fits(size.0, size.1) {
+            continue;
+        }
+        // Numbered from one in the order the script tests them, which is
+        // the order the game checks clicks in. Stable across imports as
+        // long as the script is, which is what an id has to be.
+        let id = format!("spot{}", out.len() + 1);
+        let script_id = format!("{room}.{id}");
+
+        let mut compiled = Script::new(script_id.clone());
+        let body = instructions
+            .get(region.body.clone())
+            .unwrap_or_default();
+        for site in vm::call_sites(body) {
+            if let Some(action) = action_for(room, &site, script.texts.len()) {
+                compiled.push(action);
+            }
+        }
+
+        out.push((
+            Hotspot {
+                name: id.clone(),
+                id,
+                shape: Shape::Rect {
+                    min: Vec2::new(region.x as f32, region.y as f32),
+                    max: Vec2::new(
+                        (region.x + region.width) as f32,
+                        (region.y + region.height) as f32,
+                    ),
+                },
+                default_verb: CLICK,
+                actions: vec![(CLICK, script_id)],
+                enabled: true,
+                ..Default::default()
+            },
+            compiled,
+        ));
     }
     out
 }

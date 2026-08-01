@@ -28,6 +28,8 @@ pub struct ImportReport {
     pub rooms: usize,
     /// Rooms that arrived with a walkable floor traced from a mask.
     pub masks: usize,
+    /// Clickable regions recovered from script bytecode.
+    pub hotspots: usize,
     /// Arrival spots worked out from the doors that lead into a room.
     pub entry_points: usize,
     /// Images that are pictures rather than rooms: title cards, cutscene
@@ -72,6 +74,7 @@ impl ImportReport {
         self.archives += other.archives;
         self.images += other.images;
         self.rooms += other.rooms;
+        self.hotspots += other.hotspots;
         self.masks += other.masks;
         self.entry_points += other.entry_points;
         self.sprites += other.sprites;
@@ -118,8 +121,8 @@ impl fmt::Display for ImportReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "{} archives, {} images, {} rooms ({} with a traced floor)",
-            self.archives, self.images, self.rooms, self.masks
+            "{} archives, {} images, {} rooms ({} with a traced floor, {} clickable things)",
+            self.archives, self.images, self.rooms, self.masks, self.hotspots
         )?;
         if self.entry_points > 0 {
             writeln!(f, "{} arrival points from facing doors", self.entry_points)?;
@@ -242,6 +245,7 @@ mod tests {
             images: 5,
             rooms: 5,
             masks: 5,
+            hotspots: 9,
             skipped: vec![
                 skip("a", "not a full screen (12 pixels)"),
                 skip("b", "not a full screen (48 pixels)"),
@@ -249,7 +253,10 @@ mod tests {
             ..Default::default()
         };
         let text = report.to_string();
-        assert!(text.contains("2 archives, 5 images, 5 rooms (5 with a traced floor)"));
+        assert!(
+            text.contains("2 archives, 5 images, 5 rooms (5 with a traced floor, 9 clickable things)"),
+            "{text}"
+        );
         assert!(text.contains("2 skipped"));
         assert!(text.contains("not a full screen"));
         // The individual entry names are not spelled out.

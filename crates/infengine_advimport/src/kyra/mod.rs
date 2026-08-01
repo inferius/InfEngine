@@ -432,6 +432,17 @@ pub fn import_pak(
             report.masks += 1;
         }
         add_entry_points(&pak, stem_of_entry, &mut room);
+        // Before the room is written, because the script pass is where
+        // its clickable things come from.
+        export_scripts(
+            &pak,
+            stem_of_entry,
+            &name,
+            language,
+            out_dir,
+            &mut room,
+            report,
+        )?;
         let room_path = out_dir.join(ROOM_DIR).join(format!("{name}.room.ron"));
         infengine_adventure::save(&room, &room_path).map_err(|source| ImportError::WriteRoom {
             path: room_path.display().to_string(),
@@ -440,7 +451,6 @@ pub fn import_pak(
 
         report.rooms += 1;
         collect_lines(&pak, stem_of_entry, &name, language, locale);
-        export_scripts(&pak, stem_of_entry, &name, language, out_dir, report)?;
         scripted.insert(stem_of_entry.to_ascii_uppercase());
         debug!(archive = %stem, entry = %entry.name, "imported background");
     }
@@ -465,7 +475,8 @@ pub fn import_pak(
         }
         let id = stem.trim_start_matches('_').to_ascii_lowercase();
         collect_lines(&pak, stem, &id, language, locale);
-        export_scripts(&pak, stem, &id, language, out_dir, report)?;
+        let mut orphan = Room::default();
+        export_scripts(&pak, stem, &id, language, out_dir, &mut orphan, report)?;
         debug!(archive = %stem, entry = %entry.name, "imported a script with no room");
     }
 
@@ -719,6 +730,7 @@ fn export_scripts(
     room_id: &str,
     language: &str,
     out_dir: &Path,
+    room: &mut Room,
     report: &mut ImportReport,
 ) -> Result<(), ImportError> {
     let Some(data) = pak.get(&format!("{stem}.EMC")) else {
@@ -727,7 +739,21 @@ fn export_scripts(
     let Ok(parsed) = emc::decode(data, encoding_for(language)) else {
         return Ok(());
     };
-    let decompiled = decompile::decompile(room_id, &parsed);
+    let mut decompiled = decompile::decompile(room_id, &parsed);
+
+    // The clickable regions, which the script defines by testing the
+    // cursor against a rectangle once per thing in the room.
+    let size = (room.size.x as i32, room.size.y as i32);
+    if size.0 > 0 && size.1 > 0 {
+        for (hotspot, script) in decompile::hotspots(room_id, &parsed, size) {
+            report.hotspots += 1;
+            room.hotspots.push(hotspot);
+            if !script.is_empty() {
+                decompiled.scripts.push(script);
+            }
+        }
+    }
+
     if decompiled.is_empty() {
         return Ok(());
     }
