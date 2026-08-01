@@ -32,6 +32,11 @@ pub struct Game {
     textures: HashMap<String, Texture2dHandle>,
     /// The animation playing in this room, and how far into it we are.
     animation: Option<(Animation, f32)>,
+    /// How far into the walk cycle the actor is.
+    ///
+    /// Kept across rooms: a figure that restarts its stride every time
+    /// it walks through a door looks like it stumbles.
+    step: f32,
     cursor: Vec2,
     status: String,
     /// Set when a screen asks to quit; the window closes next frame.
@@ -54,6 +59,7 @@ impl Game {
             view: View::default(),
             textures: HashMap::new(),
             animation: None,
+            step: 0.0,
             cursor: Vec2::ZERO,
             status: String::new(),
             quit: false,
@@ -62,13 +68,27 @@ impl Game {
 
     /// Upload what the current room draws, dropping the last room's.
     fn load_room_textures(&mut self) {
+        // Worked out before the renderer is borrowed: it reads the
+        // project, and the borrow checker cannot see that the two do not
+        // overlap.
+        let keep = self.actor_images();
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
-        for handle in self.textures.values() {
-            renderer.destroy_texture(*handle);
+        // The actor's own sheets are not the room's and stay loaded;
+        // dropping and re-uploading them on every doorway would be work
+        // done once per step of the game for no reason.
+        let dropped: Vec<String> = self
+            .textures
+            .keys()
+            .filter(|image| !keep.contains(*image))
+            .cloned()
+            .collect();
+        for image in dropped {
+            if let Some(handle) = self.textures.remove(&image) {
+                renderer.destroy_texture(handle);
+            }
         }
-        self.textures.clear();
         self.animation = None;
 
         let images: Vec<String> = self
@@ -83,6 +103,50 @@ impl Game {
         }
         self.view.room = self.host.room.size;
         self.view.fit();
+    }
+
+    /// Images the actor is drawn from, which outlive a room.
+    fn actor_images(&self) -> std::collections::HashSet<String> {
+        let Some(look) = self.host.project.manifest.as_ref().and_then(|m| m.actor.as_ref())
+        else {
+            return Default::default();
+        };
+        [
+            &look.walk_left,
+            &look.walk_right,
+            &look.walk_back,
+            &look.walk_front,
+            &look.idle,
+        ]
+        .into_iter()
+        .filter(|id| !id.is_empty())
+        .filter_map(|id| self.host.project.animations.get(id))
+        .map(|animation| animation.image.clone())
+        .collect()
+    }
+
+    /// The frame of the walk cycle to draw, and whether to mirror it.
+    ///
+    /// A standing figure shows the first frame rather than freezing
+    /// wherever the cycle happened to stop, which would leave it with
+    /// one foot in the air.
+    fn actor_frame(&self) -> Option<(Animation, u32, bool, Texture2dHandle)> {
+        let look = self.host.project.manifest.as_ref()?.actor.as_ref()?;
+        let actor = &self.host.game.state.actor;
+        let walking = actor.is_walking();
+        let id = if walking || look.idle.is_empty() {
+            look.walking(actor.facing)
+        } else {
+            look.idle.as_str()
+        };
+        let animation = self.host.project.animations.get(id)?.clone();
+        let handle = *self.textures.get(&animation.image)?;
+        let frame = if walking {
+            animation.frame_at(self.step)
+        } else {
+            0
+        };
+        Some((animation, frame, look.mirrored(actor.facing), handle))
     }
 
     fn upload(&mut self, image: &str) -> Option<Texture2dHandle> {
@@ -157,6 +221,24 @@ impl AppHandler for Game {
         let (w, h) = window.size();
         self.view.viewport = Vec2::new(w as f32, h as f32);
 
+        // Said out loud at startup because a figure that silently does
+        // not draw is indistinguishable from one drawn behind the
+        // scenery, and the two have nothing in common to fix.
+        match self.host.project.manifest.as_ref().and_then(|m| m.actor.as_ref()) {
+            Some(look) => {
+                let images = self.actor_images();
+                info!(
+                    sheets = images.len(),
+                    left = look.walking(infengine_adventure::interact::Facing::Left),
+                    right = look.walking(infengine_adventure::interact::Facing::Right),
+                    "actor"
+                );
+                for image in images {
+                    self.upload(&image);
+                }
+            }
+            None => info!("no actor in the manifest; drawing an outline"),
+        }
         let request = self.host.start();
         self.perform(request);
         info!(
@@ -244,6 +326,10 @@ impl AppHandler for Game {
             String::new()
         };
 
+        if self.host.game.state.actor.is_walking() {
+            self.step += ctx.delta_time;
+        }
+
         if let Some((animation, time)) = self.animation.as_mut() {
             *time += ctx.delta_time;
             if !animation.looping && animation.finished_at(*time) {
@@ -258,6 +344,7 @@ impl AppHandler for Game {
             let position = self.host.game.state.actor.position;
             (position, self.host.room.scale.scale_at(position.y))
         };
+        let sprite = self.actor_frame();
         let frame = self.animation.as_ref().map(|(animation, time)| {
             (
                 animation.clone(),
@@ -277,7 +364,21 @@ impl AppHandler for Game {
             // the player is not in, and drawing a figure on it would be
             // a figure standing in a film.
             if self.host.screen.is_none() && !self.host.room.walk.is_empty() {
-                draw::actor(renderer, &self.view, actor.0, actor.1);
+                match &sprite {
+                    Some((animation, frame, mirrored, handle)) => draw::actor_sprite(
+                        renderer,
+                        &self.view,
+                        &draw::ActorFrame {
+                            animation,
+                            handle: *handle,
+                            frame: *frame,
+                            at: actor.0,
+                            scale: actor.1,
+                            mirrored: *mirrored,
+                        },
+                    ),
+                    None => draw::actor(renderer, &self.view, actor.0, actor.1),
+                }
             }
         }
 

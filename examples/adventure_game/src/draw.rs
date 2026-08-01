@@ -70,9 +70,63 @@ pub fn animation_frame(
     renderer.draw_texture(handle, instance);
 }
 
-/// Draw the actor.
+/// One frame of the player character, ready to draw.
+#[derive(Debug, Clone, Copy)]
+pub struct ActorFrame<'a> {
+    pub animation: &'a Animation,
+    pub handle: Texture2dHandle,
+    pub frame: u32,
+    /// Where the feet are, in room space.
+    pub at: Vec2,
+    /// How large the figure is here, from the room's depth ramp.
+    pub scale: f32,
+    /// Flip it horizontally, for a sheet with one side view.
+    pub mirrored: bool,
+}
+
+/// Draw the player character from its walk sheet.
 ///
-/// A marker until character sheets are cut into walk cycles, but one
+/// `at` is where the feet are, so the sprite hangs above the point the
+/// walk logic works with rather than being centred on it. A figure
+/// centred on its position stands with its waist on the floor and its
+/// feet through it, which reads as the depth ramp being wrong when it is
+/// not.
+///
+/// `mirrored` flips the frame horizontally, which is how a sheet with
+/// one side view faces the other way.
+pub fn actor_sprite(renderer: &mut Renderer, view: &View, look: &ActorFrame<'_>) {
+    let ActorFrame {
+        animation,
+        handle,
+        frame,
+        at,
+        scale,
+        mirrored,
+    } = *look;
+    let Some((sheet_w, sheet_h)) = renderer.texture_size(handle) else {
+        return;
+    };
+    let (uv_min, uv_max) =
+        animation.frame_uv(frame, Vec2::new(sheet_w as f32, sheet_h as f32));
+    let size = animation.frame_size * scale.max(0.05) * view.scale;
+    let feet = view.to_window(at);
+    let centre = Vec2::new(feet.x, feet.y - size.y * 0.5);
+    let mut instance = SpriteInstance::new([centre.x, flip(view, centre.y)], [size.x, size.y]);
+    // Swapping the horizontal ends of the frame's window into the sheet
+    // mirrors it without a second copy of the art.
+    let (left, right) = if mirrored {
+        (uv_max.x, uv_min.x)
+    } else {
+        (uv_min.x, uv_max.x)
+    };
+    instance.uv_min = [left, uv_min.y];
+    instance.uv_max = [right, uv_max.y];
+    renderer.draw_texture(handle, instance);
+}
+
+/// Draw the actor as an outline.
+///
+/// What a project gets before its character sheets are cut: a marker
 /// that stands the right height for where it is, so a wrong depth ramp
 /// is visible rather than merely wrong.
 pub fn actor(renderer: &mut Renderer, view: &View, at: Vec2, scale: f32) {

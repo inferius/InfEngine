@@ -57,6 +57,97 @@ pub struct GameManifest {
     pub languages: Vec<String>,
     #[serde(default)]
     pub default_language: LanguageChoice,
+    /// What the player character looks like.
+    ///
+    /// Optional, because a project has rooms before it has a figure to
+    /// walk around them, and drawing an outline is a better answer than
+    /// refusing to start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ActorLook>,
+}
+
+/// The animations the player character is drawn from.
+///
+/// Named rather than numbered, and by what the figure is doing rather
+/// than by which strip of the sheet they came out of: `walk_left` says
+/// what it is for, `brandon_1` says where it was found.
+///
+/// Only `walk_left` is required to mean anything. A game whose figure
+/// has one walk cycle mirrors it, which is what the sprite sheets of
+/// this era mostly assume, and a game with no idle animation stands on
+/// the first frame of its walk.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ActorLook {
+    /// Walking towards the left of the screen.
+    pub walk_left: String,
+    /// Walking towards the right. Empty means mirror `walk_left`.
+    #[serde(default)]
+    pub walk_right: String,
+    /// Walking away from the camera. Empty means use `walk_left`.
+    #[serde(default)]
+    pub walk_back: String,
+    /// Walking towards it. Empty means use `walk_left`.
+    #[serde(default)]
+    pub walk_front: String,
+    /// Standing still. Empty means the first frame of whichever walk
+    /// matches the way the figure is facing.
+    #[serde(default)]
+    pub idle: String,
+}
+
+impl ActorLook {
+    /// The animation to draw for a figure facing this way.
+    ///
+    /// Falls back to `walk_left` rather than to nothing: a figure drawn
+    /// facing the wrong way is a bug someone can see and fix, and a
+    /// figure not drawn at all looks like the room failed to load.
+    pub fn walking(&self, facing: crate::interact::Facing) -> &str {
+        let (own, other) = self.sides(facing);
+        // Whatever exists, in order of how close it is to what was
+        // asked for. A figure facing the wrong way is a bug someone can
+        // see; a figure not drawn looks like the room failed to load.
+        [own, other]
+            .into_iter()
+            .chain([
+                &self.walk_left,
+                &self.walk_right,
+                &self.walk_front,
+                &self.walk_back,
+            ])
+            .find(|name| !name.is_empty())
+            .map(String::as_str)
+            .unwrap_or_default()
+    }
+
+    /// Whether the figure has to be mirrored to face this way.
+    ///
+    /// A sheet with one side view is drawn facing one direction, and the
+    /// other side is the same frames flipped. That is what an empty
+    /// `walk_left` or `walk_right` means, and saying so here keeps the
+    /// flip out of the drawing code's guesswork.
+    ///
+    /// Only the two side views mirror. Flipping a figure walking towards
+    /// the camera turns it into a figure walking towards the camera with
+    /// its sword in the wrong hand.
+    pub fn mirrored(&self, facing: crate::interact::Facing) -> bool {
+        use crate::interact::Facing;
+        if !matches!(facing, Facing::Left | Facing::Right) {
+            return false;
+        }
+        let (own, other) = self.sides(facing);
+        own.is_empty() && !other.is_empty()
+    }
+
+    /// The animation for this facing, and the one it falls back to.
+    fn sides(&self, facing: crate::interact::Facing) -> (&String, &String) {
+        use crate::interact::Facing;
+        match facing {
+            Facing::Left => (&self.walk_left, &self.walk_right),
+            Facing::Right => (&self.walk_right, &self.walk_left),
+            Facing::Back => (&self.walk_back, &self.walk_left),
+            Facing::Front => (&self.walk_front, &self.walk_left),
+        }
+    }
 }
 
 impl GameManifest {
@@ -295,6 +386,52 @@ fn relative_to(root: &Path, path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_side_view_is_mirrored_for_the_other_side() {
+        use crate::interact::Facing;
+        // The sheet faces right, so walking left is the same frames
+        // flipped. Naming both sides after one sheet would draw the
+        // figure walking left while facing right, which is what the
+        // first attempt did.
+        let look = ActorLook {
+            walk_right: "brandon_side".into(),
+            walk_back: "brandon_back".into(),
+            walk_front: "brandon_front".into(),
+            ..Default::default()
+        };
+        assert_eq!(look.walking(Facing::Right), "brandon_side");
+        assert_eq!(look.walking(Facing::Left), "brandon_side");
+        assert!(look.mirrored(Facing::Left));
+        assert!(!look.mirrored(Facing::Right));
+    }
+
+    #[test]
+    fn a_figure_drawn_from_both_sides_is_never_mirrored() {
+        use crate::interact::Facing;
+        let look = ActorLook {
+            walk_left: "left".into(),
+            walk_right: "right".into(),
+            ..Default::default()
+        };
+        assert_eq!(look.walking(Facing::Left), "left");
+        assert_eq!(look.walking(Facing::Right), "right");
+        assert!(!look.mirrored(Facing::Left) && !look.mirrored(Facing::Right));
+    }
+
+    #[test]
+    fn walking_towards_the_camera_is_never_mirrored() {
+        use crate::interact::Facing;
+        // Flipping it would hand the character its sword the other way
+        // round rather than turn it.
+        let look = ActorLook {
+            walk_right: "side".into(),
+            ..Default::default()
+        };
+        assert!(!look.mirrored(Facing::Front));
+        assert!(!look.mirrored(Facing::Back));
+        assert_eq!(look.walking(Facing::Front), "side", "better than nothing");
+    }
     use glam::Vec2;
 
     use crate::action::Script;
@@ -536,6 +673,12 @@ mod tests {
             intro_room: String::new(),
             languages: vec!["en".into(), "cs".into()],
             default_language: LanguageChoice::same("cs"),
+            actor: Some(ActorLook {
+                walk_right: "brandon_side".into(),
+                walk_back: "brandon_back".into(),
+                walk_front: "brandon_front".into(),
+                ..Default::default()
+            }),
         };
         manifest.save(&root).expect("save");
         assert_eq!(GameManifest::load(&root), Some(manifest));
