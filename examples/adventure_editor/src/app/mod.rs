@@ -68,6 +68,8 @@ pub struct Editor {
     overlays: Overlays,
     /// Which inspector job is open.
     task: crate::inspector::Task,
+    /// The page that explains the window.
+    help: crate::help::HelpUi,
     tool: Tool,
     selection: Selection,
 
@@ -153,6 +155,7 @@ impl Editor {
             view: crate::view::View::default(),
             overlays: Overlays::default(),
             task: crate::inspector::Task::default(),
+            help: crate::help::HelpUi::default(),
             tool: Tool::default(),
             selection: Selection::None,
             cursor: Vec2::ZERO,
@@ -666,6 +669,79 @@ impl Editor {
         }
     }
 
+    /// Apply what the menu bar asked for.
+    ///
+    /// Menu items route to the same methods as the buttons that do the
+    /// same thing, so there is one implementation of each action and
+    /// two ways to reach it.
+    fn apply_menu(&mut self, actions: crate::menu::MenuActions) {
+        if actions.save {
+            self.save();
+        }
+        if actions.reload && let Some(index) = self.current_room {
+            self.open_room(index);
+        }
+        if actions.fit_view {
+            self.view.fit();
+        }
+        if let Some(what) = actions.add {
+            self.add_to_room(what);
+        }
+        if let Some(task) = actions.task {
+            self.task = task;
+            task.reveal(&mut self.overlays);
+            if let Some(first) = task.tools().first() {
+                self.tool = *first;
+            }
+        }
+        if actions.open_game {
+            self.game_ui.open = true;
+        }
+        if actions.open_screens {
+            self.screen_ui.open = true;
+        }
+        if actions.open_graph {
+            self.graph_ui.open = true;
+        }
+        if actions.open_help {
+            self.help.open = true;
+        }
+        if actions.start_play {
+            self.start_play();
+        }
+        if actions.stop_play {
+            self.play.end();
+            self.status = "stopped".into();
+        }
+    }
+
+    /// Put something new in the room, centred on the view, and switch to
+    /// the tab that edits it. Landing on a tab that does not show what
+    /// you just added is the worst kind of nothing-happened.
+    fn add_to_room(&mut self, what: crate::menu::Addable) {
+        use crate::menu::Addable;
+        let at = self.view.center;
+        let name = match what {
+            Addable::Hotspot => {
+                let index = crate::add::hotspot(&mut self.room, at);
+                self.selection = Selection::Hotspot(index);
+                self.room.hotspots[index].id.clone()
+            }
+            Addable::Exit => {
+                let index = crate::add::exit(&mut self.room, at);
+                self.room.exits[index].id.clone()
+            }
+            Addable::Entry => {
+                let index = crate::add::entry(&mut self.room, at);
+                self.room.entries[index].id.clone()
+            }
+        };
+        self.task = what.task();
+        self.task.reveal(&mut self.overlays);
+        self.dirty = true;
+        self.status = format!("added {name} - drag it into place");
+    }
+
     fn apply_actions(&mut self, actions: UiActions) {
         if let Some(index) = actions.open_room {
             self.open_room(index);
@@ -911,6 +987,7 @@ impl AppHandler for Editor {
         let mut game_actions = ui_game::GameActions::default();
         let mut screen_actions = ui_screen::ScreenActions::default();
         let mut graph_actions = ui_graph::GraphActions::default();
+        let mut menu_actions = crate::menu::MenuActions::default();
         let mut content = None;
         if let Some(ui) = self.ui.as_mut() {
             let mut state = UiState {
@@ -954,7 +1031,16 @@ impl AppHandler for Editor {
                 ids.sort();
                 ids
             };
+            let menu_ctx = crate::menu::MenuContext {
+                has_room: state.current_room.is_some(),
+                dirty: state.dirty,
+                playing: play.active,
+            };
+            self.help.offer_once();
+            let help_ui = &mut self.help;
             ui.run(window.raw(), |ctx| {
+                menu_actions = crate::menu::bar(ctx, menu_ctx, state.overlays, *state.task);
+                crate::help::window(ctx, help_ui);
                 play_actions = ui_play::panel(ctx, play, play_draft, &room_id, slots);
                 game_actions = ui_game::window(ctx, game_ui, &room_names, &languages);
                 screen_actions = ui_screen::window(ctx, screen_ui, &languages);
@@ -987,6 +1073,7 @@ impl AppHandler for Editor {
         }
 
         self.apply_actions(actions);
+        self.apply_menu(menu_actions);
         self.apply_play_actions(play_actions);
         self.apply_game_actions(game_actions);
         self.apply_screen_actions(screen_actions);

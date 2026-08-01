@@ -180,12 +180,56 @@ pub fn matching_rooms(project: &Project, filter: &str) -> Vec<usize> {
         .collect()
 }
 
+/// The bottom row: what just happened, and what to do next.
+///
+/// It used to hold one label that was empty most of the time. A row that
+/// is usually blank teaches the reader not to look at it, which wastes
+/// the one place in the window that can answer "now what".
 fn status_bar(ctx: &egui::Context, state: &UiState<'_>) {
     egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
         ui.horizontal(|ui| {
-            ui.label(state.status);
+            if state.status.is_empty() {
+                ui.label(egui::RichText::new(next_step(state)).weak());
+            } else {
+                ui.label(state.status);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new(crate::inspector::tool_hint(*state.tool))
+                        .small()
+                        .weak(),
+                );
+            });
         });
     });
+}
+
+/// The most useful thing to say when nothing has just happened.
+///
+/// Ordered by how badly the room is missing it: a room with no floor is
+/// unplayable, one with no way out is a trap, one with nothing to click
+/// is scenery. Saying all three at once would say nothing.
+pub fn next_step(state: &UiState<'_>) -> String {
+    if state.current_room.is_none() {
+        return "Pick a room on the left to start.".into();
+    }
+    let room = &state.room;
+    if room.walk.solids.is_empty() {
+        return "No floor here yet - the Floor tab draws one, and without it                 the actor cannot move."
+            .into();
+    }
+    if room.exits.is_empty() {
+        return "Nothing leads out of this room - add a way out from the Room menu.".into();
+    }
+    if room.hotspots.is_empty() {
+        return "Nothing here can be clicked - add one from the Room menu.".into();
+    }
+    format!(
+        "{} - {} things, {} ways out. Help is under the ? at the top right.",
+        room.id,
+        room.hotspots.len(),
+        room.exits.len()
+    )
 }
 
 #[cfg(test)]

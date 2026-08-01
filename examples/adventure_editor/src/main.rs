@@ -13,11 +13,14 @@
 
 #![forbid(unsafe_code)]
 
+mod add;
 mod app;
 mod assets;
 mod draw;
 mod edit;
+mod help;
 mod inspector;
+mod menu;
 mod play;
 mod playback;
 mod sheet;
