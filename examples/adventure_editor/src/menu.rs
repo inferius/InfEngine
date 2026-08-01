@@ -83,6 +83,30 @@ impl Addable {
     }
 }
 
+/// How big the interface is drawn, as a multiple of its natural size.
+///
+/// A 4K monitor renders this at a size that is legible in principle and
+/// unreadable in practice, and the fix is not per-widget font sizes but
+/// one number the whole interface is scaled by.
+///
+/// Bounded rather than free: below 0.6 the tab strip stops being
+/// clickable, and above 2.5 the inspector is wider than the picture it
+/// is inspecting. Both are states a user cannot get back out of, since
+/// the control that would undo them has scaled too.
+pub const MIN_UI_SCALE: f32 = 0.6;
+pub const MAX_UI_SCALE: f32 = 2.5;
+/// What one press of the shortcut changes it by.
+pub const UI_SCALE_STEP: f32 = 0.1;
+
+/// Clamp a scale into the range the interface stays usable at.
+pub fn clamp_ui_scale(scale: f32) -> f32 {
+    if scale.is_finite() {
+        scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE)
+    } else {
+        1.0
+    }
+}
+
 /// State the bar keeps: whether a room is open, whether it is dirty.
 #[derive(Debug, Clone, Copy)]
 pub struct MenuContext {
@@ -97,13 +121,15 @@ pub fn bar(
     menu: MenuContext,
     overlays: &mut Overlays,
     task: Task,
+    ui_scale: &mut f32,
 ) -> MenuActions {
     let mut actions = MenuActions::default();
+    scale_shortcuts(ctx, ui_scale);
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             project_menu(ui, menu, &mut actions);
             room_menu(ui, menu, &mut actions);
-            view_menu(ui, menu, overlays, task, &mut actions);
+            view_menu(ui, menu, overlays, task, ui_scale, &mut actions);
             help_menu(ui, &mut actions);
 
             // The play control sits at the right where a transport
@@ -139,6 +165,32 @@ pub fn bar(
         });
     });
     actions
+}
+
+/// Ctrl+, Ctrl- and Ctrl-0, done here rather than left to egui.
+///
+/// egui has its own keyboard zoom, but it writes the zoom factor
+/// directly, and this editor writes it every frame from `ui_scale` -
+/// so egui's would be undone before it was ever drawn. Turning its
+/// version off and driving the same number from one place keeps the
+/// slider and the keys in agreement.
+fn scale_shortcuts(ctx: &egui::Context, ui_scale: &mut f32) {
+    ctx.options_mut(|options| options.zoom_with_keyboard = false);
+    ctx.input_mut(|input| {
+        let cmd = egui::Modifiers::COMMAND;
+        // Plus is Shift+Equals on most layouts, so both count.
+        if input.consume_key(cmd, egui::Key::Plus)
+            || input.consume_key(cmd, egui::Key::Equals)
+        {
+            *ui_scale = clamp_ui_scale(*ui_scale + UI_SCALE_STEP);
+        }
+        if input.consume_key(cmd, egui::Key::Minus) {
+            *ui_scale = clamp_ui_scale(*ui_scale - UI_SCALE_STEP);
+        }
+        if input.consume_key(cmd, egui::Key::Num0) {
+            *ui_scale = 1.0;
+        }
+    });
 }
 
 fn project_menu(ui: &mut egui::Ui, menu: MenuContext, actions: &mut MenuActions) {
@@ -221,6 +273,7 @@ fn view_menu(
     menu: MenuContext,
     overlays: &mut Overlays,
     task: Task,
+    ui_scale: &mut f32,
     actions: &mut MenuActions,
 ) {
     ui.menu_button("View", |ui| {
@@ -244,6 +297,32 @@ fn view_menu(
                 actions.task = Some(other);
                 ui.close();
             }
+        }
+        ui.separator();
+        ui.label(egui::RichText::new("Interface size").small().weak());
+        ui.horizontal(|ui| {
+            if ui.small_button("-").clicked() {
+                *ui_scale = clamp_ui_scale(*ui_scale - UI_SCALE_STEP);
+            }
+            // Shown as a percentage: 1.2 means nothing, 120% is a size.
+            ui.label(format!("{:.0}%", *ui_scale * 100.0));
+            if ui.small_button("+").clicked() {
+                *ui_scale = clamp_ui_scale(*ui_scale + UI_SCALE_STEP);
+            }
+            if ui.small_button("reset").clicked() {
+                *ui_scale = 1.0;
+            }
+        });
+        let mut slider = *ui_scale;
+        if ui
+            .add(
+                egui::Slider::new(&mut slider, MIN_UI_SCALE..=MAX_UI_SCALE)
+                    .show_value(false),
+            )
+            .on_hover_text("Scales every panel, menu and label. Ctrl+ and Ctrl- do the same.")
+            .changed()
+        {
+            *ui_scale = clamp_ui_scale(slider);
         }
         let _ = menu;
     });
@@ -280,6 +359,30 @@ mod tests {
         assert_eq!(Addable::Hotspot.task(), Task::Things);
         assert_eq!(Addable::Exit.task(), Task::Things);
         assert_eq!(Addable::Entry.task(), Task::Floor);
+    }
+
+    #[test]
+    fn the_interface_scale_cannot_be_driven_somewhere_it_cannot_return_from() {
+        // The control that would undo a bad scale has scaled too, so the
+        // range has to be enforced rather than suggested.
+        assert_eq!(clamp_ui_scale(0.01), MIN_UI_SCALE);
+        assert_eq!(clamp_ui_scale(99.0), MAX_UI_SCALE);
+        assert_eq!(clamp_ui_scale(1.0), 1.0);
+        assert_eq!(clamp_ui_scale(f32::NAN), 1.0, "a NaN scale draws nothing");
+        assert_eq!(clamp_ui_scale(f32::INFINITY), 1.0);
+    }
+
+    #[test]
+    fn stepping_from_either_end_stays_in_range() {
+        let mut scale = MIN_UI_SCALE;
+        for _ in 0..40 {
+            scale = clamp_ui_scale(scale - UI_SCALE_STEP);
+        }
+        assert_eq!(scale, MIN_UI_SCALE);
+        for _ in 0..80 {
+            scale = clamp_ui_scale(scale + UI_SCALE_STEP);
+        }
+        assert_eq!(scale, MAX_UI_SCALE);
     }
 
     #[test]

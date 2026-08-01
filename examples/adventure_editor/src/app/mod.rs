@@ -70,6 +70,8 @@ pub struct Editor {
     task: crate::inspector::Task,
     /// The page that explains the window.
     help: crate::help::HelpUi,
+    /// How big the interface is drawn. Applied to egui each frame.
+    ui_scale: f32,
     tool: Tool,
     selection: Selection,
 
@@ -156,6 +158,7 @@ impl Editor {
             overlays: Overlays::default(),
             task: crate::inspector::Task::default(),
             help: crate::help::HelpUi::default(),
+            ui_scale: 1.0,
             tool: Tool::default(),
             selection: Selection::None,
             cursor: Vec2::ZERO,
@@ -1038,8 +1041,13 @@ impl AppHandler for Editor {
             };
             self.help.offer_once();
             let help_ui = &mut self.help;
+            let ui_scale = &mut self.ui_scale;
             ui.run(window.raw(), |ctx| {
-                menu_actions = crate::menu::bar(ctx, menu_ctx, state.overlays, *state.task);
+                // Applied before anything is laid out, so the whole
+                // frame is measured at the size it will be drawn at.
+                ctx.set_zoom_factor(*ui_scale);
+                menu_actions =
+                    crate::menu::bar(ctx, menu_ctx, state.overlays, *state.task, ui_scale);
                 crate::help::window(ctx, help_ui);
                 play_actions = ui_play::panel(ctx, play, play_draft, &room_id, slots);
                 game_actions = ui_game::window(ctx, game_ui, &room_names, &languages);
