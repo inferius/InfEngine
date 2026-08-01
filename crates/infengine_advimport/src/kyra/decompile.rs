@@ -17,7 +17,7 @@
 //! own.
 
 use glam::Vec2;
-use infengine_adventure::interact::{Hotspot, Shape};
+use infengine_adventure::interact::{Facing, Hotspot, Shape};
 use infengine_adventure::{Action, Script, Verb};
 
 use super::emc;
@@ -56,6 +56,11 @@ const FN_ENTER_SCENE: i32 = 45;
 const FN_DELAY_SECS: i32 = 33;
 /// Puts an item in the inventory.
 const FN_ADD_ITEM: i32 = 105;
+/// Turns a character to face a direction.
+const FN_SET_FACING: i32 = 58;
+/// Which argument of [`FN_SET_FACING`] is the direction.
+const FACING_ARG: usize = 1;
+
 /// Opens an animation file and binds it to a slot.
 const FN_OPEN_WSA: i32 = 41;
 /// Releases a slot.
@@ -274,6 +279,12 @@ fn translate(
         FN_ADD_ITEM => site.args.first().copied().map(|item| Action::Give {
             item: format!("kyra.item{item}"),
         }),
+        FN_SET_FACING => site
+            .args
+            .get(FACING_ARG)
+            .copied()
+            .and_then(facing)
+            .map(|facing| Action::Face { facing }),
         // The slot says which file, and the file is imported under the
         // room's name and its own. A slot nothing opened stays unknown
         // rather than pointing at an animation that is not there.
@@ -300,6 +311,23 @@ fn translate(
         functions::Kind::Plumbing => Translated::Dropped(functions::Kind::Plumbing),
         functions::Kind::Query => Translated::Dropped(functions::Kind::Query),
         _ => Translated::Step(unknown(site)),
+    }
+}
+
+/// The direction a facing number means, if it is one we can express.
+///
+/// Kyrandia turns its characters through eight directions and our actor
+/// has four, so the general mapping would be a decision with nothing to
+/// check it against. It does not have to be made: across the whole game
+/// every one of the 408 calls asks for 3 or 5, which are the two
+/// diagonals toward the camera - a character turned to its right and to
+/// its left. Those two are unambiguous, and anything else is refused
+/// rather than rounded to the nearest thing we happen to have.
+fn facing(direction: i32) -> Option<Facing> {
+    match direction {
+        3 => Some(Facing::Right),
+        5 => Some(Facing::Left),
+        _ => None,
     }
 }
 
@@ -659,6 +687,31 @@ mod tests {
             checked.scripts[0].actions[0],
             Action::Unknown { .. }
         ));
+    }
+
+    #[test]
+    fn the_two_directions_the_game_actually_uses_are_translated() {
+        // Eight directions to our four would be a decision with nothing
+        // to check it against - except that the game only ever asks for
+        // two of them, and those two are unambiguous.
+        assert_eq!(facing(3), Some(Facing::Right));
+        assert_eq!(facing(5), Some(Facing::Left));
+        for other in [0, 1, 2, 4, 6, 7, -1] {
+            assert_eq!(facing(other), None, "{other} was rounded to something");
+        }
+
+        // setCharacterFacing(character, direction, delay)
+        let mut code = push(0);
+        code.extend(push(5));
+        code.extend(push(0));
+        code.extend(call(FN_SET_FACING as u16));
+        let out = decompile("x", &script_with(code, 2, vec![0]));
+        assert_eq!(
+            out.scripts[0].actions[0],
+            Action::Face {
+                facing: Facing::Left
+            }
+        );
     }
 
     #[test]
