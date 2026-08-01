@@ -17,6 +17,7 @@ pub mod emc;
 pub mod format40;
 pub mod format80;
 pub mod frames;
+pub mod kyradat;
 #[cfg(feature = "mt32")]
 pub mod mt32;
 pub mod msc;
