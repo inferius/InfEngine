@@ -19,7 +19,7 @@ use crate::loca::LanguageChoice;
 use crate::pack::GameManifest;
 use crate::project::Project;
 use crate::room::Room;
-use crate::screen::{self, Screen, ScreenAction};
+use crate::screen::{Screen, ScreenAction};
 use crate::{Verb, save};
 
 use glam::Vec2;
@@ -465,6 +465,7 @@ pub fn reading_time(text: &str) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::screen;
 
     #[test]
     fn back_out_of_a_submenu_lands_on_the_menu_it_came_from() {
