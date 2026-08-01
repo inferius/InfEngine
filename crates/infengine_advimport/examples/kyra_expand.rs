@@ -44,7 +44,8 @@ fn main() {
         graph.names.len()
     );
 
-    match rooms::expand(std::path::Path::new(&dir), &graph) {
+    let rooms_dir = std::path::Path::new(&dir);
+    match rooms::expand(rooms_dir, &graph) {
         Ok(done) => {
             println!(
                 "wrote {} rooms with {} exits, replaced {} backgrounds",
@@ -60,4 +61,45 @@ fn main() {
         }
         Err(err) => println!("{dir}: {err}"),
     }
+
+    // The scripts sit beside the rooms, and their scene numbers index
+    // the same table. Resolving them here is what joins the game's
+    // three regions into one world.
+    if let Some(scripts) = rooms_dir.parent().map(|p| p.join("scripts")) {
+        let resolved = resolve_scripts(&scripts, &graph);
+        println!("{resolved} scripts had scene numbers turned into rooms");
+    }
+}
+
+/// Rewrite `sceneN` into room ids across a scripts directory.
+fn resolve_scripts(dir: &std::path::Path, graph: &rooms::RoomGraph) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut touched = 0;
+    for path in entries.flatten().map(|e| e.path()) {
+        if !path.to_string_lossy().ends_with(".script.ron") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(mut scripts) = ron::from_str::<Vec<infengine_adventure::Script>>(&text) else {
+            continue;
+        };
+        let before = text.clone();
+        for script in &mut scripts {
+            rooms::resolve_scenes(script, graph);
+        }
+        let Ok(out) = ron::ser::to_string_pretty(
+            &scripts,
+            ron::ser::PrettyConfig::new().indentor("  ").struct_names(true),
+        ) else {
+            continue;
+        };
+        if out != before && std::fs::write(&path, out).is_ok() {
+            touched += 1;
+        }
+    }
+    touched
 }

@@ -30,10 +30,12 @@ use std::fs;
 use std::path::Path;
 
 use glam::Vec2;
+use infengine_adventure::action::Action;
 use infengine_adventure::interact::{Exit, Shape};
 use infengine_adventure::Room;
 
-use super::kyradat::{Direction, RoomGraph};
+pub use super::kyradat::RoomGraph;
+use super::kyradat::Direction;
 
 /// How deep an exit strip reaches into the room, in pixels.
 ///
@@ -141,6 +143,87 @@ pub fn instance(base: &Room, id: &str, prefix: &str, index: usize, graph: &RoomG
     room
 }
 
+/// Turn `sceneN` into the room the game means.
+///
+/// A script that moves the player calls `enterNewScene` with a number,
+/// and the decompiler keeps it as `scene7` because inventing a name for
+/// it would be a guess that later reads as a fact. The number indexes
+/// the same table the graph comes from, so once that is loaded the guess
+/// is not needed.
+///
+/// This is what joins the game up. The compass table alone leaves three
+/// separate regions - the outdoors, the castle, a pocket of forest -
+/// because the ways between them are scripted rather than walked. Of the
+/// 22 scene links in the retail scripts only one is also a compass
+/// neighbour, and that one is a doorway with no way back in the table:
+/// GEM leads south to TRUNK, TRUNK's own exits do not lead to GEM, and
+/// TRUNK's script is the way home.
+pub fn resolve_scenes(script: &mut infengine_adventure::Script, graph: &RoomGraph) {
+    let ids = room_ids(graph);
+    fn walk(actions: &mut [Action], ids: &HashMap<usize, String>) {
+        for action in actions {
+            match action {
+                Action::GoToRoom { room, .. } => {
+                    if let Some(number) = room
+                        .strip_prefix("scene")
+                        .and_then(|n| n.parse::<usize>().ok())
+                        && let Some(id) = ids.get(&number)
+                    {
+                        *room = id.clone();
+                    }
+                }
+                Action::Branch { then, otherwise, .. } => {
+                    walk(then, ids);
+                    walk(otherwise, ids);
+                }
+                _ => {}
+            }
+        }
+    }
+    walk(&mut script.actions, &ids);
+}
+
+/// The room to copy for a background, whether or not this has run before.
+///
+/// The plain-named file is the import's own output. After one expansion
+/// it is gone for any background that carries several rooms, replaced by
+/// the numbered ones - so a second run has to accept one of those as the
+/// thing to copy. Without that, running this twice quietly turns 221
+/// rooms into 61 and reports the rest as never imported.
+///
+/// Which numbered room is picked does not matter: they differ only in
+/// their id, their script prefix and their exits, and all three are set
+/// again below.
+fn base_room(dir: &Path, prefix: &str) -> Option<Room> {
+    let plain = dir.join(format!("{prefix}.room.ron"));
+    if let Ok(room) = infengine_adventure::load(&plain) {
+        return Some(room);
+    }
+    let numbered = format!("{prefix}_");
+    let mut candidates: Vec<std::path::PathBuf> = fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(&numbered)
+                        && name.ends_with(".room.ron")
+                        // `foresta_12` is one of ours; `forestaxyz_1` is
+                        // a different background whose name starts the
+                        // same way.
+                        && name[numbered.len()..]
+                            .trim_end_matches(".room.ron")
+                            .chars()
+                            .all(|c| c.is_ascii_digit())
+                })
+        })
+        .collect();
+    candidates.sort();
+    infengine_adventure::load(candidates.first()?).ok()
+}
+
 /// Expand the rooms an import wrote into the rooms the game has.
 ///
 /// `dir` is the import's `rooms/` directory.
@@ -154,10 +237,7 @@ pub fn expand(dir: &Path, graph: &RoomGraph) -> std::io::Result<Expansion> {
     let load = |prefix: &str, bases: &mut HashMap<String, Option<Room>>| -> Option<Room> {
         bases
             .entry(prefix.to_string())
-            .or_insert_with(|| {
-                let path = dir.join(format!("{prefix}.room.ron"));
-                infengine_adventure::load(&path).ok()
-            })
+            .or_insert_with(|| base_room(dir, prefix))
             .clone()
     };
 
