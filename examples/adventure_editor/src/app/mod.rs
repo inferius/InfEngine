@@ -66,6 +66,8 @@ pub struct Editor {
 
     view: crate::view::View,
     overlays: Overlays,
+    /// Which inspector job is open.
+    task: crate::inspector::Task,
     tool: Tool,
     selection: Selection,
 
@@ -150,6 +152,7 @@ impl Editor {
             missing_images: Vec::new(),
             view: crate::view::View::default(),
             overlays: Overlays::default(),
+            task: crate::inspector::Task::default(),
             tool: Tool::default(),
             selection: Selection::None,
             cursor: Vec2::ZERO,
@@ -914,6 +917,7 @@ impl AppHandler for Editor {
                 project: &self.project,
                 current_room: self.current_room,
                 room: &mut self.room,
+                task: &mut self.task,
                 tool: &mut self.tool,
                 overlays: &mut self.overlays,
                 selection: self.selection,

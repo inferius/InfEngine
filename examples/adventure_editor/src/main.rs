@@ -17,6 +17,7 @@ mod app;
 mod assets;
 mod draw;
 mod edit;
+mod inspector;
 mod play;
 mod playback;
 mod sheet;

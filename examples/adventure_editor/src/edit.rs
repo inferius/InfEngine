@@ -23,21 +23,16 @@ pub enum Tool {
 }
 
 impl Tool {
+    /// Every tool, for the tests that keep the inspector's tab lists
+    /// and its wording complete. Nothing at runtime wants all of them:
+    /// each tab offers the ones its own job uses.
+    #[cfg(test)]
     pub const ALL: [Tool; 4] = [
         Tool::Select,
         Tool::DrawFloor,
         Tool::DrawHotspot,
         Tool::WalkPreview,
     ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Tool::Select => "Select",
-            Tool::DrawFloor => "Draw floor",
-            Tool::DrawHotspot => "Draw hotspot",
-            Tool::WalkPreview => "Walk preview",
-        }
-    }
 }
 
 /// Which polygon list a vertex belongs to.
@@ -471,9 +466,8 @@ mod tests {
     }
 
     #[test]
-    fn tool_list_is_complete_and_labelled() {
+    fn the_tool_list_is_complete() {
         assert_eq!(Tool::ALL.len(), 4);
         assert_eq!(Tool::default(), Tool::Select);
-        assert!(Tool::ALL.iter().all(|t| !t.label().is_empty()));
     }
 }

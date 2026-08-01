@@ -31,7 +31,7 @@ pub mod color {
 }
 
 /// Which overlays are switched on.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Overlays {
     pub floor: bool,
     pub hotspots: bool,
