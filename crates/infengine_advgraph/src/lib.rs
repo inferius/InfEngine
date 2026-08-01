@@ -160,7 +160,7 @@ pub const ADVENTURE_NODES: &[NodeKindDef] = &[
     },
     NodeKindDef {
         id: "adv_branch",
-        label: "If Flag",
+        label: "If",
         category: "Adventure",
         inputs: EXEC_IN,
         outputs: BRANCH_OUT,
@@ -547,6 +547,44 @@ mod tests {
         let script = sample();
         let graph = to_graph(&script);
         assert_eq!(from_graph(&graph), script.actions);
+    }
+
+    #[test]
+    fn a_question_the_import_could_not_phrase_survives_too() {
+        // An imported game is mostly branches on things we cannot yet
+        // express. If opening one in the editor turned its condition
+        // into an empty flag, saving would quietly rewrite the logic of
+        // every room to take the same side every time.
+        let mut script = Script::new("altar.look");
+        script.push(Action::Branch {
+            on: Condition::Unresolved {
+                call: "kyra:getItemInMarbleVase".into(),
+                args: vec![0, 4],
+            },
+            then: vec![Action::Say {
+                line: "altar.02".into(),
+                speaker: None,
+            }],
+            otherwise: vec![Action::Face {
+                facing: Facing::Left,
+            }],
+        });
+
+        let back = from_graph(&to_graph(&script));
+        assert_eq!(back, script.actions);
+    }
+
+    #[test]
+    fn a_branch_with_no_question_at_all_reads_back_as_an_empty_flag() {
+        // A node the author dropped on the canvas and has not filled in.
+        // Two empty readings are possible and the friendlier one wins.
+        let mut script = Script::new("x");
+        script.push(Action::Branch {
+            on: Condition::Flag(String::new()),
+            then: Vec::new(),
+            otherwise: Vec::new(),
+        });
+        assert_eq!(from_graph(&to_graph(&script)), script.actions);
     }
 
     #[test]
