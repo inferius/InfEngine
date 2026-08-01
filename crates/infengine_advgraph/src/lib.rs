@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 
 use glam::Vec2;
-use infengine_adventure::action::{Action, Script};
+use infengine_adventure::action::{Action, Condition, Script};
 use infengine_adventure::interact::Facing;
 use infengine_blueprint::{Graph, NodeId, NodeKindDef, NodeKindRegistry, PinSpec, PinType};
 
@@ -267,7 +267,7 @@ fn follow(
 
         let action = match node.kind.as_str() {
             "adv_branch" => Action::Branch {
-                flag: param(node, "flag"),
+                on: condition_of(node),
                 then: follow(graph, node.id, "then", visited),
                 otherwise: follow(graph, node.id, "else", visited),
             },
@@ -361,17 +361,22 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
             set("hotspot", hotspot.clone());
             set("enabled", enabled.to_string());
         }
-        Action::Branch { flag, .. } => set("flag", flag.clone()),
+        // A branch keeps its question in the same two parameters an
+        // unresolved step uses, so the graph has one way of saying "the
+        // import could not read this" rather than two.
+        Action::Branch { on, .. } => match on {
+            Condition::Flag(flag) => set("flag", flag.clone()),
+            Condition::Unresolved { call, args } => {
+                set("call", call.clone());
+                if !args.is_empty() {
+                    set("args", join_args(args));
+                }
+            }
+        },
         Action::Unknown { call, args } => {
             set("call", call.clone());
             if !args.is_empty() {
-                set(
-                    "args",
-                    args.iter()
-                        .map(i32::to_string)
-                        .collect::<Vec<_>>()
-                        .join(","),
-                );
+                set("args", join_args(args));
             }
         }
     }
@@ -426,11 +431,7 @@ fn read_action(node: &infengine_blueprint::Node) -> Option<Action> {
         },
         "adv_unknown" => Action::Unknown {
             call: param(node, "call"),
-            args: node
-                .params
-                .get("args")
-                .map(|args| args.split(',').filter_map(|a| a.trim().parse().ok()).collect())
-                .unwrap_or_default(),
+            args: split_args(&param(node, "args")),
         },
         _ => return None,
     };
@@ -439,6 +440,40 @@ fn read_action(node: &infengine_blueprint::Node) -> Option<Action> {
 
 fn param(node: &infengine_blueprint::Node, key: &str) -> String {
     node.params.get(key).cloned().unwrap_or_default()
+}
+
+/// Arguments as one parameter value.
+fn join_args(args: &[i32]) -> String {
+    args.iter().map(i32::to_string).collect::<Vec<_>>().join(",")
+}
+
+/// Arguments read back out of one.
+///
+/// Anything that is not a number is dropped rather than defaulted to
+/// zero: a zero that was really a typo is worse than an argument that is
+/// visibly missing.
+fn split_args(value: &str) -> Vec<i32> {
+    value
+        .split(',')
+        .filter_map(|arg| arg.trim().parse().ok())
+        .collect()
+}
+
+/// The question a branch node asks.
+///
+/// A node with a call parameter carries a question the import could not
+/// phrase; otherwise it tests a flag. A branch nobody has filled in yet
+/// has neither, and an empty flag is the friendlier of the two readings.
+fn condition_of(node: &infengine_blueprint::Node) -> Condition {
+    let call = param(node, "call");
+    if call.is_empty() {
+        Condition::Flag(param(node, "flag"))
+    } else {
+        Condition::Unresolved {
+            call,
+            args: split_args(&param(node, "args")),
+        }
+    }
 }
 
 fn optional(node: &infengine_blueprint::Node, key: &str) -> Option<String> {
@@ -518,7 +553,7 @@ mod tests {
     fn a_branch_survives_with_both_sides_in_order() {
         let mut script = Script::new("hall.chest.use");
         script.push(Action::Branch {
-            flag: "has_key".into(),
+            on: Condition::Flag("has_key".into()),
             then: vec![
                 Action::Say {
                     line: "hall.01".into(),
@@ -543,9 +578,9 @@ mod tests {
     fn nested_branches_survive_too() {
         let mut script = Script::new("deep");
         script.push(Action::Branch {
-            flag: "outer".into(),
+            on: Condition::Flag("outer".into()),
             then: vec![Action::Branch {
-                flag: "inner".into(),
+                on: Condition::Flag("inner".into()),
                 then: vec![Action::Give { item: "a".into() }],
                 otherwise: vec![Action::Give { item: "b".into() }],
             }],
@@ -621,7 +656,7 @@ mod tests {
                 enabled: false,
             },
             Action::Branch {
-                flag: String::new(),
+                on: Condition::Flag(String::new()),
                 then: Vec::new(),
                 otherwise: Vec::new(),
             },
@@ -691,7 +726,7 @@ mod tests {
     fn the_layout_puts_the_two_sides_of_a_branch_in_different_columns() {
         let mut script = Script::new("branchy");
         script.push(Action::Branch {
-            flag: "f".into(),
+            on: Condition::Flag("f".into()),
             then: vec![Action::Give { item: "a".into() }],
             otherwise: vec![Action::Give { item: "b".into() }],
         });

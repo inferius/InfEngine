@@ -256,11 +256,22 @@ impl Runner {
                 state.set_hotspot(hotspot.clone(), *enabled);
             }
             Action::Branch {
-                flag,
+                on,
                 then,
                 otherwise,
             } => {
-                let taken = if state.flag(flag) { then } else { otherwise };
+                // A question we cannot answer is false rather than a
+                // guess, and it says so: a branch silently taking its
+                // else side would look like the game deciding, not like
+                // the importer not knowing.
+                let yes = match on {
+                    crate::action::Condition::Flag(flag) => state.flag(flag),
+                    crate::action::Condition::Unresolved { call, .. } => {
+                        events.push(Event::Skipped { call: call.clone() });
+                        false
+                    }
+                };
+                let taken = if yes { then } else { otherwise };
                 if !taken.is_empty() {
                     self.frames.push(Frame {
                         actions: taken.clone(),
@@ -276,6 +287,7 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Condition;
     use glam::Vec2;
 
     use crate::interact::Facing;
@@ -484,7 +496,7 @@ mod tests {
         let mut runner = Runner::new();
         runner.start_actions(vec![
             Action::Branch {
-                flag: "has_key".into(),
+                on: Condition::Flag("has_key".into()),
                 then: vec![Action::SetFlag {
                     flag: "opened".into(),
                     value: true,

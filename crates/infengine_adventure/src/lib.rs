@@ -55,7 +55,7 @@ pub mod screen;
 pub mod script_io;
 pub mod walk;
 
-pub use action::{Action, Script};
+pub use action::{Action, Condition, Script};
 pub use anim::{Animation, AnimationSet};
 pub use game::{Actor, Click, Game, GameState, Runner};
 pub use host::Host;

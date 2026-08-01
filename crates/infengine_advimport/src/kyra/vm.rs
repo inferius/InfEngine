@@ -165,36 +165,44 @@ pub struct CallSite {
 /// an `Eval`. Stopping the scan at the first non-push instruction, the
 /// obvious implementation, finds no arguments at all anywhere.
 pub fn call_sites(instructions: &[Instruction]) -> Vec<CallSite> {
-    let mut out = Vec::new();
-    for (index, instruction) in instructions.iter().enumerate() {
-        let (Op::Call, Some(function)) = (instruction.op, instruction.operand) else {
-            continue;
-        };
-        let mut args = Vec::new();
-        let mut back = index;
-        while back > 0 {
-            back -= 1;
-            let previous = &instructions[back];
-            if previous.op.is_push() {
-                if let Some(value) = previous.operand {
-                    args.push(value);
-                    continue;
-                }
-                break;
-            }
-            // Bookkeeping between the pushes; keep walking back.
-            if matches!(previous.op, Op::Eval) {
+    (0..instructions.len())
+        .filter_map(|index| call_at(instructions, index))
+        .collect()
+}
+
+/// The call at `index`, if there is one there.
+///
+/// Separate from [`call_sites`] because a decompiler that recovers the
+/// shape of the code walks instructions rather than a flat list of
+/// calls, and still needs each call's arguments when it reaches one.
+pub fn call_at(instructions: &[Instruction], index: usize) -> Option<CallSite> {
+    let instruction = instructions.get(index)?;
+    let (Op::Call, Some(function)) = (instruction.op, instruction.operand) else {
+        return None;
+    };
+    let mut args = Vec::new();
+    let mut back = index;
+    while back > 0 {
+        back -= 1;
+        let previous = &instructions[back];
+        if previous.op.is_push() {
+            if let Some(value) = previous.operand {
+                args.push(value);
                 continue;
             }
             break;
         }
-        out.push(CallSite {
-            at: instruction.at,
-            function,
-            args,
-        });
+        // Bookkeeping between the pushes; keep walking back.
+        if matches!(previous.op, Op::Eval) {
+            continue;
+        }
+        break;
     }
-    out
+    Some(CallSite {
+        at: instruction.at,
+        function,
+        args,
+    })
 }
 
 #[cfg(test)]

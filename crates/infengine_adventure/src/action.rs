@@ -75,9 +75,9 @@ pub enum Action {
     Take { item: String },
     /// Show or hide a hotspot.
     EnableHotspot { hotspot: String, enabled: bool },
-    /// Branch on a flag.
+    /// Take one of two paths.
     Branch {
-        flag: String,
+        on: Condition,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         then: Vec<Action>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -95,6 +95,44 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         args: Vec<i32>,
     },
+}
+
+/// What a branch tests.
+///
+/// A flag is the condition an author writes. The other one exists
+/// because an imported game asks questions we cannot yet phrase - is
+/// this item in the marble vase, is the cauldron lit - and the shape of
+/// the logic is worth keeping even where the question is not readable
+/// yet. Dropping the branch instead would flatten an if-else into both
+/// halves running one after the other, which is not what the game does.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Condition {
+    /// A story flag, true when it has been set.
+    Flag(String),
+    /// A test the import could not express.
+    ///
+    /// False at run time, so the branch takes its `otherwise` side, and
+    /// counted by the editor as work still to do.
+    Unresolved {
+        call: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<i32>,
+    },
+}
+
+impl Condition {
+    /// A short label for the editor.
+    pub fn label(&self) -> String {
+        match self {
+            Condition::Flag(flag) => flag.clone(),
+            Condition::Unresolved { call, .. } => format!("{call}?"),
+        }
+    }
+
+    /// Is this a question we can actually answer?
+    pub fn is_resolved(&self) -> bool {
+        matches!(self, Condition::Flag(_))
+    }
 }
 
 impl Action {
@@ -119,7 +157,7 @@ impl Action {
             Action::EnableHotspot { hotspot, enabled } => {
                 format!("{} {hotspot}", if *enabled { "enable" } else { "disable" })
             }
-            Action::Branch { flag, .. } => format!("if {flag}"),
+            Action::Branch { on, .. } => format!("if {}", on.label()),
             Action::Unknown { call, .. } => format!("unknown {call}"),
         }
     }
@@ -228,7 +266,7 @@ mod tests {
                 speaker: Some("Brandon".into()),
             })
             .push(Action::Branch {
-                flag: "has_key".into(),
+                on: Condition::Flag("has_key".into()),
                 then: vec![
                     Action::PlaySound {
                         sound: "sfx/unlock.wav".into(),
@@ -289,7 +327,7 @@ mod tests {
                 args: vec![1, 2],
             })
             .push(Action::Branch {
-                flag: "f".into(),
+                on: Condition::Flag("f".into()),
                 then: vec![Action::Unknown {
                     call: "native 42".into(),
                     args: Vec::new(),
@@ -335,7 +373,7 @@ mod tests {
                 enabled: false,
             },
             Action::Branch {
-                flag: "f".into(),
+                on: Condition::Flag("f".into()),
                 then: Vec::new(),
                 otherwise: Vec::new(),
             },

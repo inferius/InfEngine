@@ -18,12 +18,12 @@
 
 use glam::Vec2;
 use infengine_adventure::interact::{Facing, Hotspot, Shape};
-use infengine_adventure::{Action, Script, Verb};
+use infengine_adventure::{Action, Condition, Script, Verb};
 
 use super::emc;
 use super::functions;
 use super::regions;
-use super::vm::{self, CallSite};
+use super::vm::{self, CallSite, Op};
 
 /// Slots that say something. They differ in how the original drew the
 /// text, which is a rendering decision our engine makes for itself.
@@ -56,6 +56,8 @@ const FN_ENTER_SCENE: i32 = 45;
 const FN_DELAY_SECS: i32 = 33;
 /// Puts an item in the inventory.
 const FN_ADD_ITEM: i32 = 105;
+/// Asks whether a story flag is set. A condition, not a step.
+const FN_QUERY_FLAG: i32 = 4;
 /// Turns a character to face a direction.
 const FN_SET_FACING: i32 = 58;
 /// Which argument of [`FN_SET_FACING`] is the direction.
@@ -331,6 +333,161 @@ fn facing(direction: i32) -> Option<Facing> {
     }
 }
 
+/// Everything the structuring pass carries around.
+struct Pass<'a> {
+    room: &'a str,
+    instructions: &'a [vm::Instruction],
+    texts: &'a [String],
+    known: Known<'a>,
+    /// Which animation file each slot holds, as the walk reaches it.
+    slots: WsaSlots,
+    plumbing_dropped: usize,
+    queries_dropped: usize,
+}
+
+/// Word index a jump points at, with the marker bit removed.
+fn jump_target(operand: i32) -> usize {
+    (operand as u32 & 0x7FFF) as usize
+}
+
+/// The first instruction at or after `word`.
+fn at_or_after(instructions: &[vm::Instruction], word: usize) -> usize {
+    instructions.partition_point(|instruction| instruction.at / 2 < word)
+}
+
+impl Pass<'_> {
+    /// Read a range of instructions as a list of steps.
+    ///
+    /// The shape of the code is recovered, not just its calls. A branch
+    /// becomes a branch, with each side read the same way, so an
+    /// imported script says what the game says instead of running both
+    /// halves of every choice one after the other.
+    ///
+    /// This works because Kyrandia's scripts have no loops at all -
+    /// across 1513 conditional jumps in the retail data not one goes
+    /// backwards - so every jump forward nests, and nesting is the only
+    /// thing this has to handle. A backward jump is left as a step
+    /// rather than turned into something invented.
+    fn structure(&mut self, range: std::ops::Range<usize>) -> Vec<Action> {
+        let mut out = Vec::new();
+        let mut index = range.start;
+        while index < range.end.min(self.instructions.len()) {
+            let instruction = self.instructions[index];
+
+            if let (Op::JumpIfFalse, Some(target)) = (instruction.op, instruction.operand) {
+                let end = at_or_after(self.instructions, jump_target(target));
+                if end > index && end <= range.end {
+                    index = self.branch(&mut out, index, end, range.end);
+                    continue;
+                }
+            }
+
+            if let Some(site) = vm::call_at(self.instructions, index) {
+                self.slots.observe(&site, self.texts);
+                self.step(&mut out, &site);
+            }
+            index += 1;
+        }
+        out
+    }
+
+    /// Read one conditional and both of its sides. Returns where to
+    /// carry on.
+    fn branch(
+        &mut self,
+        out: &mut Vec<Action>,
+        at: usize,
+        mut then_end: usize,
+        limit: usize,
+    ) -> usize {
+        // An else side announces itself: the last thing the then side
+        // does is jump forward over it.
+        let mut otherwise = then_end..then_end;
+        let mut resume = then_end;
+        if then_end > at + 1
+            && let Some(last) = self.instructions.get(then_end - 1)
+            && let (Op::JumpOrConst, Some(target)) = (last.op, last.operand)
+        {
+            let after = at_or_after(self.instructions, jump_target(target));
+            if after > then_end && after <= limit {
+                otherwise = then_end..after;
+                resume = after;
+                // The jump itself is not a step on either side.
+                then_end -= 1;
+            }
+        }
+
+        let on = self.condition(at);
+        let then = self.structure(at + 1..then_end);
+        let otherwise = self.structure(otherwise);
+
+        // A branch that decides nothing and does nothing is not worth a
+        // node; its condition was machinery.
+        if then.is_empty() && otherwise.is_empty() {
+            return resume;
+        }
+        out.push(Action::Branch {
+            on,
+            then,
+            otherwise,
+        });
+        resume
+    }
+
+    /// What the conditional at `at` is testing.
+    ///
+    /// A flag query right before it is the one question we can express.
+    /// Anything else keeps its name and its arguments, so the editor
+    /// shows a branch on a real question rather than a branch on
+    /// nothing - and the runtime takes the else side, which is at least
+    /// a decision it can explain.
+    fn condition(&self, at: usize) -> Condition {
+        // Back over the answer being pushed and the stack cleanup.
+        let mut back = at;
+        while back > 0 {
+            back -= 1;
+            let previous = self.instructions[back];
+            match previous.op {
+                Op::PushReturn | Op::AddStack | Op::Negate | Op::Eval => continue,
+                Op::Call => break,
+                _ => return unresolved_condition(None),
+            }
+        }
+        let Some(site) = vm::call_at(self.instructions, back) else {
+            return unresolved_condition(None);
+        };
+        if site.function == FN_QUERY_FLAG
+            && let Some(&flag) = site.args.first()
+        {
+            return Condition::Flag(format!("kyra.flag{flag}"));
+        }
+        unresolved_condition(Some(&site))
+    }
+
+    /// Add one call as a step, or count why it is not one.
+    fn step(&mut self, out: &mut Vec<Action>, site: &CallSite) {
+        match translate(self.room, site, self.texts.len(), &self.slots, self.known) {
+            Translated::Step(action) => out.push(action),
+            Translated::Dropped(functions::Kind::Query) => self.queries_dropped += 1,
+            Translated::Dropped(_) => self.plumbing_dropped += 1,
+        }
+    }
+}
+
+/// A condition we could not phrase, named as far as it can be.
+fn unresolved_condition(site: Option<&CallSite>) -> Condition {
+    match site {
+        Some(site) => Condition::Unresolved {
+            call: functions::label(site.function),
+            args: site.args.clone(),
+        },
+        None => Condition::Unresolved {
+            call: "kyra:condition".into(),
+            args: Vec::new(),
+        },
+    }
+}
+
 /// Two consecutive arguments read as a point.
 fn point(args: &[i32], from: usize) -> Option<glam::Vec2> {
     let x = *args.get(from)?;
@@ -423,31 +580,38 @@ pub fn decompile_known(
         // The slots are read from the whole script up to here, not just
         // from this entry point: a file opened by one entry point is
         // still open when another plays from it.
-        let mut slots = WsaSlots::default();
+        let mut pass = Pass {
+            room,
+            instructions: &instructions,
+            texts: &script.texts,
+            known,
+            slots: WsaSlots::default(),
+            plumbing_dropped: 0,
+            queries_dropped: 0,
+        };
         for site in sites.iter().take_while(|s| s.at < *start) {
-            slots.observe(site, &script.texts);
+            pass.slots.observe(site, &script.texts);
         }
-        for site in sites.iter().filter(|s| s.at >= *start && s.at < end) {
-            slots.observe(site, &script.texts);
-            let action = match translate(room, site, script.texts.len(), &slots, known) {
-                Translated::Step(action) => action,
-                Translated::Dropped(functions::Kind::Query) => {
-                    out.queries_dropped += 1;
-                    continue;
+        let from = at_or_after(&instructions, *start / 2);
+        let to = if end == usize::MAX {
+            instructions.len()
+        } else {
+            at_or_after(&instructions, end / 2)
+        };
+        for action in pass.structure(from..to) {
+            action.walk(&mut |step| {
+                if let Action::GoToRoom { room, .. } = step
+                    && let Some(number) =
+                        room.strip_prefix("scene").and_then(|n| n.parse().ok())
+                    && !out.scene_targets.contains(&number)
+                {
+                    out.scene_targets.push(number);
                 }
-                Translated::Dropped(_) => {
-                    out.plumbing_dropped += 1;
-                    continue;
-                }
-            };
-            if let Action::GoToRoom { room, .. } = &action
-                && let Some(number) = room.strip_prefix("scene").and_then(|n| n.parse().ok())
-                && !out.scene_targets.contains(&number)
-            {
-                out.scene_targets.push(number);
-            }
+            });
             compiled.push(action);
         }
+        out.plumbing_dropped += pass.plumbing_dropped;
+        out.queries_dropped += pass.queries_dropped;
         if !compiled.is_empty() {
             out.scripts.push(compiled);
         }
@@ -501,23 +665,23 @@ pub fn hotspots_known(
         let script_id = format!("{room}.{id}");
 
         let mut compiled = Script::new(script_id.clone());
-        let body = instructions
-            .get(region.body.clone())
-            .unwrap_or_default();
         // Everything before the body, so a file opened when the room
         // was entered is still bound when a click plays from it.
-        let mut slots = WsaSlots::default();
+        let mut pass = Pass {
+            room,
+            instructions: &instructions,
+            texts: &script.texts,
+            known,
+            slots: WsaSlots::default(),
+            plumbing_dropped: 0,
+            queries_dropped: 0,
+        };
         let before = instructions.get(..region.body.start).unwrap_or_default();
         for site in vm::call_sites(before) {
-            slots.observe(&site, &script.texts);
+            pass.slots.observe(&site, &script.texts);
         }
-        for site in vm::call_sites(body) {
-            slots.observe(&site, &script.texts);
-            if let Translated::Step(action) =
-                translate(room, &site, script.texts.len(), &slots, known)
-            {
-                compiled.push(action);
-            }
+        for action in pass.structure(region.body.clone()) {
+            compiled.push(action);
         }
 
         out.push((
@@ -687,6 +851,140 @@ mod tests {
             checked.scripts[0].actions[0],
             Action::Unknown { .. }
         ));
+    }
+
+    /// An unconditional jump to a word.
+    fn jump(word: u16) -> Vec<u8> {
+        let mut v = vec![0x20, 0];
+        v.extend_from_slice(&(0x8000 | word).to_be_bytes());
+        v
+    }
+
+    /// A conditional jump, taken when the top of the stack is false.
+    fn jump_if_false(word: u16) -> Vec<u8> {
+        let mut v = vec![0x20 | 15, 0];
+        v.extend_from_slice(&(0x8000 | word).to_be_bytes());
+        v
+    }
+
+    /// `queryGameFlag(flag)` and the pushing of its answer, which is
+    /// how every readable condition in the retail scripts is written.
+    fn ask_flag(flag: i8) -> Vec<u8> {
+        let mut v = push(flag);
+        v.extend(call(FN_QUERY_FLAG as u16));
+        v.extend_from_slice(&[0x40 | 12, 1]); // AddStack 1
+        v.extend_from_slice(&[0x40 | 2, 0]); // PushReturn 0
+        v
+    }
+
+    /// One step whose only job is to be recognisable in a branch.
+    fn set_flag(flag: i8) -> Vec<u8> {
+        let mut v = push(flag);
+        v.extend(call(FN_SET_FLAG as u16));
+        v
+    }
+
+    #[test]
+    fn an_if_else_becomes_a_branch_with_two_sides() {
+        // Flattening this would run both halves of a choice one after
+        // the other, which is not what the game does.
+        let mut code = ask_flag(7);
+        let then = set_flag(1);
+        let otherwise = set_flag(2);
+        // Words: what is written so far, plus the conditional jump.
+        let after_test = code.len() / 2 + 2;
+        let else_at = after_test + then.len() / 2 + 2;
+        let end_at = else_at + otherwise.len() / 2;
+
+        code.extend(jump_if_false(else_at as u16));
+        code.extend(then);
+        code.extend(jump(end_at as u16));
+        code.extend(otherwise);
+
+        let out = decompile("x", &script_with(code, 4, vec![0]));
+        let Some(Action::Branch { on, then, otherwise }) = out.scripts[0].actions.first() else {
+            panic!("not a branch: {:?}", out.scripts[0].actions);
+        };
+        assert_eq!(*on, Condition::Flag("kyra.flag7".into()));
+        assert_eq!(then.len(), 1, "{then:?}");
+        assert_eq!(otherwise.len(), 1, "{otherwise:?}");
+        assert_eq!(
+            then[0],
+            Action::SetFlag {
+                flag: "kyra.flag1".into(),
+                value: true
+            }
+        );
+        assert_eq!(
+            otherwise[0],
+            Action::SetFlag {
+                flag: "kyra.flag2".into(),
+                value: true
+            }
+        );
+    }
+
+    #[test]
+    fn an_if_with_no_else_has_an_empty_other_side() {
+        let mut code = ask_flag(3);
+        let then = set_flag(1);
+        let after_test = code.len() / 2 + 2;
+        let end_at = after_test + then.len() / 2;
+
+        code.extend(jump_if_false(end_at as u16));
+        code.extend(then);
+        code.extend(set_flag(9)); // after the branch, on neither side
+
+        let out = decompile("x", &script_with(code, 4, vec![0]));
+        let Some(Action::Branch { then, otherwise, .. }) = out.scripts[0].actions.first() else {
+            panic!("not a branch: {:?}", out.scripts[0].actions);
+        };
+        assert_eq!(then.len(), 1);
+        assert!(otherwise.is_empty());
+        assert_eq!(
+            out.scripts[0].actions.len(),
+            2,
+            "what follows the branch is not part of it"
+        );
+    }
+
+    #[test]
+    fn a_condition_we_cannot_phrase_keeps_the_shape_and_says_so() {
+        // The alternative is dropping the branch, which turns a choice
+        // into both outcomes happening.
+        let mut code = push(0);
+        code.extend(call(103)); // getItemInMarbleVase
+        code.extend_from_slice(&[0x40 | 12, 1]);
+        code.extend_from_slice(&[0x40 | 2, 0]);
+        let then = set_flag(1);
+        let after_test = code.len() / 2 + 2;
+        let end_at = after_test + then.len() / 2;
+        code.extend(jump_if_false(end_at as u16));
+        code.extend(then);
+
+        let out = decompile("x", &script_with(code, 4, vec![0]));
+        let Some(Action::Branch { on, then, .. }) = out.scripts[0].actions.first() else {
+            panic!("not a branch: {:?}", out.scripts[0].actions);
+        };
+        assert_eq!(
+            *on,
+            Condition::Unresolved {
+                call: "kyra:getItemInMarbleVase".into(),
+                args: vec![0]
+            }
+        );
+        assert!(!on.is_resolved());
+        assert_eq!(then.len(), 1);
+    }
+
+    #[test]
+    fn a_branch_where_neither_side_does_anything_is_not_kept() {
+        // Its condition was machinery deciding how to draw something.
+        let mut code = ask_flag(7);
+        let after_test = code.len() / 2 + 2;
+        code.extend(jump_if_false(after_test as u16));
+        let out = decompile("x", &script_with(code, 4, vec![0]));
+        assert!(out.is_empty(), "{:?}", out.scripts);
     }
 
     #[test]
