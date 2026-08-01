@@ -41,8 +41,9 @@ fn fit_row(pairs: &[(f64, f64, f64)]) -> Option<[f64; 3]> {
                 continue;
             }
             let factor = ata[row][col] / ata[col][col];
-            for k in 0..3 {
-                ata[row][k] -= factor * ata[col][k];
+            let pivot_row = ata[col];
+            for (target, source) in ata[row].iter_mut().zip(pivot_row) {
+                *target -= factor * source;
             }
             atb[row] -= factor * atb[col];
         }
