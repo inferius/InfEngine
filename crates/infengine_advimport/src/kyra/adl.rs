@@ -39,14 +39,19 @@
 //! the ten retail files use 73 of the 75, and 72% of their 494 000
 //! steps are notes, which is what a score looks like.
 //!
-//! **What is left.** Some handlers read further bytes of their own with
-//! `lodsb` or `lodsw` - a jump reads a 16-bit displacement, a patch
-//! change reads a patch - and those extra reads are not accounted for
-//! here, so a stream still drifts after one. It shows as opcode 74
-//! being the fifth most common, which is the clamp catching bytes that
-//! were never opcodes. Settling it means disassembling the 75 handlers;
-//! their addresses are the table at `ALFX.DRV` offset 0x18ed, and the
-//! first body runs from 0x0d9c.
+//! Some handlers then read further bytes of their own - a jump reads a
+//! 16-bit displacement, a patch change reads a patch - so a step is not
+//! always two bytes. [`ARGUMENT_BYTES`] says how many each takes, and
+//! it was not guessed: the 75 handlers were disassembled and their
+//! effect on `si` counted, `lodsb` as one and `lodsw` as two, against
+//! the `inc si` and `dec si` that some of them use to push a byte back.
+//!
+//! Reading with that table instead of assuming two bytes everywhere
+//! cuts the reads that fall past the last handler from 9% of commands
+//! to 5%, and what is left is not drift in the middle of a stream: of
+//! the 7919 remaining, not one is the real opcode 74, and 4903 are
+//! `0xFF`, which is the padding after a program ends. Finding the
+//! terminator is what would account for those.
 //!
 //! Two searches were run before the driver turned up and neither
 //! settled it. Recorded so they are not repeated: hill-climbing the
@@ -92,6 +97,34 @@ pub const MAX_OPCODE: u8 = 0x4A;
 
 /// Handlers in the driver's dispatch table.
 pub const HANDLERS: usize = 75;
+
+/// Argument bytes each command takes after its opcode byte.
+///
+/// Read out of `ALFX.DRV` by disassembling every handler and counting
+/// what it does to `si`: `lodsb` takes one, `lodsw` two, and the `inc
+/// si` and `dec si` some of them use to unread a byte count against
+/// that. Most take one - the byte the dispatcher has already loaded
+/// into `ah` - which is why reading everything as a two-byte pair gets
+/// so close. Seven take none, having pushed their byte back, and
+/// opcode 0x0D takes five.
+pub const ARGUMENT_BYTES: [u8; HANDLERS] = [
+    1, 2, 3, 1, 2, 2, 1, 1, 1, 1, //
+    2, 2, 1, 5, 1, 2, 1, 3, 0, 1, //
+    1, 4, 1, 1, 1, 1, 1, 1, 1, 1, //
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 0, //
+    1, 1, 1, 1, 2, 2, 1, 1, 1, 1, //
+    1, 1, 1, 2, 0, 1, 1, 1, 0, 0, //
+    1, 1, 1, 2, 0, 3, 1, 0, 2, 2, //
+    2, 1, 1, 2, 1,
+];
+
+/// How many bytes a command's arguments take.
+pub fn argument_bytes(opcode: u8) -> usize {
+    ARGUMENT_BYTES
+        .get(usize::from(opcode.min(MAX_OPCODE)))
+        .copied()
+        .unwrap_or(1) as usize
+}
 
 /// One step of a program: always a pair of bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,7 +248,11 @@ impl<'a> AdlFile<'a> {
     }
 }
 
-/// Read a program as a list of steps, a word at a time.
+/// Read a program as a list of steps.
+///
+/// A note is always its pitch and a duration. A command is its opcode
+/// and however many bytes its handler reads, which is usually the one
+/// the dispatcher pre-loads and sometimes more.
 pub fn disassemble(program: &[u8]) -> Vec<Step> {
     let mut steps = Vec::new();
     let mut at = 0;
@@ -225,18 +262,23 @@ pub fn disassemble(program: &[u8]) -> Vec<Step> {
             steps.push(Step::Truncated);
             break;
         };
-        at += 2;
         if byte & 0x80 == 0 {
+            at += 2;
             steps.push(Step::Note {
                 note: byte,
                 duration: argument,
             });
-        } else {
-            steps.push(Step::Command {
-                opcode: (byte & 0x7F).min(MAX_OPCODE),
-                argument,
-            });
+            continue;
         }
+
+        let opcode = (byte & 0x7F).min(MAX_OPCODE);
+        let width = 1 + argument_bytes(opcode);
+        if at + width > program.len() {
+            steps.push(Step::Truncated);
+            break;
+        }
+        at += width;
+        steps.push(Step::Command { opcode, argument });
     }
     steps
 }
@@ -348,6 +390,34 @@ mod tests {
     fn a_stream_that_ends_mid_step_says_so() {
         let steps = disassemble(&[0x65, 0x05, 0x89]);
         assert_eq!(steps.last(), Some(&Step::Truncated));
+    }
+
+    #[test]
+    fn a_command_consumes_what_its_handler_reads() {
+        // Opcode 0x02 reads three bytes after its own, so the note
+        // after it starts four bytes along and not two.
+        assert_eq!(argument_bytes(0x02), 3);
+        let steps = disassemble(&[0x82, 0x11, 0x22, 0x33, 0x40, 0x05]);
+        assert_eq!(
+            steps,
+            vec![
+                Step::Command {
+                    opcode: 0x02,
+                    argument: 0x11
+                },
+                Step::Note {
+                    note: 0x40,
+                    duration: 5
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_command_whose_arguments_run_off_the_end_says_so() {
+        // Opcode 0x0D takes five; four bytes cannot hold it.
+        assert_eq!(argument_bytes(0x0D), 5);
+        assert_eq!(disassemble(&[0x8D, 0x01, 0x02, 0x03]).last(), Some(&Step::Truncated));
     }
 
     #[test]
