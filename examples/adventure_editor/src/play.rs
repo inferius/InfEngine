@@ -246,6 +246,11 @@ fn apply(
             play.note(format!("play: {animation}"));
             request.animation = Some(animation);
         }
+        Event::OpenScreen(id) => {
+            // The test harness has its own screen picker, so a script
+            // asking for one is noted rather than obeyed.
+            play.note(format!("show {id}"));
+        }
         Event::EnterRoom { room, entry } => {
             play.note(format!("go to {room}"));
             request.enter_room = Some((room, entry));

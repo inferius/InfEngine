@@ -40,6 +40,12 @@ pub enum Action {
     Walk { to: Vec2 },
     /// Face a direction without moving.
     Face { facing: crate::interact::Facing },
+    /// Show a screen: a menu, a title card, the end of a chapter.
+    ///
+    /// A script needs this because a cutscene has to hand over to
+    /// something when it finishes, and what it hands over to is usually
+    /// not another room.
+    OpenScreen { screen: String },
     /// Change room.
     GoToRoom {
         room: String,
@@ -98,6 +104,7 @@ impl Action {
             Action::Say { line, .. } => format!("say {line}"),
             Action::Walk { to } => format!("walk to {:.0},{:.0}", to.x, to.y),
             Action::Face { facing } => format!("face {facing:?}"),
+            Action::OpenScreen { screen } => format!("show {screen}"),
             Action::GoToRoom { room, .. } => format!("go to {room}"),
             Action::PlayAnim { animation, .. } => format!("play {animation}"),
             Action::PlaySound { sound } => format!("sound {sound}"),

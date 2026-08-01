@@ -408,6 +408,13 @@ impl Host {
                 }
                 request.animation = Some(animation);
             }
+            Event::OpenScreen(id) => {
+                if self.project.screen(&id).is_some() {
+                    self.screen = Some(id);
+                } else {
+                    self.note(Note::Missing(format!("screen {id}")));
+                }
+            }
             Event::EnterRoom { room, entry } => {
                 let outcome = self.enter(&room, entry.as_deref());
                 request.room_changed |= outcome.room_changed;

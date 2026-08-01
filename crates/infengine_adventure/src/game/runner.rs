@@ -34,6 +34,9 @@ pub enum Event {
         /// Whether the script is waiting for it to finish.
         wait: bool,
     },
+    /// Show a screen. The script carries on underneath it; the host
+    /// decides whether that means paused.
+    OpenScreen(String),
     /// Load another room and place the actor. The host calls
     /// [`Runner::finish_room_change`] once it has.
     EnterRoom {
@@ -220,6 +223,9 @@ impl Runner {
                 }
             }
             Action::Face { facing } => state.actor.facing = *facing,
+            Action::OpenScreen { screen } => {
+                events.push(Event::OpenScreen(screen.clone()));
+            }
             Action::GoToRoom { room: target, entry } => {
                 self.block = Some(Block::RoomChange);
                 events.push(Event::EnterRoom {

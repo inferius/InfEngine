@@ -79,6 +79,14 @@ pub const ADVENTURE_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        id: "adv_open_screen",
+        label: "Show Screen",
+        category: "Adventure",
+        inputs: EXEC_IN,
+        outputs: EXEC_OUT,
+        contexts: &[],
+    },
+    NodeKindDef {
         id: "adv_goto_room",
         label: "Go To Room",
         category: "Adventure",
@@ -286,6 +294,7 @@ fn kind_of(action: &Action) -> &'static str {
         Action::Say { .. } => "adv_say",
         Action::Walk { .. } => "adv_walk",
         Action::Face { .. } => "adv_face",
+        Action::OpenScreen { .. } => "adv_open_screen",
         Action::GoToRoom { .. } => "adv_goto_room",
         Action::PlayAnim { .. } => "adv_play_anim",
         Action::PlaySound { .. } => "adv_play_sound",
@@ -325,6 +334,7 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
             set("y", to.y.to_string());
         }
         Action::Face { facing } => set("facing", format!("{facing:?}")),
+        Action::OpenScreen { screen } => set("screen", screen.clone()),
         Action::GoToRoom { room, entry } => {
             set("room", room.clone());
             if let Some(entry) = entry {
@@ -379,6 +389,9 @@ fn read_action(node: &infengine_blueprint::Node) -> Option<Action> {
         },
         "adv_face" => Action::Face {
             facing: facing(&param(node, "facing")),
+        },
+        "adv_open_screen" => Action::OpenScreen {
+            screen: param(node, "screen"),
         },
         "adv_goto_room" => Action::GoToRoom {
             room: param(node, "room"),
@@ -576,6 +589,9 @@ mod tests {
             Action::Walk { to: Vec2::ZERO },
             Action::Face {
                 facing: Facing::Front,
+            },
+            Action::OpenScreen {
+                screen: String::new(),
             },
             Action::GoToRoom {
                 room: String::new(),

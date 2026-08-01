@@ -50,6 +50,13 @@ pub struct Animation {
     /// than a cutscene or a character.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room: Option<String>,
+    /// Where the frame's top-left sits in the room.
+    ///
+    /// `None` centres it, which is what a full-screen cutscene wants
+    /// and what a title card wants: those are authored at the size they
+    /// are and belong in the middle whatever the room is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<Vec2>,
 }
 
 fn default_fps() -> f32 {
@@ -70,12 +77,25 @@ impl Animation {
             fps: DEFAULT_FPS,
             looping: true,
             room: None,
+            at: None,
         }
     }
 
     pub fn in_room(mut self, room: impl Into<String>) -> Self {
         self.room = Some(room.into());
         self
+    }
+
+    /// Put it somewhere specific rather than in the middle.
+    pub fn at(mut self, at: Vec2) -> Self {
+        self.at = Some(at);
+        self
+    }
+
+    /// Where this frame goes in a room of `room_size`.
+    pub fn position_in(&self, room_size: Vec2) -> Vec2 {
+        self.at
+            .unwrap_or_else(|| ((room_size - self.frame_size) * 0.5).max(Vec2::ZERO))
     }
 
     /// How long one loop takes, in seconds.

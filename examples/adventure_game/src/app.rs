@@ -253,6 +253,7 @@ impl AppHandler for Game {
             }
         }
 
+        let room_size = self.host.room.size;
         let actor = {
             let position = self.host.game.state.actor.position;
             (position, self.host.room.scale.scale_at(position.y))
@@ -269,16 +270,13 @@ impl AppHandler for Game {
             draw::sync_camera(renderer, &self.view);
             draw::layers(renderer, &self.host.room, &self.view, &self.textures);
             if let Some((animation, index, Some(handle))) = frame {
-                draw::animation_frame(
-                    renderer,
-                    &self.view,
-                    &animation,
-                    handle,
-                    index,
-                    Vec2::ZERO,
-                );
+                let at = animation.position_in(room_size);
+                draw::animation_frame(renderer, &self.view, &animation, handle, index, at);
             }
-            if self.host.screen.is_none() {
+            // No floor means nowhere to stand: a cutscene is a room
+            // the player is not in, and drawing a figure on it would be
+            // a figure standing in a film.
+            if self.host.screen.is_none() && !self.host.room.walk.is_empty() {
                 draw::actor(renderer, &self.view, actor.0, actor.1);
             }
         }
