@@ -19,7 +19,7 @@ use crate::loca::LanguageChoice;
 use crate::pack::GameManifest;
 use crate::project::Project;
 use crate::room::Room;
-use crate::screen::{Screen, ScreenAction};
+use crate::screen::{self, Screen, ScreenAction};
 use crate::{Verb, save};
 
 use glam::Vec2;
@@ -102,6 +102,13 @@ pub struct Host {
     pub verb: Verb,
     /// Screen stacked over the room, if any.
     pub screen: Option<String>,
+    /// Screens the open one was opened from, oldest first.
+    ///
+    /// A pause menu opens a save menu, and Back from the save menu means
+    /// the pause menu rather than the game. Without somewhere to
+    /// remember that, Close can only ever mean "put the player back in
+    /// the room", and the way out of a submenu drops them two levels.
+    beneath: Vec<String>,
     /// What happened, newest last.
     pub log: Vec<Note>,
     /// How much of the log to keep.
@@ -143,6 +150,7 @@ impl Host {
             language,
             verb: Verb::Walk,
             screen: None,
+            beneath: Vec::new(),
             log: Vec::new(),
             log_limit: 200,
             anim_wait: None,
@@ -237,13 +245,22 @@ impl Host {
     pub fn fire(&mut self, action: &ScreenAction) -> Request {
         match action {
             ScreenAction::NewGame => self.new_game(),
-            ScreenAction::Resume | ScreenAction::Close => {
+            // Back, which is one level; and Resume, which is all of
+            // them. Two words for two different things.
+            ScreenAction::Close => {
+                self.screen = self.beneath.pop();
+                Request::default()
+            }
+            ScreenAction::Resume => {
+                self.beneath.clear();
                 self.screen = None;
                 Request::default()
             }
             ScreenAction::Open { screen } => {
                 if self.project.screen(screen).is_some() {
-                    self.screen = Some(screen.clone());
+                    if let Some(open) = self.screen.replace(screen.clone()) {
+                        self.beneath.push(open);
+                    }
                 } else {
                     self.note(Note::Missing(format!("screen {screen}")));
                 }
@@ -448,6 +465,67 @@ pub fn reading_time(text: &str) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn back_out_of_a_submenu_lands_on_the_menu_it_came_from() {
+        // Pause opens Save; Back from Save means Pause, not the room.
+        // Without somewhere to remember that, the way out of a submenu
+        // dropped the player two levels.
+        let root = temp("screen_stack");
+        build(&root);
+        for id in ["pause", "save"] {
+            screen::save(
+                &Screen::new(id, Vec2::new(320.0, 200.0)),
+                &root.join(screen::SCREEN_DIR),
+            )
+            .expect("screen");
+        }
+
+        let mut host = Host::new(Project::open(&root));
+        host.start();
+        host.screen = Some("pause".into());
+        host.fire(&ScreenAction::Open {
+            screen: "save".into(),
+        });
+        assert_eq!(host.screen.as_deref(), Some("save"));
+
+        host.fire(&ScreenAction::Close);
+        assert_eq!(host.screen.as_deref(), Some("pause"));
+
+        host.fire(&ScreenAction::Close);
+        assert!(host.screen.is_none(), "and then the game");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resume_leaves_every_menu_at_once() {
+        let root = temp("screen_resume");
+        build(&root);
+        for id in ["pause", "save"] {
+            screen::save(
+                &Screen::new(id, Vec2::new(320.0, 200.0)),
+                &root.join(screen::SCREEN_DIR),
+            )
+            .expect("screen");
+        }
+
+        let mut host = Host::new(Project::open(&root));
+        host.start();
+        host.screen = Some("pause".into());
+        host.fire(&ScreenAction::Open {
+            screen: "save".into(),
+        });
+        host.fire(&ScreenAction::Resume);
+        assert!(host.screen.is_none());
+
+        // And nothing is left underneath to reappear on the next Back.
+        host.screen = Some("pause".into());
+        host.fire(&ScreenAction::Close);
+        assert!(host.screen.is_none(), "a stale menu came back");
+
+        let _ = fs::remove_dir_all(&root);
+    }
     use crate::action::{Action, Script};
     use crate::interact::{EntryPoint, Exit, Shape};
     use crate::io;
