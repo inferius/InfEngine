@@ -38,6 +38,11 @@ pub struct GameManifest {
     /// Entry point in that room. Empty means its first.
     #[serde(default)]
     pub start_entry: String,
+    /// Screen shown before the game begins - a title menu. Empty means
+    /// the game opens straight into its first room, which is what a
+    /// project has before anyone draws a menu.
+    #[serde(default)]
+    pub start_screen: String,
     /// Languages offered, and which is picked by default.
     #[serde(default)]
     pub languages: Vec<String>,
@@ -518,6 +523,7 @@ mod tests {
             title: "The Legend".into(),
             start_room: "hall".into(),
             start_entry: "door".into(),
+            start_screen: String::new(),
             languages: vec!["en".into(), "cs".into()],
             default_language: LanguageChoice::same("cs"),
         };

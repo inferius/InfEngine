@@ -65,6 +65,11 @@ impl Default for WindowConfig {
 #[derive(Clone)]
 pub struct EngineWindow {
     inner: Arc<Window>,
+    /// Set by [`EngineWindow::request_close`]; the loop reads it after
+    /// the frame and exits. Shared rather than returned so a handler
+    /// several calls deep can ask to quit without threading a result
+    /// back out - a menu button is exactly that case.
+    closing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl EngineWindow {
@@ -82,6 +87,20 @@ impl EngineWindow {
     /// Ask the windowing system to redraw the window.
     pub fn request_redraw(&self) {
         self.inner.request_redraw();
+    }
+
+    /// Ask the loop to stop after this frame.
+    ///
+    /// The same path a click on the close button takes, so `on_exit`
+    /// still runs and nothing is skipped.
+    pub fn request_close(&self) {
+        self.closing
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Has anything asked to close?
+    pub fn close_requested(&self) -> bool {
+        self.closing.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Borrow the underlying winit window.
@@ -191,6 +210,7 @@ impl<A: AppHandler> ApplicationHandler for EngineApp<A> {
             .expect("failed to create main window");
         let window = EngineWindow {
             inner: Arc::new(window),
+            closing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
         info!(
@@ -248,6 +268,12 @@ impl<A: AppHandler> ApplicationHandler for EngineApp<A> {
                     input: &self.input,
                 };
                 handler.on_update(window, &ctx);
+                // Checked after the frame, so a handler that asks to
+                // quit still finishes drawing the one it is in.
+                if window.close_requested() {
+                    debug!("close requested by the application");
+                    event_loop.exit();
+                }
             }
             _ => {}
         }

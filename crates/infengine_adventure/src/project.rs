@@ -1,18 +1,26 @@
-//! A6.4: a folder of rooms.
+//! A36.1: a game on disk.
 //!
 //! A project is a directory holding `rooms/` and whatever the rooms
 //! reference. Layer images are stored relative to that root, not to the
 //! room file, so a room can sit in `rooms/` while its background sits in
 //! `images/` without every path starting with `../`.
+//!
+//! It lives in this crate rather than in the editor because the editor
+//! is no longer the only thing that opens one: a shipped game loads the
+//! same directory and needs the same view of it. Nothing here draws or
+//! plays anything - it reads files and says what is in them.
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use infengine_adventure::anim::{self, AnimationSet};
-use infengine_adventure::action::Script;
-use infengine_adventure::loca::{self, Locales};
-use infengine_adventure::script_io;
+use crate::action::Script;
+use crate::anim::{self, AnimationSet};
+use crate::loca::{self, Locales};
+use crate::pack::GameManifest;
+use crate::screen::{self, Screen};
+use crate::sound::{self, SoundSet};
+use crate::script_io;
 
 /// Directory inside a project that holds room files.
 pub const ROOMS_DIR: &str = "rooms";
@@ -43,6 +51,13 @@ pub struct Project {
     /// Loose images under `sprites/`, project-relative. Sheets an
     /// import produced but could not cut into frames.
     pub sheets: Vec<String>,
+    /// Menus and other screens, sorted by id.
+    pub screens: Vec<Screen>,
+    /// Sound and music ids, and the files they name.
+    pub sounds: SoundSet,
+    /// What the game is called and where it starts. Absent until
+    /// somebody writes one, which is why it is not an error.
+    pub manifest: Option<GameManifest>,
 }
 
 impl Project {
@@ -80,6 +95,9 @@ impl Project {
         let (scripts, errors) = script_io::load_dir(&root.join(script_io::SCRIPT_DIR));
         let script_errors = errors.iter().map(ToString::to_string).collect();
         let sheets = list_sheets(&root);
+        let (screens, _) = screen::load_dir(&root.join(screen::SCREEN_DIR));
+        let sounds = sound::load_index(&root.join(sound::SOUND_DIR)).unwrap_or_default();
+        let manifest = GameManifest::load(&root);
         Self {
             root,
             rooms,
@@ -88,7 +106,37 @@ impl Project {
             scripts,
             script_errors,
             sheets,
+            screens,
+            sounds,
+            manifest,
         }
+    }
+
+    /// Load the room with this id.
+    ///
+    /// By id rather than by index, because that is what an exit names
+    /// and what a saved game records.
+    pub fn load_room(&self, id: &str) -> Option<crate::room::Room> {
+        let path = self
+            .rooms
+            .iter()
+            .find(|path| Self::room_label(path) == id)?;
+        crate::io::load(path).ok()
+    }
+
+    /// Every room id, in the order the files sort.
+    pub fn room_ids(&self) -> Vec<String> {
+        self.rooms.iter().map(|p| Self::room_label(p)).collect()
+    }
+
+    /// The file a sound id names, if the index knows it.
+    pub fn sound_file(&self, id: &str) -> Option<&str> {
+        self.sounds.get(id)
+    }
+
+    /// The screen with this id.
+    pub fn screen(&self, id: &str) -> Option<&Screen> {
+        self.screens.iter().find(|screen| screen.id == id)
     }
 
     /// Localisation ids belonging to a room, in order.
@@ -219,7 +267,7 @@ mod tests {
 
     #[test]
     fn a_rooms_lines_are_the_ids_under_its_prefix() {
-        use infengine_adventure::loca::{Line, Locale};
+        use crate::loca::{Line, Locale};
 
         let dir = temp_project("lines");
         let mut english = Locale::new("en", "English");

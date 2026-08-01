@@ -1,0 +1,305 @@
+//! A36.6: the game application - glue only.
+//!
+//! Owns the window, the renderer, the audio device and a [`Host`], and
+//! does nothing else. Every decision about what happens next belongs to
+//! the host, which is why the same decisions can be tested without any
+//! of this.
+
+use std::collections::HashMap;
+
+use glam::Vec2;
+use infengine_adventure::host::{Host, Request};
+use infengine_adventure::{Animation, Project};
+use infengine_audio::AudioSystem;
+use infengine_editor::EditorUi;
+use infengine_render::{Renderer, Texture2dHandle, TextureFilter};
+use infengine_window::raw_winit::event::{ElementState, MouseButton, WindowEvent};
+use infengine_window::{AppHandler, EngineWindow, FrameContext, Key};
+use tracing::{info, warn};
+
+use crate::draw;
+use crate::ui;
+use crate::view::View;
+
+pub struct Game {
+    renderer: Option<Renderer>,
+    ui: Option<EditorUi>,
+    audio: Option<AudioSystem>,
+
+    host: Host,
+    view: View,
+    /// Layer and sheet textures, keyed by their project-relative path.
+    textures: HashMap<String, Texture2dHandle>,
+    /// The animation playing in this room, and how far into it we are.
+    animation: Option<(Animation, f32)>,
+    cursor: Vec2,
+    status: String,
+    /// Set when a screen asks to quit; the window closes next frame.
+    quit: bool,
+}
+
+impl std::fmt::Debug for Game {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Game").field("host", &self.host).finish()
+    }
+}
+
+impl Game {
+    pub fn new(project: Project) -> Self {
+        Self {
+            renderer: None,
+            ui: None,
+            audio: AudioSystem::new().ok(),
+            host: Host::new(project),
+            view: View::default(),
+            textures: HashMap::new(),
+            animation: None,
+            cursor: Vec2::ZERO,
+            status: String::new(),
+            quit: false,
+        }
+    }
+
+    /// Upload what the current room draws, dropping the last room's.
+    fn load_room_textures(&mut self) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        for handle in self.textures.values() {
+            renderer.destroy_texture(*handle);
+        }
+        self.textures.clear();
+        self.animation = None;
+
+        let images: Vec<String> = self
+            .host
+            .room
+            .layers
+            .iter()
+            .map(|layer| layer.image.clone())
+            .collect();
+        for image in images {
+            self.upload(&image);
+        }
+        self.view.room = self.host.room.size;
+        self.view.fit();
+    }
+
+    fn upload(&mut self, image: &str) -> Option<Texture2dHandle> {
+        if let Some(handle) = self.textures.get(image) {
+            return Some(*handle);
+        }
+        let renderer = self.renderer.as_mut()?;
+        let path = self.host.project.resolve(image);
+        match renderer.create_texture_from_file(&path, TextureFilter::Nearest) {
+            Ok(handle) => {
+                self.textures.insert(image.to_string(), handle);
+                Some(handle)
+            }
+            Err(err) => {
+                warn!(image, %err, "image did not load");
+                None
+            }
+        }
+    }
+
+    /// Do what the host asked for.
+    fn perform(&mut self, request: Request) {
+        if request.room_changed {
+            self.load_room_textures();
+        }
+        if request.quit {
+            self.quit = true;
+        }
+        if let Some(id) = request.animation {
+            if let Some(animation) = self.host.project.animations.get(&id).cloned() {
+                self.upload(&animation.image);
+                self.animation = Some((animation, 0.0));
+            } else {
+                warn!(id, "no such animation");
+            }
+        }
+        for file in [request.voice, request.sound]
+            .into_iter()
+            .flatten()
+            .chain(request.music.flatten())
+        {
+            self.play(&file);
+        }
+    }
+
+    fn play(&mut self, relative: &str) {
+        let Some(audio) = self.audio.as_mut() else {
+            return;
+        };
+        let path = self.host.project.resolve(relative);
+        if let Err(err) = audio.load_sound(&path).and_then(|s| audio.play_sound(&s)) {
+            warn!(file = relative, %err, "could not play");
+        }
+    }
+}
+
+impl AppHandler for Game {
+    fn on_start(&mut self, window: &EngineWindow) {
+        match Renderer::new(window) {
+            Ok(mut renderer) => {
+                renderer.set_clear_color(0.0, 0.0, 0.0, 1.0);
+                self.ui = Some(EditorUi::new(
+                    renderer.wgpu_device(),
+                    renderer.surface_format(),
+                    window.raw(),
+                    1,
+                ));
+                self.renderer = Some(renderer);
+            }
+            Err(err) => warn!(%err, "renderer failed to start"),
+        }
+        let (w, h) = window.size();
+        self.view.viewport = Vec2::new(w as f32, h as f32);
+
+        let request = self.host.start();
+        self.perform(request);
+        info!(
+            rooms = self.host.project.rooms.len(),
+            room = %self.host.room.id,
+            "game started"
+        );
+    }
+
+    fn on_window_event(&mut self, window: &EngineWindow, event: &WindowEvent) {
+        if let Some(ui) = self.ui.as_mut() {
+            ui.handle_window_event(window.raw(), event);
+        }
+        let over_ui = self
+            .ui
+            .as_ref()
+            .is_some_and(|ui| ui.context().wants_pointer_input());
+
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                let scale = window.scale_factor() as f32;
+                self.cursor = Vec2::new(position.x as f32, position.y as f32) / scale;
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } if !over_ui && self.view.contains(self.cursor) => {
+                let point = self.view.to_room(self.cursor);
+                self.host.click(point);
+            }
+            _ => {}
+        }
+    }
+
+    fn on_key(&mut self, key: Key, pressed: bool) {
+        if !pressed {
+            return;
+        }
+        match key {
+            // Escape opens the pause menu if the game has one, and
+            // closes whatever is open otherwise.
+            Key::Escape => {
+                if self.host.screen.is_some() {
+                    let request = self.host.fire(
+                        &infengine_adventure::screen::ScreenAction::Close,
+                    );
+                    self.perform(request);
+                } else if self.host.project.screen("pause").is_some() {
+                    self.host.screen = Some("pause".into());
+                }
+            }
+            Key::Space => self.host.skip_subtitle(),
+            _ => {}
+        }
+    }
+
+    fn on_resize(&mut self, width: u32, height: u32) {
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.resize(width, height);
+            let (w, h) = renderer.camera_mut().viewport();
+            self.view.viewport = Vec2::new(w as f32, h as f32);
+            self.view.fit();
+        }
+    }
+
+    fn on_update(&mut self, window: &EngineWindow, ctx: &FrameContext<'_>) {
+        if self.renderer.is_none() {
+            return;
+        }
+        if self.quit {
+            window.request_close();
+            return;
+        }
+
+        let request = self.host.tick(ctx.delta_time);
+        if !request.is_empty() {
+            self.perform(request);
+        }
+
+        // What the cursor is over, for the status line.
+        self.status = if self.view.contains(self.cursor) && self.host.screen.is_none() {
+            self.host.resolve(self.view.to_room(self.cursor)).label()
+        } else {
+            String::new()
+        };
+
+        if let Some((animation, time)) = self.animation.as_mut() {
+            *time += ctx.delta_time;
+            if !animation.looping && animation.finished_at(*time) {
+                let id = animation.id.clone();
+                self.animation = None;
+                self.host.game.runner.finish_animation(&id);
+            }
+        }
+
+        let actor = {
+            let position = self.host.game.state.actor.position;
+            (position, self.host.room.scale.scale_at(position.y))
+        };
+        let frame = self.animation.as_ref().map(|(animation, time)| {
+            (
+                animation.clone(),
+                animation.frame_at(*time),
+                self.textures.get(&animation.image).copied(),
+            )
+        });
+
+        if let Some(renderer) = self.renderer.as_mut() {
+            draw::sync_camera(renderer, &self.view);
+            draw::layers(renderer, &self.host.room, &self.view, &self.textures);
+            if let Some((animation, index, Some(handle))) = frame {
+                draw::animation_frame(
+                    renderer,
+                    &self.view,
+                    &animation,
+                    handle,
+                    index,
+                    Vec2::ZERO,
+                );
+            }
+            if self.host.screen.is_none() {
+                draw::actor(renderer, &self.view, actor.0, actor.1);
+            }
+        }
+
+        let mut events = ui::UiEvents::default();
+        if let Some(ui_state) = self.ui.as_mut() {
+            let host = &self.host;
+            let status = self.status.clone();
+            ui_state.run(window.raw(), |ctx| {
+                events = ui::build(ctx, host, &status);
+            });
+        }
+        if let Some(action) = events.fired {
+            let request = self.host.fire(&action);
+            self.perform(request);
+        }
+
+        if let (Some(renderer), Some(ui)) = (self.renderer.as_mut(), self.ui.as_mut()) {
+            let _ = renderer.render(|device, queue, encoder, view, size| {
+                ui.render(device, queue, encoder, view, size);
+            });
+        }
+    }
+}

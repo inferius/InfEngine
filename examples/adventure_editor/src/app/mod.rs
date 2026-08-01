@@ -25,7 +25,7 @@ use crate::draw::{self, Overlays};
 use crate::edit::{self, Selection, Tool};
 use crate::play::{self, PlayMode};
 use crate::playback::Playback;
-use crate::project::Project;
+use infengine_adventure::Project;
 use crate::sheet::SheetDraft;
 use crate::ui::{self, UiActions, UiState};
 use crate::ui_game::{self, GameUi};

@@ -9,7 +9,7 @@ use infengine_adventure::{Animation, Room, Verb};
 use crate::draw::Overlays;
 use crate::edit::{Selection, Tool};
 use crate::playback::Playback;
-use crate::project::Project;
+use infengine_adventure::Project;
 
 /// Requests the UI can make of the app, returned rather than performed
 /// so the app decides when a room is loaded or written.
@@ -611,6 +611,9 @@ mod tests {
             sheets: Vec::new(),
             scripts: Default::default(),
             script_errors: Vec::new(),
+            screens: Vec::new(),
+            sounds: Default::default(),
+            manifest: None,
         }
     }
 

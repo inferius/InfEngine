@@ -19,7 +19,6 @@ mod draw;
 mod edit;
 mod play;
 mod playback;
-mod project;
 mod sheet;
 mod ui;
 mod ui_game;
@@ -58,7 +57,7 @@ struct Cli {
 fn plan_only(project: &std::path::Path, export: Option<&std::path::Path>) -> i32 {
     use infengine_adventure::pack;
 
-    let root = project::Project::open(project).root;
+    let root = infengine_adventure::Project::open(project).root;
     let plan = pack::plan(&root);
     tracing::info!(
         files = plan.files.len(),

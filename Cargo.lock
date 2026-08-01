@@ -43,6 +43,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "adventure_game"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "egui",
+ "glam 0.30.10",
+ "infengine_adventure",
+ "infengine_audio",
+ "infengine_editor",
+ "infengine_render",
+ "infengine_window",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "aes"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -11,7 +11,7 @@ use infengine_render::{Renderer, Texture2dHandle, TextureFilter};
 use infengine_adventure::Room;
 use tracing::warn;
 
-use crate::project::Project;
+use infengine_adventure::Project;
 
 /// Upload every layer image the room references.
 ///
