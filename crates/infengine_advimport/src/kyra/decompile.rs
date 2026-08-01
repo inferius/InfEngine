@@ -194,17 +194,35 @@ pub fn decompile(room: &str, script: &emc::Script) -> RoomScripts {
 
     // Entry points divide the code; a call belongs to the last entry
     // point at or before it.
-    let mut starts: Vec<usize> = script.entry_points.iter().map(|p| *p as usize).collect();
-    starts.sort_unstable();
-    starts.dedup();
-    if starts.first() != Some(&0) {
-        starts.insert(0, 0);
+    //
+    // The numbering is the game's, not a running count. Every one of
+    // the retail scripts starts its first entry point past offset zero,
+    // so counting the divisions would shift every id by one and
+    // `entry3` would mean the game's entry 2 - which matters, because
+    // the seven entry points are a fixed set of hooks and which is
+    // which is the next thing to work out.
+    let mut named: Vec<(String, usize)> = script
+        .entry_points
+        .iter()
+        .enumerate()
+        .map(|(index, at)| (format!("{room}.entry{index}"), *at as usize))
+        .collect();
+    named.sort_by_key(|(_, at)| *at);
+    named.dedup_by_key(|(_, at)| *at);
+
+    // Whatever sits before the first entry point is reachable only by
+    // being jumped into. Named rather than numbered, so it cannot be
+    // mistaken for one of the seven.
+    let mut starts: Vec<(String, usize)> = Vec::new();
+    if named.first().is_none_or(|(_, at)| *at != 0) {
+        starts.push((format!("{room}.prologue"), 0));
     }
+    starts.extend(named);
 
     let mut out = RoomScripts::default();
-    for (index, start) in starts.iter().enumerate() {
-        let end = starts.get(index + 1).copied().unwrap_or(usize::MAX);
-        let mut compiled = Script::new(format!("{room}.entry{index}"));
+    for (index, (id, start)) in starts.iter().enumerate() {
+        let end = starts.get(index + 1).map(|(_, at)| *at).unwrap_or(usize::MAX);
+        let mut compiled = Script::new(id.clone());
         for site in sites.iter().filter(|s| s.at >= *start && s.at < end) {
             let Some(action) = action_for(room, site, script.texts.len()) else {
                 out.plumbing_dropped += 1;
@@ -276,6 +294,27 @@ mod tests {
                 "function {function} should speak"
             );
         }
+    }
+
+    #[test]
+    fn entry_points_keep_the_games_own_numbering() {
+        // Every retail script starts its first entry past zero, so a
+        // running count would call the game's entry 0 "entry1".
+        let mut code = push(1);
+        code.extend(call(FN_SET_FLAG as u16));
+        code.extend(push(2));
+        code.extend(call(FN_SET_FLAG as u16));
+        let script = script_with(code, 0, vec![6, 0]);
+        let out = decompile("hall", &script);
+        let ids: Vec<&str> = out.scripts.iter().map(|s| s.id.as_str()).collect();
+        assert!(
+            ids.contains(&"hall.entry0") || ids.contains(&"hall.entry1"),
+            "entries are numbered as the ORDR chunk lists them: {ids:?}"
+        );
+        assert!(
+            !ids.iter().any(|id| id.ends_with(".entry2")),
+            "two entry points cannot produce a third id: {ids:?}"
+        );
     }
 
     #[test]
