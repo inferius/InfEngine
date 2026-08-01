@@ -60,6 +60,51 @@
 //! was wrong; and minimising the count of distinct opcodes gets 116
 //! down to 78, still far too many.
 
+//! ## What the handlers do
+//!
+//! Reading the argument lengths was enough to split a program into
+//! steps. Turning one into sound needs what each step *means*, and that
+//! is in the driver too. Established so far, by disassembling it:
+//!
+//! ```text
+//!   0x0781  write an OPL register: AH is the register, AL the value.
+//!           Register to port 0x388, value to 0x389, with the delays
+//!           the chip needs between them.
+//!   0x069c  channel to operator offset: 00 01 02 08 09 0A 10 11 12,
+//!           which is the standard OPL2 layout exactly. Finding it
+//!           unchanged is what confirms the rest of this reading.
+//!   0x0866  note off: register 0xB0 + channel, bit 5 cleared. The
+//!           driver keeps its own copy of that register at state 0x2A
+//!           and edits the copy, because the chip cannot be read back.
+//!   0x0bfd  apply level: register 0x40 + the carrier's operator
+//!           offset, and the modulator's too when state 0x33 says the
+//!           voice is one where that matters.
+//! ```
+//!
+//! The channel's state block is what `di` points at, and the handlers
+//! are mostly one line long because they only write to it:
+//!
+//! ```text
+//!   0x08  repeats left           set by opcode 0x00, counted by 0x01
+//!   0x0A  cleared when a program stops
+//!   0x22  level                  set by opcode 0x1E
+//!   0x2A  the driver's copy of register 0xB0 + channel
+//!   0x32  set by opcode 0x2B
+//!   0x33  whether the modulator takes the level as well
+//! ```
+//!
+//! So opcode 0x00 sets a repeat count and 0x01 closes the loop by
+//! reading a displacement out of the stream and adding it to the read
+//! pointer; 0x08 silences the channel and zeroes the stream pointer;
+//! 0x09 rests until the next tick; 0x10 loads an instrument, indexing
+//! the file's own program table at +0x1F4, which is program 190 onward
+//! - so the later programs are patches rather than sequences.
+//!
+//! What is left is the rest of the register writes. Three opcodes cover
+//! 43% of every command the effect programs issue, ten cover 78% and
+//! nineteen cover 92%, which the `adl_sfx` example reports; the tail is
+//! ornament rather than structure.
+
 use std::fmt;
 
 /// Bytes of header before the first program.
@@ -168,14 +213,18 @@ impl Step {
 
 /// Commands this importer has identified.
 ///
-/// Derived from how they behave in the data rather than from a table
-/// copied from somewhere, which is why there are three of them and not
-/// seventy-five. Naming the rest means reading their handlers.
+/// Derived from the driver's own handlers rather than from a table
+/// copied from somewhere. Six of seventy-five, which is not many - but
+/// they are the six the effect programs lean on, and between them they
+/// account for two commands in every three.
 fn command_name(opcode: u8) -> Option<&'static str> {
     match opcode {
+        0x00 => Some("repeat"),
+        0x01 => Some("loop"),
         0x08 => Some("stop"),
         0x09 => Some("rest"),
         0x10 => Some("instrument"),
+        0x1e => Some("level"),
         _ => None,
     }
 }
