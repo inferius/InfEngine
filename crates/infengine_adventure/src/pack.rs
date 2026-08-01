@@ -43,6 +43,15 @@ pub struct GameManifest {
     /// project has before anyone draws a menu.
     #[serde(default)]
     pub start_screen: String,
+    /// Room played once when the game is launched, before anything
+    /// else: the opening cutscene.
+    ///
+    /// Separate from `start_room` because they are different moments.
+    /// New Game has to reach the first room of the story, and if the
+    /// two were the same field it would replay the intro instead -
+    /// which is exactly what happened the first time this was tried.
+    #[serde(default)]
+    pub intro_room: String,
     /// Languages offered, and which is picked by default.
     #[serde(default)]
     pub languages: Vec<String>,
@@ -524,6 +533,7 @@ mod tests {
             start_room: "hall".into(),
             start_entry: "door".into(),
             start_screen: String::new(),
+            intro_room: String::new(),
             languages: vec!["en".into(), "cs".into()],
             default_language: LanguageChoice::same("cs"),
         };

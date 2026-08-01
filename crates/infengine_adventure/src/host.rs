@@ -159,6 +159,12 @@ impl Host {
     /// New Game button is what enters the world.
     pub fn start(&mut self) -> Request {
         let manifest = self.manifest();
+        if !manifest.intro_room.is_empty() {
+            let intro = manifest.intro_room.clone();
+            if self.project.load_room(&intro).is_some() {
+                return self.enter(&intro, None);
+            }
+        }
         if !manifest.start_screen.is_empty() && self.project.screen(&manifest.start_screen).is_some()
         {
             self.screen = Some(manifest.start_screen);
