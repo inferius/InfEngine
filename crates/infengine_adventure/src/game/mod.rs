@@ -487,6 +487,35 @@ mod tests {
     }
 
     #[test]
+    fn a_room_with_no_floor_can_still_be_left_through_its_exits() {
+        // Black Mirror ships doorways but not walkable floors, and
+        // drawing 259 of those by hand before anything can be tested
+        // would be a poor trade. An exit is resolved from its own shape,
+        // and the walk in front of it simply finds nowhere to go and
+        // does not block, so the room change still happens.
+        let mut room = room();
+        room.walk = Default::default();
+        let mut game = game();
+        game.enter(&room, None);
+
+        let click = game.click(&room, Vec2::new(300.0, 100.0), Verb::Walk);
+        assert!(matches!(click, Click::Exit { .. }), "{click:?}");
+
+        let mut change = None;
+        for _ in 0..600 {
+            for event in game.step(&room, 0.016) {
+                if let Event::EnterRoom { room, .. } = event {
+                    change = Some(room);
+                }
+            }
+            if change.is_some() {
+                break;
+            }
+        }
+        assert_eq!(change.as_deref(), Some("courtyard"));
+    }
+
+    #[test]
     fn a_disabled_hotspot_is_not_what_a_click_resolves_to() {
         let room = room();
         let mut game = game();
