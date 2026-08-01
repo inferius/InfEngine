@@ -435,12 +435,20 @@ pub fn import_pak(
         add_entry_points(&pak, stem_of_entry, &mut room);
         // Before the room is written, because the script pass is where
         // its clickable things come from.
+        // The names of everything written so far, so a call to play
+        // an animation that was never produced comes through unresolved
+        // rather than pointing at nothing.
+        let known: std::collections::HashSet<String> =
+            animations.iter().map(|a| a.id.clone()).collect();
         export_scripts(
             &pak,
-            stem_of_entry,
-            &name,
-            language,
-            out_dir,
+            &ScriptCtx {
+                stem: stem_of_entry,
+                room_id: &name,
+                language,
+                out_dir,
+                known: &known,
+            },
             &mut room,
             report,
         )?;
@@ -477,7 +485,20 @@ pub fn import_pak(
         let id = stem.trim_start_matches('_').to_ascii_lowercase();
         collect_lines(&pak, stem, &id, language, locale);
         let mut orphan = Room::default();
-        export_scripts(&pak, stem, &id, language, out_dir, &mut orphan, report)?;
+        let known: std::collections::HashSet<String> =
+            animations.iter().map(|a| a.id.clone()).collect();
+        export_scripts(
+            &pak,
+            &ScriptCtx {
+                stem,
+                room_id: &id,
+                language,
+                out_dir,
+                known: &known,
+            },
+            &mut orphan,
+            report,
+        )?;
         debug!(archive = %stem, entry = %entry.name, "imported a script with no room");
     }
 
@@ -725,28 +746,41 @@ fn add_entry_points(pak: &pak::Pak<'_>, stem: &str, room: &mut Room) {
 /// table is largely unidentified. Counting them is the point - the
 /// editor can show how much of a room is still to be worked out instead
 /// of presenting a half-translated script as finished.
+/// What the script pass needs to know, gathered rather than passed one
+/// argument at a time.
+struct ScriptCtx<'a> {
+    /// Entry name in the archive, without its extension.
+    stem: &'a str,
+    /// What the room is called in our project.
+    room_id: &'a str,
+    language: &'a str,
+    out_dir: &'a Path,
+    /// Animations the import has produced, so a call to play one that
+    /// does not exist comes through unresolved.
+    known: &'a std::collections::HashSet<String>,
+}
+
 fn export_scripts(
     pak: &pak::Pak<'_>,
-    stem: &str,
-    room_id: &str,
-    language: &str,
-    out_dir: &Path,
+    ctx: &ScriptCtx<'_>,
     room: &mut Room,
     report: &mut ImportReport,
 ) -> Result<(), ImportError> {
+    let (stem, room_id, out_dir) = (ctx.stem, ctx.room_id, ctx.out_dir);
     let Some(data) = pak.get(&format!("{stem}.EMC")) else {
         return Ok(());
     };
-    let Ok(parsed) = emc::decode(data, encoding_for(language)) else {
+    let Ok(parsed) = emc::decode(data, encoding_for(ctx.language)) else {
         return Ok(());
     };
-    let mut decompiled = decompile::decompile(room_id, &parsed);
+    let known = decompile::Known::these(ctx.known);
+    let mut decompiled = decompile::decompile_known(room_id, &parsed, known);
 
     // The clickable regions, which the script defines by testing the
     // cursor against a rectangle once per thing in the room.
     let size = (room.size.x as i32, room.size.y as i32);
     if size.0 > 0 && size.1 > 0 {
-        for (hotspot, script) in decompile::hotspots(room_id, &parsed, size) {
+        for (hotspot, script) in decompile::hotspots_known(room_id, &parsed, size, known) {
             report.hotspots += 1;
             room.hotspots.push(hotspot);
             if !script.is_empty() {

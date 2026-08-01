@@ -35,6 +35,21 @@ fn main() {
     let rooms_dir = project.join("rooms");
     let scripts_dir = project.join("scripts");
 
+    // What the import actually produced. An animation call naming
+    // something that is not here comes through unresolved rather than
+    // pointing at a file that does not exist.
+    let known: std::collections::HashSet<String> = std::fs::read_dir(project.join("animations"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.strip_suffix(".png").map(str::to_string)
+        })
+        .collect();
+    println!("{} animations on disk", known.len());
+    let known = decompile::Known::these(&known);
+
     let mut room_files: Vec<PathBuf> = match std::fs::read_dir(&rooms_dir) {
         Ok(entries) => entries
             .flatten()
@@ -72,11 +87,11 @@ fn main() {
         // The room's own logic, read again with whatever the
         // decompiler now understands.
         let list = new_scripts.entry(prefix.clone()).or_insert_with(|| {
-            decompile::decompile(&prefix, script).scripts
+            decompile::decompile_known(&prefix, script, known).scripts
         });
 
         let size = (room.size.x as i32, room.size.y as i32);
-        let found = decompile::hotspots(&prefix, script, size);
+        let found = decompile::hotspots_known(&prefix, script, size, known);
         if found.is_empty() {
             continue;
         }

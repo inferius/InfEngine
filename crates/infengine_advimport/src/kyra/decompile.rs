@@ -56,6 +56,23 @@ const FN_ENTER_SCENE: i32 = 45;
 const FN_DELAY_SECS: i32 = 33;
 /// Puts an item in the inventory.
 const FN_ADD_ITEM: i32 = 105;
+/// Opens an animation file and binds it to a slot.
+const FN_OPEN_WSA: i32 = 41;
+/// Releases a slot.
+const FN_CLOSE_WSA: i32 = 42;
+/// Plays a run of frames from a slot: the room's animations, 854 of
+/// them across the game and by far the commonest call left untranslated.
+const FN_PLAY_WSA: i32 = 64;
+/// Which argument of [`FN_OPEN_WSA`] names the file, and which the slot.
+const OPEN_WSA_NAME: usize = 0;
+const OPEN_WSA_SLOT: usize = 1;
+/// Which argument of [`FN_PLAY_WSA`] carries the slot.
+///
+/// Found by range rather than by guessing: `openWsaFile` only ever
+/// assigns slots 0 to 5, and of the seven arguments this call takes,
+/// the sixth is the only one whose values stay inside that. The others
+/// run to 112 and 240, which are frame numbers and screen positions.
+const PLAY_WSA_SLOT: usize = 5;
 
 /// The verb a click carries in a game that has no verb menu.
 const CLICK: Verb = Verb::Use;
@@ -92,6 +109,97 @@ impl RoomScripts {
     }
 }
 
+/// Which animation file each slot currently holds.
+///
+/// A script opens a file into a slot, plays from it, and often opens a
+/// different file into the same slot later - one of Kyrandia's rooms
+/// reuses slot 0 for two animations - so the binding is a thing that
+/// changes as the code runs, not a table the file carries. Reading it
+/// means walking the calls in order and remembering.
+///
+/// This is exact only for straight-line code. Where a slot is opened in
+/// one branch and played in another the binding here is whichever open
+/// came last in the file, which is right whenever the open and the play
+/// sit together and is a guess otherwise. A slot nothing has opened
+/// resolves to nothing rather than to the last file seen.
+#[derive(Debug, Clone, Default)]
+struct WsaSlots {
+    open: std::collections::HashMap<i32, String>,
+}
+
+impl WsaSlots {
+    /// Note what a call does to the slots.
+    fn observe(&mut self, site: &CallSite, texts: &[String]) {
+        match site.function {
+            FN_OPEN_WSA => {
+                let (Some(&name), Some(&slot)) = (
+                    site.args.get(OPEN_WSA_NAME),
+                    site.args.get(OPEN_WSA_SLOT),
+                ) else {
+                    return;
+                };
+                if let Some(stem) = wsa_stem(name, texts) {
+                    self.open.insert(slot, stem);
+                }
+            }
+            FN_CLOSE_WSA => {
+                if let Some(&slot) = site.args.first() {
+                    self.open.remove(&slot);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn get(&self, slot: i32) -> Option<&str> {
+        self.open.get(&slot).map(String::as_str)
+    }
+}
+
+/// The animation name behind a filename index, if the text there is one.
+///
+/// The file name comes out of the script's own string table, so a room's
+/// animations are named in the room. An index that lands on a line of
+/// dialogue instead is not one - which happens, and is how a wrong
+/// reading of the argument order announced itself.
+fn wsa_stem(index: i32, texts: &[String]) -> Option<String> {
+    let text = usize::try_from(index).ok().and_then(|i| texts.get(i))?;
+    let stem = text.strip_suffix(".WSA").or_else(|| text.strip_suffix(".wsa"))?;
+    (!stem.is_empty()).then(|| stem.to_ascii_lowercase())
+}
+
+/// The animations the import actually produced.
+///
+/// A scene animation is called by number, and the number is an index
+/// into a table the game builds at run time - not into anything the
+/// files contain. Turning it into `altar_2` and hoping was giving 53 of
+/// 123 referenced animations no file behind them: an action pointing at
+/// nothing, which plays as silence and reads as working.
+///
+/// So a name has to be checked before it is used. With no set to check
+/// against every name is accepted, which is the old behaviour and is
+/// what the tests that predate this use.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Known<'a> {
+    ids: Option<&'a std::collections::HashSet<String>>,
+}
+
+impl<'a> Known<'a> {
+    /// Check names against this set.
+    pub fn these(ids: &'a std::collections::HashSet<String>) -> Self {
+        Self { ids: Some(ids) }
+    }
+
+    /// Accept any name, because there is nothing to check against.
+    pub fn anything() -> Self {
+        Self { ids: None }
+    }
+
+    fn has(&self, id: &str) -> bool {
+        self.ids.is_none_or(|ids| ids.contains(id))
+    }
+}
+
 /// What one call becomes.
 enum Translated {
     Step(Action),
@@ -106,7 +214,13 @@ enum Translated {
 /// [`Action::Unknown`] carrying the slot's name - `kyra:shakeScreen`
 /// rather than `kyra:107` - because a reader can act on the first and
 /// not on the second.
-fn translate(room: &str, site: &CallSite, texts: usize) -> Translated {
+fn translate(
+    room: &str,
+    site: &CallSite,
+    texts: usize,
+    slots: &WsaSlots,
+    known: Known<'_>,
+) -> Translated {
     let action = match site.function {
         f if SAYS.contains(&f) => {
             // The line index is the last constant pushed, which is the
@@ -145,18 +259,34 @@ fn translate(room: &str, site: &CallSite, texts: usize) -> Translated {
         FN_PLAY_MUSIC => site.args.first().copied().map(|track| Action::PlayMusic {
             music: Some(format!("kyra.music{track}")),
         }),
-        FN_SCENE_ANIM_ON | FN_INTERNAL_ANIM_ON | FN_ANIM_UNTIL_DONE => {
-            site.args.first().copied().map(|index| Action::PlayAnim {
-                animation: format!("{room}_{index}"),
+        FN_SCENE_ANIM_ON | FN_INTERNAL_ANIM_ON | FN_ANIM_UNTIL_DONE => site
+            .args
+            .first()
+            .map(|index| format!("{room}_{index}"))
+            .filter(|id| known.has(id))
+            .map(|animation| Action::PlayAnim {
+                animation,
                 wait: site.function == FN_ANIM_UNTIL_DONE,
-            })
-        }
+            }),
         FN_DELAY_SECS => site.args.first().copied().map(|seconds| Action::Wait {
             seconds: seconds as f32,
         }),
         FN_ADD_ITEM => site.args.first().copied().map(|item| Action::Give {
             item: format!("kyra.item{item}"),
         }),
+        // The slot says which file, and the file is imported under the
+        // room's name and its own. A slot nothing opened stays unknown
+        // rather than pointing at an animation that is not there.
+        FN_PLAY_WSA => site
+            .args
+            .get(PLAY_WSA_SLOT)
+            .and_then(|slot| slots.get(*slot))
+            .map(|stem| format!("{room}_{stem}"))
+            .filter(|id| known.has(id))
+            .map(|animation| Action::PlayAnim {
+                animation,
+                wait: true,
+            }),
         _ => None,
     };
 
@@ -216,6 +346,15 @@ fn unknown(site: &CallSite) -> Action {
 /// editor sees the same divisions the game did rather than one flat
 /// list.
 pub fn decompile(room: &str, script: &emc::Script) -> RoomScripts {
+    decompile_known(room, script, Known::anything())
+}
+
+/// Decompile, accepting only animations that exist.
+pub fn decompile_known(
+    room: &str,
+    script: &emc::Script,
+    known: Known<'_>,
+) -> RoomScripts {
     let instructions = vm::disassemble(&script.code);
     let sites = vm::call_sites(&instructions);
     if sites.len() > MAX_CALLS {
@@ -253,8 +392,16 @@ pub fn decompile(room: &str, script: &emc::Script) -> RoomScripts {
     for (index, (id, start)) in starts.iter().enumerate() {
         let end = starts.get(index + 1).map(|(_, at)| *at).unwrap_or(usize::MAX);
         let mut compiled = Script::new(id.clone());
+        // The slots are read from the whole script up to here, not just
+        // from this entry point: a file opened by one entry point is
+        // still open when another plays from it.
+        let mut slots = WsaSlots::default();
+        for site in sites.iter().take_while(|s| s.at < *start) {
+            slots.observe(site, &script.texts);
+        }
         for site in sites.iter().filter(|s| s.at >= *start && s.at < end) {
-            let action = match translate(room, site, script.texts.len()) {
+            slots.observe(site, &script.texts);
+            let action = match translate(room, site, script.texts.len(), &slots, known) {
                 Translated::Step(action) => action,
                 Translated::Dropped(functions::Kind::Query) => {
                     out.queries_dropped += 1;
@@ -302,6 +449,16 @@ pub fn hotspots(
     script: &emc::Script,
     size: (i32, i32),
 ) -> Vec<(Hotspot, Script)> {
+    hotspots_known(room, script, size, Known::anything())
+}
+
+/// The clickable things, accepting only animations that exist.
+pub fn hotspots_known(
+    room: &str,
+    script: &emc::Script,
+    size: (i32, i32),
+    known: Known<'_>,
+) -> Vec<(Hotspot, Script)> {
     let instructions = vm::disassemble(&script.code);
     let mut out = Vec::new();
 
@@ -319,8 +476,18 @@ pub fn hotspots(
         let body = instructions
             .get(region.body.clone())
             .unwrap_or_default();
+        // Everything before the body, so a file opened when the room
+        // was entered is still bound when a click plays from it.
+        let mut slots = WsaSlots::default();
+        let before = instructions.get(..region.body.start).unwrap_or_default();
+        for site in vm::call_sites(before) {
+            slots.observe(&site, &script.texts);
+        }
         for site in vm::call_sites(body) {
-            if let Translated::Step(action) = translate(room, &site, script.texts.len()) {
+            slots.observe(&site, &script.texts);
+            if let Translated::Step(action) =
+                translate(room, &site, script.texts.len(), &slots, known)
+            {
                 compiled.push(action);
             }
         }
@@ -373,6 +540,125 @@ mod tests {
             texts: (0..texts).map(|i| format!("line {i}")).collect(),
             code,
         }
+    }
+
+    /// A script whose string table is given, rather than made up.
+    fn script_saying(code: Vec<u8>, texts: &[&str]) -> emc::Script {
+        emc::Script {
+            entry_points: vec![0],
+            texts: texts.iter().map(|s| (*s).to_string()).collect(),
+            code,
+        }
+    }
+
+    /// A call to `openWsaFile(name, slot, 0, 0)`.
+    fn open_wsa(name: i8, slot: i8) -> Vec<u8> {
+        // Pushed last argument first, so the name ends up nearest.
+        let mut v = push(0);
+        v.extend(push(0));
+        v.extend(push(slot));
+        v.extend(push(name));
+        v.extend(call(FN_OPEN_WSA as u16));
+        v
+    }
+
+    /// A call to `displayWsaSequentialFrames` with `slot` in its sixth
+    /// argument, where the game puts it.
+    fn play_wsa(slot: i8) -> Vec<u8> {
+        let mut v = push(1);
+        v.extend(push(slot));
+        for _ in 0..5 {
+            v.extend(push(0));
+        }
+        v.extend(call(FN_PLAY_WSA as u16));
+        v
+    }
+
+    #[test]
+    fn an_animation_is_named_by_the_file_the_slot_was_opened_with() {
+        // The name is in the script's own string table, so a room names
+        // its own animations.
+        let mut code = open_wsa(1, 0);
+        code.extend(play_wsa(0));
+        let out = decompile("belroom", &script_saying(code, &["x", "RINGBELL.WSA"]));
+        assert_eq!(
+            out.scripts[0].actions.last(),
+            Some(&Action::PlayAnim {
+                animation: "belroom_ringbell".into(),
+                wait: true
+            })
+        );
+    }
+
+    #[test]
+    fn reopening_a_slot_changes_what_plays_from_it() {
+        // One of the rooms uses slot 0 for two different animations, so
+        // the binding has to follow the code rather than be read once.
+        let mut code = open_wsa(1, 0);
+        code.extend(play_wsa(0));
+        code.extend(open_wsa(2, 0));
+        code.extend(play_wsa(0));
+        let out = decompile(
+            "belroom",
+            &script_saying(code, &["x", "RINGBELL.WSA", "RAISEPIC.WSA"]),
+        );
+        let played: Vec<&str> = out.scripts[0]
+            .actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::PlayAnim { animation, .. } => Some(animation.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(played, vec!["belroom_ringbell", "belroom_raisepic"]);
+    }
+
+    #[test]
+    fn playing_from_a_slot_nothing_opened_stays_unresolved() {
+        // Falling back to the last file seen would put the wrong
+        // animation in the room and look like it worked.
+        let out = decompile("belroom", &script_saying(play_wsa(3), &["RINGBELL.WSA"]));
+        assert!(matches!(
+            out.scripts[0].actions.first(),
+            Some(Action::Unknown { .. })
+        ));
+    }
+
+    #[test]
+    fn a_filename_index_landing_on_dialogue_is_not_a_filename() {
+        // How a wrong reading of the argument order announced itself:
+        // every animation resolved to a line of speech.
+        let mut code = open_wsa(0, 0);
+        code.extend(play_wsa(0));
+        let out = decompile("x", &script_saying(code, &["Huh?", "REAL.WSA"]));
+        assert!(matches!(
+            out.scripts[0].actions.last(),
+            Some(Action::Unknown { .. })
+        ));
+    }
+
+    #[test]
+    fn an_animation_that_was_never_produced_is_not_pointed_at() {
+        // Scene animations are called by a number that indexes a table
+        // the game builds at run time, not anything in the files.
+        // Turning it into a name and hoping left 53 of 123 references
+        // with nothing behind them.
+        let mut code = push(2);
+        code.extend(call(FN_SCENE_ANIM_ON as u16));
+        let script = script_with(code, 4, vec![0]);
+
+        let anything = decompile("altar", &script);
+        assert!(matches!(
+            anything.scripts[0].actions[0],
+            Action::PlayAnim { .. }
+        ));
+
+        let ids = std::collections::HashSet::from(["altar_9".to_string()]);
+        let checked = decompile_known("altar", &script, Known::these(&ids));
+        assert!(matches!(
+            checked.scripts[0].actions[0],
+            Action::Unknown { .. }
+        ));
     }
 
     #[test]
