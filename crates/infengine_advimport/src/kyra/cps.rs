@@ -96,6 +96,8 @@ impl fmt::Display for Compression {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CpsError {
     TooSmall { len: usize },
+    /// The body ran out before the header's pixel count was reached.
+    TruncatedBody { got: usize, want: usize },
     /// Header declared a scheme this importer does not implement. The
     /// Kyrandia data set only ever uses Format80 and uncompressed, but
     /// the header can name others.
@@ -111,6 +113,9 @@ impl fmt::Display for CpsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TooSmall { len } => write!(f, "CPS is only {len} bytes, shorter than its header"),
+            Self::TruncatedBody { got, want } => {
+                write!(f, "CPS body gave {got} of {want} pixels")
+            }
             Self::UnsupportedCompression(c) => write!(f, "CPS uses {c}, which is not supported"),
             Self::ImplausibleSize { size } => {
                 write!(f, "CPS declares {size} pixels, which is not a sane image")
@@ -172,6 +177,91 @@ impl CpsImage {
 const MAX_PIXELS: usize = 1024 * 1024;
 
 /// Decode a CPS file.
+/// Expand the run-length scheme the header calls compression 3.
+///
+/// Read out of the game's own decompressor, which sits beside the
+/// Format80 one at `MAIN.EXE` segment 0x20c2 offset 0x0106:
+///
+/// ```text
+///   cl = *src++
+///   cl == 0   -> count is the next two bytes, BIG endian, then a byte
+///                to repeat
+///   cl & 0x80 -> repeat the next byte, `neg cl` times: 0xFF means one,
+///                0x80 means 128
+///   otherwise -> copy that many bytes straight through
+/// ```
+///
+/// It ends when the uncompressed size has been produced, which the
+/// original tracks as a 32-bit countdown rather than by looking for a
+/// terminator.
+///
+/// Three things had to be right together, and getting any one wrong is
+/// why five earlier guesses failed: the count for a long run is big
+/// endian in a little-endian file, `neg` is not `256 - n` at 0x80, and
+/// the stream starts after the palette rather than at the header's end.
+fn decompress_rle(data: &[u8], size: usize) -> Result<Vec<u8>, CpsError> {
+    let mut out = Vec::with_capacity(size);
+    let mut at = 0;
+
+    while out.len() < size {
+        let Some(&command) = data.get(at) else {
+            return Err(CpsError::TruncatedBody {
+                got: out.len(),
+                want: size,
+            });
+        };
+        at += 1;
+
+        let (count, value) = if command == 0 {
+            let (Some(&hi), Some(&lo), Some(&value)) =
+                (data.get(at), data.get(at + 1), data.get(at + 2))
+            else {
+                return Err(CpsError::TruncatedBody {
+                    got: out.len(),
+                    want: size,
+                });
+            };
+            at += 3;
+            (usize::from(u16::from_be_bytes([hi, lo])), Some(value))
+        } else if command & 0x80 != 0 {
+            let Some(&value) = data.get(at) else {
+                return Err(CpsError::TruncatedBody {
+                    got: out.len(),
+                    want: size,
+                });
+            };
+            at += 1;
+            (usize::from(command.wrapping_neg()), Some(value))
+        } else {
+            (usize::from(command), None)
+        };
+
+        // A count that would overrun the image is a stream this reader
+        // has lost its place in; stopping beats filling megabytes.
+        if out.len() + count > size {
+            return Err(CpsError::TruncatedBody {
+                got: out.len() + count,
+                want: size,
+            });
+        }
+        match value {
+            Some(value) => out.resize(out.len() + count, value),
+            None => {
+                let end = at + count;
+                let Some(run) = data.get(at..end) else {
+                    return Err(CpsError::TruncatedBody {
+                        got: out.len(),
+                        want: size,
+                    });
+                };
+                out.extend_from_slice(run);
+                at = end;
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub fn decode(data: &[u8]) -> Result<CpsImage, CpsError> {
     if data.len() < HEADER_LEN {
         return Err(CpsError::TooSmall { len: data.len() });
@@ -219,6 +309,7 @@ pub fn decode(data: &[u8]) -> Result<CpsImage, CpsError> {
             }
             body[..uncompressed_size].to_vec()
         }
+        Compression::Rle => decompress_rle(&data[pos..], uncompressed_size)?,
         other => return Err(CpsError::UnsupportedCompression(other)),
     };
 
