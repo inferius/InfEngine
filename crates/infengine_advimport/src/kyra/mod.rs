@@ -184,6 +184,9 @@ pub fn import_dir(
 
     let mut locale = Locale::new(language, language);
     let mut animations = AnimationSet::default();
+    // Archives whose recordings have been read, so the sweep below can
+    // find the ones no room owns.
+    let mut voiced: std::collections::HashSet<String> = std::collections::HashSet::new();
     // The CD release keeps extra animations in .APK and its spoken
     // dialogue in .VRM, both of them ordinary PAK archives beside the
     // rooms. Reading them costs nothing beyond opening the files.
@@ -215,6 +218,7 @@ pub fn import_dir(
         // be in the locale before the recordings are matched against
         // them - otherwise every recording lands unattached.
         import_voices(&archive.with_extension("VRM"), &stem, out_dir, &mut locale, &mut report);
+        voiced.insert(stem.to_ascii_uppercase());
 
         match outcome {
             Ok(()) => report.archives += 1,
@@ -225,6 +229,35 @@ pub fn import_dir(
                     reason: err.to_string(),
                 });
             }
+        }
+    }
+
+    // Recordings that belong to no archive. CHAPTER1..5 and INTRO are
+    // .VRM files with no .PAK beside them - the narration between
+    // chapters and over the opening - so the loop above never reached
+    // them and 760 recordings were left in the box.
+    if let Ok(listing) = fs::read_dir(source) {
+        let mut loose: Vec<PathBuf> = listing
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("vrm"))
+            })
+            .filter(|path| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| !voiced.contains(&stem.to_ascii_uppercase()))
+            })
+            .collect();
+        loose.sort();
+        for path in loose {
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            import_voices(&path, &stem, out_dir, &mut locale, &mut report);
         }
     }
 
@@ -565,10 +598,20 @@ fn import_voices(
 
         if let Some(n) = number {
             let id = emc::Script::line_id(stem, n);
-            if let Some(line) = locale.lines.get_mut(&id) {
-                line.voice = Some(relative);
-            } else {
-                report.unlinked_voice += 1;
+            match locale.lines.get_mut(&id) {
+                Some(line) => line.voice = Some(relative),
+                // A recording whose subtitle is nowhere still gets a
+                // line of its own, holding the audio and no text. The
+                // narration between chapters is like this: the game
+                // speaks it and never prints it, so an empty text is
+                // the truth rather than a gap, and a translator can
+                // fill it in later against the recording.
+                None => {
+                    let mut line = Line::text("");
+                    line.voice = Some(relative);
+                    locale.insert(&id, line);
+                    report.unlinked_voice += 1;
+                }
             }
         }
     }
