@@ -102,12 +102,12 @@ fn action_for(room: &str, site: &CallSite, texts: usize) -> Option<Action> {
             // The line index is the last constant pushed, which is the
             // call's first argument. A call whose index was computed
             // has no constants and cannot be resolved to a line.
-            match site.args.first().copied() {
-                Some(index) if index >= 0 && (index as usize) < texts => Action::Say {
-                    line: emc::Script::line_id(room, index as usize),
+            match site.args.first().copied().and_then(|arg| line_index(arg, texts)) {
+                Some(index) => Action::Say {
+                    line: emc::Script::line_id(room, index),
                     speaker: None,
                 },
-                _ => unknown(site),
+                None => unknown(site),
             }
         }
         FN_ENTER_SCENE => match site.args.first().copied() {
@@ -148,6 +148,29 @@ fn action_for(room: &str, site: &CallSite, texts: usize) -> Option<Action> {
         },
         _ => unknown(site),
     })
+}
+
+/// Which line a dialogue call's argument refers to.
+///
+/// Usually the index itself. Some scripts add a multiple of a thousand
+/// first: `_NPC.EMC` speaks its 114 lines as 9000 upwards, and
+/// `FORESTB.EMC` uses 4000. What the thousands select is not known -
+/// there is one string table per script, so it is not choosing between
+/// tables here - but the low part is verifiably the index: of the 113
+/// calls in `_NPC.EMC`, 111 land inside its 114 lines, and read back in
+/// order they are consecutive dialogue ("Let's try this.", "Here
+/// goes...", "I feel kind of strange..."). The two that do not land
+/// stay untranslated rather than being bent to fit.
+fn line_index(arg: i32, texts: usize) -> Option<usize> {
+    if arg < 0 {
+        return None;
+    }
+    let arg = arg as usize;
+    if arg < texts {
+        return Some(arg);
+    }
+    let index = arg % 1000;
+    (arg >= 1000 && index < texts).then_some(index)
 }
 
 fn unknown(site: &CallSite) -> Action {
@@ -253,6 +276,20 @@ mod tests {
                 "function {function} should speak"
             );
         }
+    }
+
+    #[test]
+    fn a_thousands_prefix_on_a_line_reference_is_stripped() {
+        // _NPC.EMC speaks its lines as 9000 upwards and FORESTB.EMC as
+        // 4000; the low part is the index into that script's own text.
+        assert_eq!(line_index(9000, 114), Some(0));
+        assert_eq!(line_index(9013, 114), Some(13));
+        assert_eq!(line_index(4000, 16), Some(0));
+        // Past the end even after stripping: left alone.
+        assert_eq!(line_index(9114, 114), None);
+        assert_eq!(line_index(-1, 114), None);
+        // A plain index still works, and is preferred over stripping.
+        assert_eq!(line_index(7, 114), Some(7));
     }
 
     #[test]

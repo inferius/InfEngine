@@ -270,6 +270,10 @@ pub fn import_pak(
         detail: source.to_string(),
     })?;
 
+    // Stems whose script has already been read, so the pass over the
+    // loose scripts below does not do them twice.
+    let mut scripted: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     // Colour priority: whatever the image embedded, else a palette
     // shipped alongside it in the same archive, else the game palette.
     let shared = archive_palette(&pak);
@@ -401,7 +405,32 @@ pub fn import_pak(
         report.rooms += 1;
         collect_lines(&pak, stem_of_entry, &name, language, locale);
         export_scripts(&pak, stem_of_entry, &name, language, out_dir, report)?;
+        scripted.insert(stem_of_entry.to_ascii_uppercase());
         debug!(archive = %stem, entry = %entry.name, "imported background");
+    }
+
+    // Scripts that belong to no room. The loop above only reaches a
+    // `.EMC` whose stem also has a picture, a mask and a `.DAT`, and
+    // some of the game's biggest scripts have none of those: `_NPC.EMC`
+    // is every character's dialogue, `POTION.EMC` at 12 KB is the
+    // alchemy, and nineteen more rooms ship logic without shipping a
+    // walkable screen. Skipping them threw away a third of the game's
+    // scripting.
+    for entry in pak.entries() {
+        let Some(stem) = entry
+            .name
+            .strip_suffix(".EMC")
+            .or_else(|| entry.name.strip_suffix(".emc"))
+        else {
+            continue;
+        };
+        if !scripted.insert(stem.to_ascii_uppercase()) {
+            continue;
+        }
+        let id = stem.trim_start_matches('_').to_ascii_lowercase();
+        collect_lines(&pak, stem, &id, language, locale);
+        export_scripts(&pak, stem, &id, language, out_dir, report)?;
+        debug!(archive = %stem, entry = %entry.name, "imported a script with no room");
     }
 
     export_animations(&pak, &stem, fallback, out_dir, animations, report)?;
