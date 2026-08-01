@@ -91,11 +91,21 @@ impl Story {
             });
         }
 
+        // Which rooms answer to each script prefix. Usually one room to
+        // its own name, but rooms that share a background share their
+        // logic too, and a link found in that logic belongs to all of
+        // them rather than to whichever one sorts first.
+        let mut by_prefix: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
         // Exits, read from the room files themselves.
         for id in &rooms {
             let Some(room) = project.load_room(id) else {
                 continue;
             };
+            by_prefix
+                .entry(room.script_prefix().to_string())
+                .or_default()
+                .push(id.clone());
             for exit in &room.exits {
                 if exit.target_room.is_empty() {
                     continue;
@@ -115,19 +125,25 @@ impl Story {
         // Scripts. A script's id starts with the room it belongs to,
         // which is the only thing tying the two together.
         for (id, script) in &project.scripts {
-            let owner = id.split_once('.').map(|(room, _)| room).unwrap_or(id);
-            if !rooms.contains(owner) {
+            let prefix = id.split_once('.').map(|(room, _)| room).unwrap_or(id);
+            let Some(owners) = by_prefix.get(prefix) else {
                 continue;
-            }
+            };
+            let mut found: Vec<(String, LinkKind)> = Vec::new();
             script.walk(&mut |action| match action {
                 Action::GoToRoom { room, .. } => {
-                    story.link(owner, room, LinkKind::Script, id, &rooms, &screens);
+                    found.push((room.clone(), LinkKind::Script));
                 }
                 Action::OpenScreen { screen } => {
-                    story.link(owner, screen, LinkKind::Script, id, &rooms, &screens);
+                    found.push((screen.clone(), LinkKind::Script));
                 }
                 _ => {}
             });
+            for owner in owners {
+                for (target, kind) in &found {
+                    story.link(owner, target, *kind, id, &rooms, &screens);
+                }
+            }
         }
 
         // Screens, through their buttons.

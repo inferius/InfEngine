@@ -140,7 +140,8 @@ impl Game {
     pub fn enter(&mut self, room: &Room, entry: Option<&str>) {
         self.state.enter(room, entry);
         self.runner.stop();
-        let id = [format!("{}.entry", room.id), format!("{}.entry0", room.id)]
+        let prefix = room.script_prefix();
+        let id = [format!("{prefix}.entry"), format!("{prefix}.entry0")]
             .into_iter()
             .find(|id| self.scripts.contains_key(id));
         if let Some(script) = id.and_then(|id| self.scripts.get(&id)).cloned() {

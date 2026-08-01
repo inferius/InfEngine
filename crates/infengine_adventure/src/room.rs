@@ -76,6 +76,15 @@ pub struct Room {
     /// Author-facing name; also the default status-line room title.
     #[serde(default)]
     pub name: String,
+    /// Prefix its scripts are named with, when that is not the id.
+    ///
+    /// Rooms usually own their logic and this stays empty. It is for
+    /// the case where several rooms run the same script: Kyrandia's
+    /// forest is thirteen distinct rooms drawn on one background and
+    /// driven by one `FORESTA.EMC`, so all thirteen carry the prefix
+    /// `foresta` while keeping ids of their own.
+    #[serde(default)]
+    pub script: String,
     /// Room extent in logical pixels. Usually the background's size.
     pub size: Vec2,
     #[serde(default)]
@@ -93,6 +102,16 @@ pub struct Room {
 }
 
 impl Room {
+    /// What this room's scripts are named after: its own id, unless it
+    /// shares them with other rooms.
+    pub fn script_prefix(&self) -> &str {
+        if self.script.is_empty() {
+            &self.id
+        } else {
+            &self.script
+        }
+    }
+
     pub fn new(id: impl Into<String>, size: Vec2) -> Self {
         Self {
             id: id.into(),

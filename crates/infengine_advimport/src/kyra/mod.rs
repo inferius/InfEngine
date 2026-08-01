@@ -25,6 +25,7 @@ pub mod pak;
 pub mod palette;
 pub mod wsa;
 pub mod roomdat;
+pub mod rooms;
 pub mod vm;
 pub mod voc;
 pub mod xmi;

@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use infengine_advimport::{bm, kyra, survey};
+use infengine_advimport::{bm, kyra, survey, ImportError};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -68,6 +68,14 @@ enum Command {
         /// Language tag for the text in these archives.
         #[arg(long, short, default_value = "en")]
         language: String,
+        /// ScummVM's `kyra.dat`, for the room graph.
+        ///
+        /// Kyrandia keeps which room leads where in its executable
+        /// rather than in the archives, so without this the import
+        /// produces rooms with no way out of them. Optional: leave it
+        /// off and everything else still imports.
+        #[arg(long)]
+        kyra_dat: Option<PathBuf>,
     },
 
     /// Render the MT-32 soundtrack to audio.
@@ -94,6 +102,47 @@ enum Command {
         #[arg(long, default_value = "music")]
         prefix: String,
     },
+}
+
+/// Give the imported rooms the exits the game's own room table lists.
+fn expand_rooms(dat: &std::path::Path, out: &std::path::Path) -> Result<(), ImportError> {
+    let bytes = std::fs::read(dat).map_err(|source| ImportError::ReadFile {
+        path: dat.display().to_string(),
+        source,
+    })?;
+    let archive = kyra::kyradat::KyraDat::parse(&bytes).map_err(|err| ImportError::Format {
+        path: dat.display().to_string(),
+        detail: err.to_string(),
+    })?;
+    let graph = archive.kyrandia1().map_err(|err| ImportError::Format {
+        path: dat.display().to_string(),
+        detail: err.to_string(),
+    })?;
+
+    let (agree, total) = graph.symmetry();
+    println!(
+        "\nroom graph: {} rooms from {} backgrounds, {agree}/{total} links lead back",
+        graph.rooms.len(),
+        graph.names.len()
+    );
+
+    let dir = out.join("rooms");
+    let done = kyra::rooms::expand(&dir, &graph).map_err(|source| ImportError::ReadFile {
+        path: dir.display().to_string(),
+        source,
+    })?;
+    println!(
+        "expanded to {} rooms with {} exits ({} backgrounds replaced)",
+        done.written, done.exits, done.replaced
+    );
+    if !done.missing.is_empty() {
+        eprintln!(
+            "warning: {} backgrounds the graph names never imported: {}",
+            done.missing.len(),
+            done.missing.join(", ")
+        );
+    }
+    Ok(())
 }
 
 fn main() -> ExitCode {
@@ -263,6 +312,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             source,
             out,
             language,
+            kyra_dat,
         } => {
             let report = kyra::import_dir(&source, &out, &language)?;
             println!("{report}");
@@ -273,6 +323,14 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 );
             } else {
                 println!("\nwritten to {}", out.display());
+            }
+            if let Some(path) = kyra_dat {
+                expand_rooms(&path, &out)?;
+            } else {
+                eprintln!(
+                    "note: no --kyra-dat, so the rooms have no exits. \
+                     Kyrandia keeps its room graph in the executable."
+                );
             }
             Ok(())
         }
