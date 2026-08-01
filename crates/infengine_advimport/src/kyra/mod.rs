@@ -24,6 +24,7 @@ pub mod msc;
 pub mod pak;
 pub mod palette;
 pub mod wsa;
+pub mod regions;
 pub mod roomdat;
 pub mod rooms;
 pub mod vm;
