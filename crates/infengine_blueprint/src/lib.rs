@@ -1002,9 +1002,9 @@ const PIN_ROW_HEIGHT: f32 = 18.0;
 const PIN_RADIUS: f32 = 5.0;
 const PIN_HIT_RADIUS: f32 = 10.0;
 
-fn node_height_def(def: &NodeKindDef) -> f32 {
+fn node_height_def(def: &NodeKindDef, scale: f32) -> f32 {
     let rows = def.inputs.len().max(def.outputs.len()) as f32;
-    NODE_HEADER_HEIGHT + rows * PIN_ROW_HEIGHT + 8.0
+    (NODE_HEADER_HEIGHT + rows * PIN_ROW_HEIGHT + 8.0) * scale
 }
 
 /// Owned pin descriptor used when the editor needs to combine
@@ -1064,9 +1064,9 @@ pub fn effective_pins(
 }
 
 /// Height of the visual node given its effective pin lists.
-fn node_height_pins(inputs: &[EffectivePin], outputs: &[EffectivePin]) -> f32 {
+fn node_height_pins(inputs: &[EffectivePin], outputs: &[EffectivePin], scale: f32) -> f32 {
     let rows = inputs.len().max(outputs.len()) as f32;
-    NODE_HEADER_HEIGHT + rows * PIN_ROW_HEIGHT + 8.0
+    (NODE_HEADER_HEIGHT + rows * PIN_ROW_HEIGHT + 8.0) * scale
 }
 
 /// Header tint for a node, keyed off its declared category. Mirrors
@@ -1298,6 +1298,34 @@ impl BlueprintEditor {
         }
     }
 
+    /// How much bigger than its authored size a node is drawn.
+    ///
+    /// Zoom used to move nodes apart without growing them, so zooming in
+    /// spread a graph out and left the labels the same size - which is
+    /// the opposite of what zooming in is for. Everything about a node
+    /// now scales with it.
+    fn scale(&self) -> f32 {
+        self.view_zoom.max(0.01)
+    }
+
+    fn node_width(&self) -> f32 {
+        NODE_WIDTH * self.scale()
+    }
+
+    fn header_height(&self) -> f32 {
+        NODE_HEADER_HEIGHT * self.scale()
+    }
+
+    fn pin_row(&self) -> f32 {
+        PIN_ROW_HEIGHT * self.scale()
+    }
+
+    /// Grabbing a pin stays forgiving at any zoom: the hit target never
+    /// shrinks below what it was at 1:1, however far out the view is.
+    fn pin_hit_radius(&self) -> f32 {
+        (PIN_HIT_RADIUS * self.scale()).max(PIN_HIT_RADIUS)
+    }
+
     fn node_origin(&self, canvas_min: egui::Pos2, node: &Node) -> egui::Pos2 {
         canvas_min
             + self.view_offset
@@ -1320,9 +1348,9 @@ impl BlueprintEditor {
         let pins = if is_output { &eff_out } else { &eff_in };
         let idx = pins.iter().position(|p| p.name == pin)?;
         let origin = self.node_origin(canvas_min, node);
-        let y = origin.y + NODE_HEADER_HEIGHT + idx as f32 * PIN_ROW_HEIGHT + PIN_ROW_HEIGHT * 0.5;
+        let y = origin.y + self.header_height() + idx as f32 * self.pin_row() + self.pin_row() * 0.5;
         let x = if is_output {
-            origin.x + NODE_WIDTH
+            origin.x + self.node_width()
         } else {
             origin.x
         };
@@ -1345,7 +1373,7 @@ impl BlueprintEditor {
                 for pin in pins {
                     if let Some(p) = self.pin_position(
                         registry, canvas_min, node, &pin.name, is_output,
-                    ) && pos.distance(p) <= PIN_HIT_RADIUS
+                    ) && pos.distance(p) <= self.pin_hit_radius()
                     {
                         return Some((node.id, pin.name.clone(), is_output, pin.ty));
                     }
@@ -1371,9 +1399,9 @@ impl BlueprintEditor {
             let (eff_in, eff_out) =
                 effective_pins(node, Some(def), &self.callable_methods);
             let size = if node.kind == "comment" {
-                egui::vec2(NODE_WIDTH * 2.2, 64.0)
+                egui::vec2(self.node_width() * 2.2, 64.0 * self.scale())
             } else {
-                egui::vec2(NODE_WIDTH, node_height_pins(&eff_in, &eff_out))
+                egui::vec2(self.node_width(), node_height_pins(&eff_in, &eff_out, self.scale()))
             };
             let rect = egui::Rect::from_min_size(origin, size);
             if rect.contains(pos) {
@@ -2564,7 +2592,7 @@ impl BlueprintEditor {
             let zoom_delta = ui.input(|i| i.zoom_delta());
             if (zoom_delta - 1.0).abs() > 0.001 {
                 let prev_zoom = self.view_zoom.max(0.01);
-                let new_zoom = (prev_zoom * zoom_delta).clamp(0.25, 3.0);
+                let new_zoom = (prev_zoom * zoom_delta).clamp(0.1, 6.0);
                 // Solve for view_offset so the canvas point under the
                 // cursor stays put after the zoom change.
                 let anchor = hover_pos - rect.min;
@@ -2719,6 +2747,15 @@ impl BlueprintEditor {
         // the graph nodes mutably (needed for inline pin defaults).
         let view_offset = self.view_offset;
         let view_zoom = self.view_zoom;
+        // Taken as locals: the loop below holds a mutable borrow of the
+        // graph, so the editor's own accessors are out of reach inside
+        // it.
+        let scale = view_zoom.max(0.01);
+        let node_w = NODE_WIDTH * scale;
+        let header_h = NODE_HEADER_HEIGHT * scale;
+        let pin_row = PIN_ROW_HEIGHT * scale;
+        let pin_r = PIN_RADIUS * scale;
+        let font = |base: f32| egui::FontId::proportional((base * scale).max(7.0));
         let selected_id = self.selected;
         let multi_selected = self.selected_extra.clone();
         // Build a set of pins that have an incoming edge so inline
@@ -2747,7 +2784,7 @@ impl BlueprintEditor {
             // pointless painter calls and `ui.put` widgets escaping
             // through the canvas edge.
             let cull_w = if node.kind == "comment" {
-                NODE_WIDTH * 2.2
+                node_w * 2.2
             } else {
                 NODE_WIDTH
             };
@@ -2756,7 +2793,7 @@ impl BlueprintEditor {
             let cull_h = if node.kind == "comment" {
                 64.0
             } else {
-                node_height_pins(&eff_inputs, &eff_outputs)
+                node_height_pins(&eff_inputs, &eff_outputs, scale)
             };
             let node_bounds = egui::Rect::from_min_size(origin, egui::vec2(cull_w, cull_h));
             if !rect.intersects(node_bounds) {
@@ -2767,7 +2804,7 @@ impl BlueprintEditor {
             // pins. They never compile and never participate in
             // wire routing.
             if node.kind == "comment" {
-                let size = egui::vec2(NODE_WIDTH * 2.2, 64.0);
+                let size = egui::vec2(node_w * 2.2, 64.0 * scale);
                 let cmt_rect = egui::Rect::from_min_size(origin, size);
                 painter.rect_filled(
                     cmt_rect,
@@ -2811,7 +2848,7 @@ impl BlueprintEditor {
                 continue;
             }
             let rect_node =
-                egui::Rect::from_min_size(origin, egui::vec2(NODE_WIDTH, node_height_def(def)));
+                egui::Rect::from_min_size(origin, egui::vec2(node_w, node_height_def(def, scale)));
             painter.rect_filled(rect_node, 4.0, egui::Color32::from_rgb(48, 56, 72));
             let selected = selected_id == Some(node.id) || multi_selected.contains(&node.id);
             let border = if selected {
@@ -2839,7 +2876,7 @@ impl BlueprintEditor {
             // a glance, Unreal-style.
             let header_rgb = category_header_color(def.category);
             let header_rect =
-                egui::Rect::from_min_size(origin, egui::vec2(NODE_WIDTH, NODE_HEADER_HEIGHT));
+                egui::Rect::from_min_size(origin, egui::vec2(node_w, header_h));
             painter.rect_filled(
                 header_rect,
                 4.0,
@@ -2849,7 +2886,7 @@ impl BlueprintEditor {
                 origin + egui::vec2(8.0, 6.0),
                 egui::Align2::LEFT_TOP,
                 def.label,
-                egui::FontId::proportional(13.0),
+                font(13.0),
                 egui::Color32::WHITE,
             );
             // Subtitle: extra labelling drawn under the header that
@@ -2878,7 +2915,7 @@ impl BlueprintEditor {
             };
             if let Some(sub) = subtitle {
                 painter.text(
-                    origin + egui::vec2(8.0, NODE_HEADER_HEIGHT + 2.0),
+                    origin + egui::vec2(8.0 * scale, header_h + 2.0),
                     egui::Align2::LEFT_TOP,
                     sub,
                     egui::FontId::monospace(10.0),
@@ -2898,7 +2935,7 @@ impl BlueprintEditor {
                     exec::Value::EntityRef(e) => format!("#{e}"),
                 };
                 painter.text(
-                    origin + egui::vec2(NODE_WIDTH - 8.0, 6.0),
+                    origin + egui::vec2(node_w - 8.0 * scale, 6.0 * scale),
                     egui::Align2::RIGHT_TOP,
                     label,
                     egui::FontId::monospace(11.0),
@@ -2907,16 +2944,16 @@ impl BlueprintEditor {
             }
             for (i, pin) in eff_inputs.iter().enumerate() {
                 let y = origin.y
-                    + NODE_HEADER_HEIGHT
-                    + i as f32 * PIN_ROW_HEIGHT
-                    + PIN_ROW_HEIGHT * 0.5;
+                    + header_h
+                    + i as f32 * pin_row
+                    + pin_row * 0.5;
                 let [r, g, b] = pin.ty.rgb();
                 let connected =
                     connected_in_pins.contains(&(node.id, pin.name.clone()));
                 let pin_center = egui::pos2(origin.x, y);
                 let hover_rect = egui::Rect::from_center_size(
                     pin_center,
-                    egui::vec2(PIN_RADIUS * 3.0, PIN_RADIUS * 3.0),
+                    egui::vec2(pin_r * 3.0, pin_r * 3.0),
                 );
                 let hover_resp = ui.interact(
                     hover_rect,
@@ -2924,9 +2961,9 @@ impl BlueprintEditor {
                     egui::Sense::hover(),
                 );
                 let radius = if hover_resp.hovered() {
-                    PIN_RADIUS + 2.0
+                    pin_r + 2.0
                 } else {
-                    PIN_RADIUS
+                    pin_r
                 };
                 painter.circle_filled(
                     pin_center,
@@ -2940,10 +2977,10 @@ impl BlueprintEditor {
                     if connected { "connected" } else { "default literal" }
                 ));
                 painter.text(
-                    egui::pos2(origin.x + 10.0, y - 7.0),
+                    egui::pos2(origin.x + 10.0, y - 7.0 * scale),
                     egui::Align2::LEFT_TOP,
                     &pin.name,
-                    egui::FontId::proportional(11.0),
+                    font(11.0),
                     egui::Color32::LIGHT_GRAY,
                 );
                 // Inline pin-default editor: only for non-exec inputs
@@ -2958,7 +2995,7 @@ impl BlueprintEditor {
                     // happily render the TextEdit straight through
                     // the divider into the next pane when the node
                     // sits near the canvas boundary.
-                    let max_right = (origin.x + NODE_WIDTH - 8.0).min(rect.max.x - 4.0);
+                    let max_right = (origin.x + node_w - 8.0 * scale).min(rect.max.x - 4.0);
                     let edit_w = max_right - edit_x;
                     if edit_x >= rect.max.x - 4.0 {
                         continue;
@@ -3031,14 +3068,14 @@ impl BlueprintEditor {
             }
             for (i, pin) in eff_outputs.iter().enumerate() {
                 let y = origin.y
-                    + NODE_HEADER_HEIGHT
-                    + i as f32 * PIN_ROW_HEIGHT
-                    + PIN_ROW_HEIGHT * 0.5;
+                    + header_h
+                    + i as f32 * pin_row
+                    + pin_row * 0.5;
                 let [r, g, b] = pin.ty.rgb();
-                let pin_center = egui::pos2(origin.x + NODE_WIDTH, y);
+                let pin_center = egui::pos2(origin.x + node_w, y);
                 let hover_rect = egui::Rect::from_center_size(
                     pin_center,
-                    egui::vec2(PIN_RADIUS * 3.0, PIN_RADIUS * 3.0),
+                    egui::vec2(pin_r * 3.0, pin_r * 3.0),
                 );
                 let hover_resp = ui.interact(
                     hover_rect,
@@ -3046,9 +3083,9 @@ impl BlueprintEditor {
                     egui::Sense::hover(),
                 );
                 let radius = if hover_resp.hovered() {
-                    PIN_RADIUS + 2.0
+                    pin_r + 2.0
                 } else {
-                    PIN_RADIUS
+                    pin_r
                 };
                 painter.circle_filled(
                     pin_center,
@@ -3058,10 +3095,10 @@ impl BlueprintEditor {
                 hover_resp
                     .on_hover_text(format!("{} : {}", pin.name, pin.ty.label()));
                 painter.text(
-                    egui::pos2(origin.x + NODE_WIDTH - 10.0, y - 7.0),
+                    egui::pos2(origin.x + node_w - 10.0 * scale, y - 7.0 * scale),
                     egui::Align2::RIGHT_TOP,
                     &pin.name,
-                    egui::FontId::proportional(11.0),
+                    font(11.0),
                     egui::Color32::LIGHT_GRAY,
                 );
             }
@@ -3138,7 +3175,7 @@ impl BlueprintEditor {
                 let zoom = self.view_zoom.max(0.01);
                 self.view_offset = canvas_center
                     - egui::vec2(node.position[0] * zoom, node.position[1] * zoom)
-                    - egui::vec2(NODE_WIDTH * 0.5, 0.0);
+                    - egui::vec2(node_w * 0.5, 0.0);
                 self.selected = Some(id);
             }
         }
