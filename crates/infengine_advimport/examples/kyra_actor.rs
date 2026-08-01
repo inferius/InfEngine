@@ -210,7 +210,7 @@ fn frames(
             continue;
         }
         if span > median * MERGED {
-            let mid = left + (right - left + 1) / 2;
+            let mid = left + (right - left).div_ceil(2);
             split.push((left, mid));
             split.push((mid + 1, right));
         } else {

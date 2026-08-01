@@ -130,10 +130,17 @@ pub fn instance(base: &Room, id: &str, prefix: &str, index: usize, graph: &RoomG
             continue;
         };
         let shape = edge_shape(room.size, dir);
+        // The strip sits at the room's edge, and a room's floor often
+        // stops well short of it - a cliff top, a wall, a shoreline. An
+        // exit the actor cannot reach never fires, so the point walked
+        // to is snapped onto the floor even though the region stays
+        // where the doorway is. Left un-snapped, a walk through the
+        // imported game got stuck on 84 doors out of 600 tries.
+        let walk_to = room.walk.clamp(shape.center()).unwrap_or(shape.center());
         room.exits.push(Exit {
             id: dir.name().to_string(),
             name: format!("{} to {target}", dir.name()),
-            walk_to: Some(shape.center()),
+            walk_to: Some(walk_to),
             shape,
             target_room: target.clone(),
             target_entry: String::new(),

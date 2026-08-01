@@ -163,14 +163,41 @@ impl Game {
     }
 
     /// What a click at `point` would do, without doing it.
+    ///
+    /// Two rules decide between the things under the cursor, and both
+    /// exist because an imported game broke without them.
+    ///
+    /// A click carrying [`Verb::Walk`] is a player who chose no verb -
+    /// which is every click in a game with no verb menu - so the thing
+    /// clicked answers with its own. Kyrandia's hotspots all bind their
+    /// script to Use, and taking the incoming Walk literally made every
+    /// one of the 408 imported hotspots do nothing at all.
+    ///
+    /// And a hotspot with nothing to run loses to a door underneath it.
+    /// The imported hotspots are rectangles from bytecode and the exits
+    /// are strips along the room's edge; where they overlap, the one
+    /// that does something should win, or a room becomes impossible to
+    /// leave from that side.
     pub fn resolve(&self, room: &Room, point: Vec2, verb: Verb) -> Click {
         if let Some(hotspot) = self.state.hotspot_at(room, point) {
-            return Click::Hotspot {
-                id: hotspot.id.clone(),
-                name: hotspot.name.clone(),
-                verb,
-                script: hotspot.action(verb).map(str::to_string),
+            let verb = if verb == Verb::default() {
+                hotspot.default_verb
+            } else {
+                verb
             };
+            let script = hotspot.action(verb).map(str::to_string);
+            let covered = room
+                .exits
+                .iter()
+                .any(|exit| exit.enabled && exit.shape.contains(point));
+            if script.is_some() || !covered {
+                return Click::Hotspot {
+                    id: hotspot.id.clone(),
+                    name: hotspot.name.clone(),
+                    verb,
+                    script,
+                };
+            }
         }
         if let Some(exit) = room
             .exits
@@ -265,6 +292,104 @@ mod tests {
     use super::*;
     use crate::interact::{Exit, Hotspot, Shape};
     use crate::walk::Polygon;
+
+    /// A room where a clickable thing sits on top of a doorway, which
+    /// is what an imported game looks like: the things come from
+    /// bytecode and the doors are strips along the room's edge.
+    fn room_with_overlap(script: bool) -> Room {
+        let mut room = Room::new("cave", Vec2::new(320.0, 200.0));
+        room.walk
+            .solids
+            .push(Polygon::rect(Vec2::ZERO, Vec2::new(320.0, 200.0)));
+        room.hotspots.push(Hotspot {
+            id: "spot1".into(),
+            name: "spot1".into(),
+            shape: Shape::Rect {
+                min: Vec2::ZERO,
+                max: Vec2::new(60.0, 200.0),
+            },
+            default_verb: Verb::Use,
+            actions: if script {
+                vec![(Verb::Use, "cave.spot1".into())]
+            } else {
+                Vec::new()
+            },
+            enabled: true,
+            ..Default::default()
+        });
+        room.exits.push(Exit {
+            id: "west".into(),
+            name: "west".into(),
+            shape: Shape::Rect {
+                min: Vec2::ZERO,
+                max: Vec2::new(14.0, 200.0),
+            },
+            target_room: "broken".into(),
+            enabled: true,
+            ..Default::default()
+        });
+        room
+    }
+
+    #[test]
+    fn a_click_with_no_verb_uses_the_things_own() {
+        // Every click in a game with no verb menu arrives as Walk.
+        // Taking that literally left all 408 hotspots of an imported
+        // game running nothing at all, because they bind to Use.
+        let game = Game::default();
+        let room = room_with_overlap(true);
+        let click = game.resolve(&room, Vec2::new(40.0, 100.0), Verb::default());
+        let Click::Hotspot { verb, script, .. } = click else {
+            panic!("expected the thing, got {click:?}");
+        };
+        assert_eq!(verb, Verb::Use);
+        assert_eq!(script.as_deref(), Some("cave.spot1"));
+    }
+
+    #[test]
+    fn a_chosen_verb_is_not_overridden() {
+        let game = Game::default();
+        let room = room_with_overlap(true);
+        let click = game.resolve(&room, Vec2::new(40.0, 100.0), Verb::Look);
+        let Click::Hotspot { verb, script, .. } = click else {
+            panic!("expected the thing");
+        };
+        assert_eq!(verb, Verb::Look);
+        assert!(script.is_none(), "nothing is bound to Look here");
+    }
+
+    #[test]
+    fn a_thing_that_does_nothing_loses_to_the_door_under_it() {
+        // Otherwise a rectangle sitting over the room's edge makes that
+        // side impossible to leave, and the click looks like it was
+        // dropped.
+        let game = Game::default();
+        let room = room_with_overlap(false);
+        let click = game.resolve(&room, Vec2::new(7.0, 100.0), Verb::default());
+        assert!(
+            matches!(click, Click::Exit { ref target_room, .. } if target_room == "broken"),
+            "{click:?}"
+        );
+    }
+
+    #[test]
+    fn a_thing_that_does_something_keeps_the_click() {
+        let game = Game::default();
+        let room = room_with_overlap(true);
+        let click = game.resolve(&room, Vec2::new(7.0, 100.0), Verb::default());
+        assert!(matches!(click, Click::Hotspot { .. }), "{click:?}");
+    }
+
+    #[test]
+    fn a_thing_away_from_any_door_keeps_the_click_even_with_nothing_to_run() {
+        // The rule is about doors, not about being empty: a scenery
+        // hotspot with no script still answers, so the status line can
+        // name what the cursor is over.
+        let game = Game::default();
+        let room = room_with_overlap(false);
+        let click = game.resolve(&room, Vec2::new(40.0, 100.0), Verb::default());
+        assert!(matches!(click, Click::Hotspot { .. }), "{click:?}");
+    }
 
     fn room() -> Room {
         let mut room = Room::new("hall", Vec2::new(320.0, 200.0));
