@@ -101,13 +101,15 @@ fn main() {
     let commands: usize = opcodes.values().sum();
     println!("\n{notes} notes, {commands} commands, {named} of them named");
     println!("{} distinct commands in these programs:", opcodes.len());
-    for (opcode, count) in opcodes.iter().rev().take(40) {
-        let name = Step::Command {
-            opcode: *opcode,
-            argument: 0,
-        }
-        .name()
-        .unwrap_or("?");
-        println!("   {opcode:#04x} {name:<12} {count}");
+    let mut by_use: Vec<(u8, usize)> = opcodes.iter().map(|(k, v)| (*k, *v)).collect();
+    by_use.sort_by_key(|(opcode, count)| (std::cmp::Reverse(*count), *opcode));
+    let mut running = 0usize;
+    for (opcode, count) in by_use.iter().copied() {
+        running += count;
+        let name = Step::Command { opcode, argument: 0 }.name().unwrap_or("?");
+        println!(
+            "   {opcode:#04x} {name:<12} {count:>4}   {:>3}% of commands so far",
+            100 * running / commands.max(1)
+        );
     }
 }
