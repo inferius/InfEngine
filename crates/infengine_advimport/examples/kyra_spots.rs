@@ -1,9 +1,14 @@
-//! Give already-imported rooms the clickable things their scripts define.
+//! Redo the script side of an import, in place.
 //!
-//! The same step the import does, on its own, so a project converted
-//! before the regions were readable does not have to be built again -
-//! a full import rewrites every PNG and every recording for a change
-//! that touches nothing but rooms and scripts.
+//! Decompiles each room's `.EMC` again and rewrites its clickable
+//! things and its scripts. The same steps the import does, on their
+//! own, so a project converted before the regions were readable - or
+//! before the engine's function table was - does not have to be built
+//! again. A full import rewrites every PNG and every recording for a
+//! change that touches nothing but rooms and scripts.
+//!
+//! A script file with no `.EMC` behind it is left alone. Hand-written
+//! ones live beside the imported ones and are not ours to regenerate.
 //!
 //! ```text
 //! cargo run -p infengine_advimport --example kyra_spots -- <project> <dir of .EMC>
@@ -46,7 +51,8 @@ fn main() {
     // One decode per script rather than one per room: the caves would
     // otherwise read the same file seventy-six times.
     let mut cache: BTreeMap<String, Option<emc::Script>> = BTreeMap::new();
-    // Hotspot scripts, gathered per prefix and written once at the end.
+    // Scripts per prefix, written once at the end. Several rooms
+    // share a prefix and would otherwise write the same file over.
     let mut new_scripts: BTreeMap<String, Vec<infengine_adventure::Script>> = BTreeMap::new();
 
     let (mut touched, mut spots, mut without) = (0, 0, 0);
@@ -63,6 +69,12 @@ fn main() {
             continue;
         };
 
+        // The room's own logic, read again with whatever the
+        // decompiler now understands.
+        let list = new_scripts.entry(prefix.clone()).or_insert_with(|| {
+            decompile::decompile(&prefix, script).scripts
+        });
+
         let size = (room.size.x as i32, room.size.y as i32);
         let found = decompile::hotspots(&prefix, script, size);
         if found.is_empty() {
@@ -74,11 +86,8 @@ fn main() {
         room.hotspots.clear();
         for (hotspot, compiled) in found {
             room.hotspots.push(hotspot);
-            if !compiled.is_empty() {
-                let list = new_scripts.entry(prefix.clone()).or_default();
-                if !list.iter().any(|s| s.id == compiled.id) {
-                    list.push(compiled);
-                }
+            if !compiled.is_empty() && !list.iter().any(|s| s.id == compiled.id) {
+                list.push(compiled);
             }
         }
         spots += room.hotspots.len();
@@ -90,14 +99,17 @@ fn main() {
 
     let mut written = 0;
     for (prefix, scripts) in &new_scripts {
-        match merge_scripts(&scripts_dir, prefix, scripts) {
-            Ok(count) => written += count,
+        if scripts.is_empty() {
+            continue;
+        }
+        match write_scripts(&scripts_dir, prefix, scripts) {
+            Ok(()) => written += scripts.len(),
             Err(err) => println!("{prefix}: {err}"),
         }
     }
 
     println!(
-        "{touched} rooms given {spots} clickable things, {written} scripts written"
+        "{touched} rooms given {spots} clickable things, {written} scripts rewritten"
     );
     if without > 0 {
         println!("{without} rooms have no script of their own");
@@ -112,37 +124,21 @@ fn load_script(dir: &Path, prefix: &str) -> Option<emc::Script> {
     emc::decode(&bytes, Encoding::Latin1).ok()
 }
 
-/// Add the hotspot scripts to a room's script file, keeping what is
-/// already in it.
-fn merge_scripts(
+/// Write a room's scripts, replacing whatever was there.
+///
+/// Replacing rather than merging, because everything in the file was
+/// derived from the same `.EMC` and a better reading of it should not
+/// have to live beside the worse one it supersedes.
+fn write_scripts(
     dir: &Path,
     prefix: &str,
     scripts: &[infengine_adventure::Script],
-) -> std::io::Result<usize> {
-    let path = dir.join(format!("{prefix}.script.ron"));
-    let mut existing: Vec<infengine_adventure::Script> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| ron::from_str(&text).ok())
-        .unwrap_or_default();
-
-    let mut added = 0;
-    for script in scripts {
-        match existing.iter_mut().find(|s| s.id == script.id) {
-            // Rerun: the script is regenerated, so the new reading wins.
-            Some(slot) => *slot = script.clone(),
-            None => {
-                existing.push(script.clone());
-                added += 1;
-            }
-        }
-    }
-
+) -> std::io::Result<()> {
     let text = ron::ser::to_string_pretty(
-        &existing,
+        &scripts,
         ron::ser::PrettyConfig::new().indentor("  ").struct_names(true),
     )
     .map_err(std::io::Error::other)?;
     std::fs::create_dir_all(dir)?;
-    std::fs::write(&path, text)?;
-    Ok(added)
+    std::fs::write(dir.join(format!("{prefix}.script.ron")), text)
 }

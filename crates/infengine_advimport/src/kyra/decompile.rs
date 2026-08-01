@@ -21,46 +21,41 @@ use infengine_adventure::interact::{Hotspot, Shape};
 use infengine_adventure::{Action, Script, Verb};
 
 use super::emc;
+use super::functions;
 use super::regions;
 use super::vm::{self, CallSite};
 
-/// Speaks a line of dialogue.
-const FN_CHARACTER_SAYS: i32 = 1;
-/// Prints a line without a speaker.
-const FN_PRINT_TEXT: i32 = 60;
-/// Prints a line in the talk style.
-const FN_PRINT_TALK: i32 = 52;
-/// Moves the actor to another scene.
-const FN_ENTER_SCENE: i32 = 45;
-/// Sets a story flag.
+/// Slots that say something. They differ in how the original drew the
+/// text, which is a rendering decision our engine makes for itself.
+const SAYS: &[i32] = &[
+    1,   // characterSays
+    52,  // customPrintTalkString
+    60,  // printText
+    85,  // fatPrint
+    106, // intPrint
+    139, // message
+];
+/// Sets a story flag, and clears one.
 const FN_SET_FLAG: i32 = 5;
-/// Walks the player to a point in the room.
-const FN_WALK_TO: i32 = 11;
+const FN_RESET_FLAG: i32 = 6;
+/// Walks the player to a point.
+const FN_WALK_PLAYER: i32 = 11;
+/// Walks a named character to one, so its point starts an argument later.
+const FN_WALK_CHARACTER: i32 = 81;
+/// Starts one of the room's animations, and waits for one to finish.
+const FN_SCENE_ANIM_ON: i32 = 16;
+const FN_INTERNAL_ANIM_ON: i32 = 37;
+const FN_ANIM_UNTIL_DONE: i32 = 21;
 /// Plays a sound effect.
 const FN_PLAY_SOUND: i32 = 23;
-/// Starts one of the room's animations.
-const FN_ANIM_ON: i32 = 24;
-/// Stops one.
-const FN_ANIM_OFF: i32 = 42;
-
-/// Calls that describe how the original renderer worked rather than
-/// what a room does.
-///
-/// Page flips, cursor visibility, background preservation, facing
-/// queries: all of it is 1992 plumbing our engine has no equivalent
-/// for. Carrying them through as `Unknown` would bury the handful of
-/// genuinely unidentified calls under thousands of irrelevant ones, so
-/// they are dropped on purpose and counted separately - discarded is
-/// not the same claim as unrecognised.
-const PLUMBING: &[i32] = &[
-    3,  // draw a scene shape directly to the screen
-    4,  // read a game flag, a query rather than a step
-    33, // show or hide the mouse cursor
-    53, // a hard-coded special-case display
-    56, // preserve object backgrounds before redrawing
-    58, // read a character's facing
-    64, // flip the drawing page
-];
+/// Starts the music for a region of the map.
+const FN_PLAY_MUSIC: i32 = 24;
+/// Moves the player to another scene.
+const FN_ENTER_SCENE: i32 = 45;
+/// Pauses for a number of seconds.
+const FN_DELAY_SECS: i32 = 33;
+/// Puts an item in the inventory.
+const FN_ADD_ITEM: i32 = 105;
 
 /// The verb a click carries in a game that has no verb menu.
 const CLICK: Verb = Verb::Use;
@@ -75,8 +70,10 @@ const MAX_CALLS: usize = 4096;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RoomScripts {
     pub scripts: Vec<Script>,
-    /// Calls dropped as engine plumbing rather than kept as unknown.
+    /// Calls dropped as the original's screen machinery.
     pub plumbing_dropped: usize,
+    /// Calls dropped as questions rather than steps.
+    pub queries_dropped: usize,
     /// Scene numbers this room's script can move to. Kyrandia numbers
     /// its scenes; turning those into room ids needs a table that lives
     /// in the game executable rather than in the data, so they are kept
@@ -95,65 +92,92 @@ impl RoomScripts {
     }
 }
 
-/// Translate one call into an action, or into an honest placeholder.
+/// What one call becomes.
+enum Translated {
+    Step(Action),
+    /// Dropped, and why.
+    Dropped(functions::Kind),
+}
+
+/// Translate one call into an action, or say why it is not one.
 ///
-/// Returns `None` for a call that describes the original renderer
-/// rather than the room.
-fn action_for(room: &str, site: &CallSite, texts: usize) -> Option<Action> {
-    if PLUMBING.contains(&site.function) {
-        return None;
-    }
-    Some(match site.function {
-        FN_CHARACTER_SAYS | FN_PRINT_TEXT | FN_PRINT_TALK => {
+/// The slot numbers are Kyrandia's; the decisions about them are ours.
+/// A slot with real behaviour we have no action for stays as
+/// [`Action::Unknown`] carrying the slot's name - `kyra:shakeScreen`
+/// rather than `kyra:107` - because a reader can act on the first and
+/// not on the second.
+fn translate(room: &str, site: &CallSite, texts: usize) -> Translated {
+    let action = match site.function {
+        f if SAYS.contains(&f) => {
             // The line index is the last constant pushed, which is the
             // call's first argument. A call whose index was computed
             // has no constants and cannot be resolved to a line.
-            match site.args.first().copied().and_then(|arg| line_index(arg, texts)) {
-                Some(index) => Action::Say {
+            site.args
+                .first()
+                .copied()
+                .and_then(|arg| line_index(arg, texts))
+                .map(|index| Action::Say {
                     line: emc::Script::line_id(room, index),
                     speaker: None,
-                },
-                None => unknown(site),
-            }
+                })
         }
-        FN_ENTER_SCENE => match site.args.first().copied() {
+        FN_ENTER_SCENE => site.args.first().copied().filter(|s| *s >= 0).map(|scene| {
             // Scene numbers have no names in the data, so the room is
             // recorded as the number it is. Inventing a name here would
             // be a guess that later looks like a fact.
-            Some(scene) if scene >= 0 => Action::GoToRoom {
+            Action::GoToRoom {
                 room: format!("scene{scene}"),
                 entry: None,
-            },
-            _ => unknown(site),
-        },
-        FN_SET_FLAG => match site.args.first().copied() {
-            Some(flag) => Action::SetFlag {
-                flag: format!("kyra.flag{flag}"),
-                value: true,
-            },
-            None => unknown(site),
-        },
-        FN_WALK_TO => match (site.args.first(), site.args.get(1)) {
-            (Some(&x), Some(&y)) => Action::Walk {
-                to: glam::Vec2::new(x as f32, y as f32),
-            },
-            _ => unknown(site),
-        },
-        FN_PLAY_SOUND => match site.args.first().copied() {
-            Some(sound) => Action::PlaySound {
-                sound: format!("kyra.sfx{sound}"),
-            },
-            None => unknown(site),
-        },
-        FN_ANIM_ON | FN_ANIM_OFF => match site.args.first().copied() {
-            Some(index) => Action::PlayAnim {
+            }
+        }),
+        FN_SET_FLAG | FN_RESET_FLAG => site.args.first().copied().map(|flag| Action::SetFlag {
+            flag: format!("kyra.flag{flag}"),
+            value: site.function == FN_SET_FLAG,
+        }),
+        FN_WALK_PLAYER => point(&site.args, 0).map(|to| Action::Walk { to }),
+        // The character is the first argument here, so the point starts
+        // one later. Reading it at zero walks the actor to the
+        // character's number.
+        FN_WALK_CHARACTER => point(&site.args, 1).map(|to| Action::Walk { to }),
+        FN_PLAY_SOUND => site.args.first().copied().map(|sound| Action::PlaySound {
+            sound: format!("kyra.sfx{sound}"),
+        }),
+        FN_PLAY_MUSIC => site.args.first().copied().map(|track| Action::PlayMusic {
+            music: Some(format!("kyra.music{track}")),
+        }),
+        FN_SCENE_ANIM_ON | FN_INTERNAL_ANIM_ON | FN_ANIM_UNTIL_DONE => {
+            site.args.first().copied().map(|index| Action::PlayAnim {
                 animation: format!("{room}_{index}"),
-                wait: false,
-            },
-            None => unknown(site),
-        },
-        _ => unknown(site),
-    })
+                wait: site.function == FN_ANIM_UNTIL_DONE,
+            })
+        }
+        FN_DELAY_SECS => site.args.first().copied().map(|seconds| Action::Wait {
+            seconds: seconds as f32,
+        }),
+        FN_ADD_ITEM => site.args.first().copied().map(|item| Action::Give {
+            item: format!("kyra.item{item}"),
+        }),
+        _ => None,
+    };
+
+    if let Some(action) = action {
+        return Translated::Step(action);
+    }
+    // A call we do translate but whose arguments were computed still has
+    // to come through: dropping it would make the room look shorter than
+    // it is. It comes through unknown, which is what it now is.
+    match functions::kind(site.function, false) {
+        functions::Kind::Plumbing => Translated::Dropped(functions::Kind::Plumbing),
+        functions::Kind::Query => Translated::Dropped(functions::Kind::Query),
+        _ => Translated::Step(unknown(site)),
+    }
+}
+
+/// Two consecutive arguments read as a point.
+fn point(args: &[i32], from: usize) -> Option<glam::Vec2> {
+    let x = *args.get(from)?;
+    let y = *args.get(from + 1)?;
+    Some(glam::Vec2::new(x as f32, y as f32))
 }
 
 /// Which line a dialogue call's argument refers to.
@@ -181,7 +205,7 @@ fn line_index(arg: i32, texts: usize) -> Option<usize> {
 
 fn unknown(site: &CallSite) -> Action {
     Action::Unknown {
-        call: format!("kyra:{}", site.function),
+        call: functions::label(site.function),
         args: site.args.clone(),
     }
 }
@@ -230,9 +254,16 @@ pub fn decompile(room: &str, script: &emc::Script) -> RoomScripts {
         let end = starts.get(index + 1).map(|(_, at)| *at).unwrap_or(usize::MAX);
         let mut compiled = Script::new(id.clone());
         for site in sites.iter().filter(|s| s.at >= *start && s.at < end) {
-            let Some(action) = action_for(room, site, script.texts.len()) else {
-                out.plumbing_dropped += 1;
-                continue;
+            let action = match translate(room, site, script.texts.len()) {
+                Translated::Step(action) => action,
+                Translated::Dropped(functions::Kind::Query) => {
+                    out.queries_dropped += 1;
+                    continue;
+                }
+                Translated::Dropped(_) => {
+                    out.plumbing_dropped += 1;
+                    continue;
+                }
             };
             if let Action::GoToRoom { room, .. } = &action
                 && let Some(number) = room.strip_prefix("scene").and_then(|n| n.parse().ok())
@@ -289,7 +320,7 @@ pub fn hotspots(
             .get(region.body.clone())
             .unwrap_or_default();
         for site in vm::call_sites(body) {
-            if let Some(action) = action_for(room, &site, script.texts.len()) {
+            if let Translated::Step(action) = translate(room, &site, script.texts.len()) {
                 compiled.push(action);
             }
         }
@@ -320,6 +351,9 @@ pub fn hotspots(
 mod tests {
     use super::*;
 
+    /// The first slot in [`SAYS`], for tests that need any of them.
+    const FN_SAYS: i32 = 1;
+
     /// Encode a push of a constant, followed by the stack bookkeeping
     /// the retail scripts put between pushes.
     fn push(value: i8) -> Vec<u8> {
@@ -344,7 +378,7 @@ mod tests {
     #[test]
     fn a_dialogue_call_becomes_a_say_referencing_a_line_id() {
         let mut code = push(2);
-        code.extend(call(FN_CHARACTER_SAYS as u16));
+        code.extend(call(FN_SAYS as u16));
         let out = decompile("brins", &script_with(code, 8, vec![0]));
         assert_eq!(out.scripts.len(), 1);
         assert_eq!(
@@ -358,7 +392,7 @@ mod tests {
 
     #[test]
     fn all_three_text_functions_produce_a_say() {
-        for function in [FN_CHARACTER_SAYS, FN_PRINT_TEXT, FN_PRINT_TALK] {
+        for function in SAYS.iter().copied() {
             let mut code = push(1);
             code.extend(call(function as u16));
             let out = decompile("hall", &script_with(code, 4, vec![0]));
@@ -409,7 +443,7 @@ mod tests {
         // Pointing at a line that does not exist would put a dangling
         // id in the script; better to keep the call unresolved.
         let mut code = push(9);
-        code.extend(call(FN_CHARACTER_SAYS as u16));
+        code.extend(call(FN_SAYS as u16));
         let out = decompile("brins", &script_with(code, 4, vec![0]));
         assert!(out.scripts[0].actions[0].is_unknown());
     }
@@ -446,10 +480,14 @@ mod tests {
     fn engine_plumbing_is_dropped_rather_than_called_unknown() {
         // Thousands of page flips would bury the handful of calls
         // nobody has worked out yet.
+        // These two were 64 and 33 until the table was read properly.
+        // 64 displays animation frames and 33 waits for a couple of
+        // seconds - neither is machinery, and both had a confident
+        // comment saying they were.
         let mut code = push(1);
-        code.extend(call(64)); // pageFlip
+        code.extend(call(101)); // pageFlip
         code.extend(push(1));
-        code.extend(call(33)); // showMouse
+        code.extend(call(84)); // setLogicPage
         let out = decompile("x", &script_with(code, 4, vec![0]));
         assert!(out.is_empty(), "nothing here describes the room");
         assert_eq!(out.plumbing_dropped, 2);
@@ -473,7 +511,7 @@ mod tests {
                 check: |a| matches!(a, Action::SetFlag { .. }),
             },
             Case {
-                function: FN_WALK_TO,
+                function: FN_WALK_PLAYER,
                 args: vec![90, 40],
                 check: |a| matches!(a, Action::Walk { .. }),
             },
@@ -483,14 +521,29 @@ mod tests {
                 check: |a| matches!(a, Action::PlaySound { .. }),
             },
             Case {
-                function: FN_ANIM_ON,
+                function: FN_SCENE_ANIM_ON,
                 args: vec![2],
-                check: |a| matches!(a, Action::PlayAnim { .. }),
+                check: |a| matches!(a, Action::PlayAnim { wait: false, .. }),
             },
             Case {
-                function: FN_ANIM_OFF,
+                function: FN_ANIM_UNTIL_DONE,
                 args: vec![2],
-                check: |a| matches!(a, Action::PlayAnim { .. }),
+                check: |a| matches!(a, Action::PlayAnim { wait: true, .. }),
+            },
+            Case {
+                function: FN_PLAY_MUSIC,
+                args: vec![3],
+                check: |a| matches!(a, Action::PlayMusic { .. }),
+            },
+            Case {
+                function: FN_DELAY_SECS,
+                args: vec![2],
+                check: |a| matches!(a, Action::Wait { .. }),
+            },
+            Case {
+                function: FN_ADD_ITEM,
+                args: vec![5],
+                check: |a| matches!(a, Action::Give { .. }),
             },
         ];
         for Case {
@@ -518,7 +571,7 @@ mod tests {
     fn a_walk_keeps_its_coordinates() {
         let mut code = push(40);
         code.extend(push(90));
-        code.extend(call(FN_WALK_TO as u16));
+        code.extend(call(FN_WALK_PLAYER as u16));
         let out = decompile("hall", &script_with(code, 0, vec![0]));
         assert_eq!(
             out.scripts[0].actions[0],
@@ -529,15 +582,17 @@ mod tests {
     }
 
     #[test]
-    fn an_unidentified_call_is_kept_rather_than_dropped() {
-        // The whole reason Unknown exists.
+    fn an_unidentified_call_is_kept_under_the_name_of_what_it_does() {
+        // The whole reason Unknown exists - and it carries the slot's
+        // name, because a reader can act on `kyra:shakeScreen` and
+        // cannot act on `kyra:107`.
         let mut code = push(3);
-        code.extend(call(99));
+        code.extend(call(107));
         let out = decompile("x", &script_with(code, 8, vec![0]));
         assert_eq!(
             out.scripts[0].actions[0],
             Action::Unknown {
-                call: "kyra:99".into(),
+                call: "kyra:shakeScreen".into(),
                 args: vec![3]
             }
         );
@@ -545,12 +600,26 @@ mod tests {
     }
 
     #[test]
+    fn a_call_past_the_table_still_comes_through_as_its_number() {
+        let mut code = push(3);
+        code.extend(call(900));
+        let out = decompile("x", &script_with(code, 8, vec![0]));
+        assert_eq!(
+            out.scripts[0].actions[0],
+            Action::Unknown {
+                call: "kyra:900".into(),
+                args: vec![3]
+            }
+        );
+    }
+
+    #[test]
     fn entry_points_divide_the_code_into_separate_scripts() {
         let mut code = push(0);
-        code.extend(call(FN_CHARACTER_SAYS as u16));
+        code.extend(call(FN_SAYS as u16));
         let split = code.len() as u16;
         code.extend(push(1));
-        code.extend(call(FN_CHARACTER_SAYS as u16));
+        code.extend(call(FN_SAYS as u16));
 
         let out = decompile("hall", &script_with(code, 4, vec![0, split]));
         assert_eq!(out.scripts.len(), 2);
@@ -563,7 +632,7 @@ mod tests {
     #[test]
     fn code_before_the_first_entry_point_is_not_lost() {
         let mut code = push(0);
-        code.extend(call(FN_CHARACTER_SAYS as u16));
+        code.extend(call(FN_SAYS as u16));
         let out = decompile("hall", &script_with(code.clone(), 4, vec![900]));
         assert_eq!(
             out.scripts.len(),
