@@ -12,48 +12,48 @@
 //! Every file agrees: the lowest offset in each of the ten is exactly
 //! 1000, which is what a 120-byte table followed by 440 words comes to.
 //!
-//! A program is a byte stream for a small sequencer. A byte under 0x80
-//! is a note followed by a duration; a byte with the top bit set is a
-//! command. That split is what makes the streams readable at all - the
-//! pitch contours are plainly visible in a hex dump once you know to
-//! read pairs.
+//! A program is read **a word at a time**, and that is not a guess: the
+//! floppy release ships the driver that plays these files, `ALFX.DRV`,
+//! and its interpreter is eleven instructions long.
 //!
-//! **What is not settled yet:** how many arguments each command takes.
-//! Reading every command as taking exactly one gets 51% of the ten
-//! files' 114 000 steps out as notes and finds 30 650 rests, which is
-//! what a score looks like - but it also finds 119 distinct opcodes out
-//! of a possible 128, and no sequencer has 119 instructions. That tail
-//! is the reader drifting after a command whose argument count is
-//! wrong, and turning music data into invented opcodes. Establishing
-//! the real argument counts is the next piece of work, and until it is
-//! done this is a reader, not a player.
+//! ```text
+//!   lds  si, cs:[di+3]        ; the stream pointer
+//!   lodsw                     ; two bytes at once
+//!   or   al, al
+//!   js   command              ; top bit set: a command
+//!   ...                       ; otherwise al is a note, ah its length
+//! command:
+//!   and  al, 0x7f
+//!   cmp  al, 0x4a             ; opcodes run 0..74
+//!   jle  ok
+//!   mov  al, 0x4a             ; anything higher is clamped, not refused
+//! ok:
+//!   shl  bl, 1
+//!   call cs:[bx+0x18ed]       ; 75 handlers
+//! ```
 //!
-//! Two searches have been run and neither settled it, which is worth
-//! recording so they are not repeated:
+//! So every step is a pair: a note and its duration, or a command and
+//! its argument. The opcode space is 0 to 74 and nothing else - the 119
+//! distinct opcodes an earlier reader found were an artefact of reading
+//! a byte at a time and never clamping. Read as words with the clamp,
+//! the ten retail files use 73 of the 75, and 72% of their 494 000
+//! steps are notes, which is what a score looks like.
 //!
-//! - Hill-climbing the argument counts to make each program consume
-//!   exactly its byte range went from 376 of 3231 programs to 1881.
-//!   It stalls there, and the reason is visible in the data: the first
-//!   and last byte pairs of programs overlap, so programs share their
-//!   tails and "ends at the next offset" was never true to begin with.
-//! - Hill-climbing to minimise the number of distinct opcodes, reading
-//!   from the 989 starts the track table actually names, went from 116
-//!   to 78. Also too many.
+//! **What is left.** Some handlers read further bytes of their own with
+//! `lodsb` or `lodsw` - a jump reads a 16-bit displacement, a patch
+//! change reads a patch - and those extra reads are not accounted for
+//! here, so a stream still drifts after one. It shows as opcode 74
+//! being the fifth most common, which is the clamp catching bytes that
+//! were never opcodes. Settling it means disassembling the 75 handlers;
+//! their addresses are the table at `ALFX.DRV` offset 0x18ed, and the
+//! first body runs from 0x0d9c.
 //!
-//! What both agree on is the head of the distribution, and that part is
-//! solid: `0x09` is far and away the most common, then `0x2b`, `0x10`,
-//! `0x08`, `0x1e`, `0x20`, `0x7f`, `0x02`, `0x03`, `0x11`, `0x07`,
-//! `0x13`. About twenty commands carry over 99% of the weight, which is
-//! the size a real instruction set would be. Everything below a few
-//! hundred occurrences is drift.
-//!
-//! The command names below are the ones the data supports on its own:
-//! `rest` is over half of all commands, which is what a rest is in
-//! music, and `instrument` appears in bursts at the head of a program
-//! where a voice is being set up. The rest are reported by number, the
-//! same way an untranslated script step is - a disassembly that quietly
-//! invents meanings is worse than one that admits what it does not
-//! know.
+//! Two searches were run before the driver turned up and neither
+//! settled it. Recorded so they are not repeated: hill-climbing the
+//! argument counts to make each program end on its own last byte stalls
+//! at 1881 of 3231, because programs share their tails and the premise
+//! was wrong; and minimising the count of distinct opcodes gets 116
+//! down to 78, still far too many.
 
 use std::fmt;
 
@@ -86,12 +86,19 @@ impl fmt::Display for AdlError {
 
 impl std::error::Error for AdlError {}
 
-/// One step of a program.
+/// Highest opcode the driver dispatches. Anything above is clamped to
+/// it rather than refused, which is what the driver itself does.
+pub const MAX_OPCODE: u8 = 0x4A;
+
+/// Handlers in the driver's dispatch table.
+pub const HANDLERS: usize = 75;
+
+/// One step of a program: always a pair of bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     /// Play a note for a number of ticks.
     Note { note: u8, duration: u8 },
-    /// A sequencer command and its one argument.
+    /// A sequencer command and its argument.
     Command { opcode: u8, argument: u8 },
     /// The stream ended in the middle of a step.
     Truncated,
@@ -130,7 +137,7 @@ impl Step {
 ///
 /// Derived from how they behave in the data rather than from a table
 /// copied from somewhere, which is why there are three of them and not
-/// eighty.
+/// seventy-five. Naming the rest means reading their handlers.
 fn command_name(opcode: u8) -> Option<&'static str> {
     match opcode {
         0x08 => Some("stop"),
@@ -208,18 +215,17 @@ impl<'a> AdlFile<'a> {
     }
 }
 
-/// Read a program as a list of steps.
+/// Read a program as a list of steps, a word at a time.
 pub fn disassemble(program: &[u8]) -> Vec<Step> {
     let mut steps = Vec::new();
     let mut at = 0;
     while at < program.len() {
         let byte = program[at];
-        at += 1;
-        let Some(argument) = program.get(at).copied() else {
+        let Some(argument) = program.get(at + 1).copied() else {
             steps.push(Step::Truncated);
             break;
         };
-        at += 1;
+        at += 2;
         if byte & 0x80 == 0 {
             steps.push(Step::Note {
                 note: byte,
@@ -227,7 +233,7 @@ pub fn disassemble(program: &[u8]) -> Vec<Step> {
             });
         } else {
             steps.push(Step::Command {
-                opcode: byte & 0x7F,
+                opcode: (byte & 0x7F).min(MAX_OPCODE),
                 argument,
             });
         }
@@ -342,6 +348,27 @@ mod tests {
     fn a_stream_that_ends_mid_step_says_so() {
         let steps = disassemble(&[0x65, 0x05, 0x89]);
         assert_eq!(steps.last(), Some(&Step::Truncated));
+    }
+
+    #[test]
+    fn an_opcode_past_the_drivers_last_handler_is_clamped() {
+        // The driver does `cmp al, 0x4a` then `mov al, 0x4a` rather
+        // than refusing, so 0xFF is opcode 74 and not opcode 127.
+        assert_eq!(
+            disassemble(&[0xFF, 0x01]),
+            vec![Step::Command {
+                opcode: MAX_OPCODE,
+                argument: 1,
+            }]
+        );
+        assert_eq!(
+            disassemble(&[0x89, 0x00]),
+            vec![Step::Command {
+                opcode: 0x09,
+                argument: 0,
+            }],
+            "and an opcode inside the range is left alone"
+        );
     }
 
     #[test]
