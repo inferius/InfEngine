@@ -68,6 +68,62 @@ impl Layer {
     }
 }
 
+/// How much of a room is on screen, and how the view moves.
+///
+/// A room the size of the window needs none of this, and most are. It
+/// exists for the ones that are not: a corridor twice as wide as the
+/// screen, a cliff the camera climbs, an intro that scrolls from the sky
+/// down to the island. Without it a room can only ever be one screen,
+/// which is a limit on the games that can be made rather than on the
+/// engine's difficulty.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Camera {
+    /// How much of the room is visible at once.
+    ///
+    /// Zero on either axis means the whole room that way, which is what
+    /// a room without a camera is and what every room file written
+    /// before this says.
+    #[serde(default)]
+    pub view: Vec2,
+    /// Whether the view keeps the actor in frame as they walk.
+    ///
+    /// Off by default: a cutscene room has no actor to follow, and a
+    /// camera that lurches after one during a pan is worse than one that
+    /// does not move at all.
+    #[serde(default)]
+    pub follow: bool,
+}
+
+impl Camera {
+    /// What the view actually covers in a room of this size.
+    pub fn view_in(&self, room: Vec2) -> Vec2 {
+        let width = if self.view.x > 0.0 { self.view.x } else { room.x };
+        let height = if self.view.y > 0.0 { self.view.y } else { room.y };
+        Vec2::new(width.min(room.x), height.min(room.y))
+    }
+
+    /// Does the room move under the view at all?
+    pub fn scrolls(&self, room: Vec2) -> bool {
+        let view = self.view_in(room);
+        view.x < room.x || view.y < room.y
+    }
+
+    /// Keep a view position inside the room.
+    ///
+    /// The position is the view's top-left, so the far edge is the
+    /// room's size less the view's - clamping to the room's size instead
+    /// would let the camera run off it by a screenful.
+    pub fn clamp(&self, room: Vec2, at: Vec2) -> Vec2 {
+        let limit = (room - self.view_in(room)).max(Vec2::ZERO);
+        at.clamp(Vec2::ZERO, limit)
+    }
+
+    /// Where the view sits to put `point` in the middle of it.
+    pub fn centred_on(&self, room: Vec2, point: Vec2) -> Vec2 {
+        self.clamp(room, point - self.view_in(room) * 0.5)
+    }
+}
+
 /// One screen of the game.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Room {
@@ -87,6 +143,9 @@ pub struct Room {
     pub script: String,
     /// Room extent in logical pixels. Usually the background's size.
     pub size: Vec2,
+    /// How much of it is on screen, and whether the view follows.
+    #[serde(default)]
+    pub camera: Camera,
     #[serde(default)]
     pub layers: Vec<Layer>,
     #[serde(default)]
@@ -212,6 +271,56 @@ impl Room {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_room_without_a_camera_is_all_on_screen() {
+        // Every room file written before the camera existed says
+        // nothing about one, and has to keep meaning what it meant.
+        let camera = Camera::default();
+        let room = Vec2::new(320.0, 200.0);
+        assert_eq!(camera.view_in(room), room);
+        assert!(!camera.scrolls(room));
+        assert_eq!(camera.clamp(room, Vec2::new(500.0, 500.0)), Vec2::ZERO);
+    }
+
+    #[test]
+    fn the_view_stops_at_the_far_edge_rather_than_at_the_corner() {
+        // The position is the view's top-left, so clamping to the room's
+        // own size would let the camera run a whole screen off the end.
+        let camera = Camera {
+            view: Vec2::new(320.0, 200.0),
+            follow: false,
+        };
+        let room = Vec2::new(320.0, 400.0);
+        assert!(camera.scrolls(room));
+        assert_eq!(camera.clamp(room, Vec2::new(0.0, 999.0)), Vec2::new(0.0, 200.0));
+        assert_eq!(camera.clamp(room, Vec2::new(0.0, -50.0)), Vec2::ZERO);
+    }
+
+    #[test]
+    fn centring_on_a_point_near_an_edge_still_fills_the_screen() {
+        // Otherwise following someone into a corner shows a band of
+        // nothing beside them.
+        let camera = Camera {
+            view: Vec2::new(320.0, 200.0),
+            follow: true,
+        };
+        let room = Vec2::new(640.0, 200.0);
+        assert_eq!(camera.centred_on(room, Vec2::new(320.0, 100.0)).x, 160.0);
+        assert_eq!(camera.centred_on(room, Vec2::new(10.0, 100.0)).x, 0.0);
+        assert_eq!(camera.centred_on(room, Vec2::new(630.0, 100.0)).x, 320.0);
+    }
+
+    #[test]
+    fn a_view_bigger_than_its_room_is_the_room() {
+        let camera = Camera {
+            view: Vec2::new(800.0, 600.0),
+            follow: false,
+        };
+        let room = Vec2::new(320.0, 200.0);
+        assert_eq!(camera.view_in(room), room);
+        assert!(!camera.scrolls(room));
+    }
     use crate::interact::{Shape, Verb};
     use crate::walk::Polygon;
 

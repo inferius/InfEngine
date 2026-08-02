@@ -29,6 +29,14 @@ pub struct GameState {
     pub room: String,
     #[serde(default)]
     pub actor: Actor,
+    /// Top-left of the view in the room, and where it is heading.
+    ///
+    /// Part of the saved game because a game saved mid-pan should come
+    /// back looking at the same thing, not snap to a corner.
+    #[serde(default)]
+    pub camera: Vec2,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    camera_target: Option<(Vec2, f32)>,
     /// Story flags. Absent means false, so only what has happened is
     /// stored and a saved game stays readable.
     #[serde(default)]
@@ -75,6 +83,57 @@ impl GameState {
                 self.actor.place(position, Facing::Front);
             }
         }
+
+        // The view arrives with the actor rather than at the room's
+        // corner: walking into a wide room and seeing the far end of it
+        // is disorienting, and a pan to catch up would be a pan nobody
+        // asked for.
+        self.camera_target = None;
+        self.camera = if room.camera.follow {
+            room.camera.centred_on(room.size, self.actor.position)
+        } else {
+            room.camera.clamp(room.size, Vec2::ZERO)
+        };
+    }
+
+    /// Send the view somewhere, over `seconds` or at once.
+    pub fn camera_to(&mut self, to: Vec2, seconds: f32) {
+        if seconds > 0.0 {
+            self.camera_target = Some((to, seconds));
+        } else {
+            self.camera = to;
+            self.camera_target = None;
+        }
+    }
+
+    /// Is the view still on its way somewhere?
+    pub fn camera_moving(&self) -> bool {
+        self.camera_target.is_some()
+    }
+
+    /// Advance the view by `dt`.
+    ///
+    /// A pan runs at whatever speed reaches its target in the time it
+    /// was given, recomputed each step rather than fixed at the start -
+    /// so a pan interrupted and redirected mid-way still lands on time
+    /// instead of overshooting at the old speed.
+    pub fn step_camera(&mut self, room: &Room, dt: f32) {
+        if room.camera.follow && self.camera_target.is_none() {
+            self.camera = room.camera.centred_on(room.size, self.actor.position);
+            return;
+        }
+        let Some((to, left)) = self.camera_target else {
+            return;
+        };
+        let dt = dt.max(0.0);
+        if dt >= left || left <= 0.0 {
+            self.camera = room.camera.clamp(room.size, to);
+            self.camera_target = None;
+            return;
+        }
+        let step = (to - self.camera) * (dt / left);
+        self.camera = room.camera.clamp(room.size, self.camera + step);
+        self.camera_target = Some((to, left - dt));
     }
 
     pub fn flag(&self, flag: &str) -> bool {
@@ -141,6 +200,93 @@ impl GameState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A room twice as tall as its view.
+    fn tall_room() -> Room {
+        let mut room = Room::new("cliff", Vec2::new(320.0, 400.0));
+        room.camera = crate::room::Camera {
+            view: Vec2::new(320.0, 200.0),
+            follow: false,
+        };
+        room
+    }
+
+    #[test]
+    fn a_cut_arrives_at_once_and_a_pan_takes_the_time_it_was_given() {
+        let room = tall_room();
+        let mut state = GameState::default();
+
+        state.camera_to(Vec2::new(0.0, 200.0), 0.0);
+        assert_eq!(state.camera, Vec2::new(0.0, 200.0));
+        assert!(!state.camera_moving());
+
+        state.camera = Vec2::ZERO;
+        state.camera_to(Vec2::new(0.0, 200.0), 1.0);
+        state.step_camera(&room, 0.5);
+        assert!(state.camera_moving(), "half way is not there");
+        assert!((state.camera.y - 100.0).abs() < 1.0, "{}", state.camera.y);
+        state.step_camera(&room, 0.5);
+        assert_eq!(state.camera, Vec2::new(0.0, 200.0));
+        assert!(!state.camera_moving());
+    }
+
+    #[test]
+    fn a_pan_redirected_half_way_still_lands_on_time() {
+        // The speed is worked out afresh each step rather than fixed
+        // when the pan starts, so changing its mind does not overshoot.
+        let room = tall_room();
+        let mut state = GameState::default();
+        state.camera_to(Vec2::new(0.0, 200.0), 1.0);
+        state.step_camera(&room, 0.5);
+        state.camera_to(Vec2::new(0.0, 0.0), 0.5);
+        state.step_camera(&room, 0.5);
+        assert_eq!(state.camera, Vec2::ZERO);
+    }
+
+    #[test]
+    fn a_pan_never_leaves_the_room() {
+        let room = tall_room();
+        let mut state = GameState::default();
+        state.camera_to(Vec2::new(0.0, 9999.0), 1.0);
+        for _ in 0..120 {
+            state.step_camera(&room, 1.0 / 60.0);
+        }
+        assert_eq!(state.camera, Vec2::new(0.0, 200.0), "the far edge, not past it");
+    }
+
+    #[test]
+    fn a_following_camera_keeps_up_but_yields_to_a_pan() {
+        // A camera that lurched after the actor mid-pan would fight the
+        // script for the shot.
+        let mut room = tall_room();
+        room.camera.follow = true;
+        let mut state = GameState::default();
+        state.actor.place(Vec2::new(160.0, 300.0), Default::default());
+
+        state.step_camera(&room, 1.0 / 60.0);
+        assert_eq!(state.camera.y, 200.0, "centred on the actor, clamped");
+
+        state.camera_to(Vec2::ZERO, 1.0);
+        state.step_camera(&room, 1.0);
+        assert_eq!(state.camera, Vec2::ZERO, "the script won");
+    }
+
+    #[test]
+    fn entering_a_room_puts_the_view_where_the_actor_is() {
+        // Walking into a tall room and being shown its ceiling is
+        // disorienting, and a pan to catch up is a pan nobody asked for.
+        let mut room = tall_room();
+        room.camera.follow = true;
+        room.entries.push(crate::interact::EntryPoint {
+            id: "bottom".into(),
+            position: Vec2::new(160.0, 380.0),
+            facing: Default::default(),
+        });
+        let mut state = GameState::default();
+        state.enter(&room, None);
+        assert_eq!(state.camera.y, 200.0);
+        assert!(!state.camera_moving());
+    }
     use crate::interact::{EntryPoint, Hotspot, Shape};
     use crate::walk::Polygon;
 

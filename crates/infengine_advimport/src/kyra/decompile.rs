@@ -274,6 +274,7 @@ fn translate(
             .map(|animation| Action::PlayAnim {
                 animation,
                 wait: site.function == FN_ANIM_UNTIL_DONE,
+                at: None,
             }),
         FN_DELAY_SECS => site.args.first().copied().map(|seconds| Action::Wait {
             seconds: seconds as f32,
@@ -299,6 +300,7 @@ fn translate(
             .map(|animation| Action::PlayAnim {
                 animation,
                 wait: true,
+                at: None,
             }),
         _ => None,
     };
@@ -777,7 +779,8 @@ mod tests {
             out.scripts[0].actions.last(),
             Some(&Action::PlayAnim {
                 animation: "belroom_ringbell".into(),
-                wait: true
+                wait: true,
+                at: None,
             })
         );
     }

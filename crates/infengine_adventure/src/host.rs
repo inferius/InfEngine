@@ -40,6 +40,19 @@ pub struct Subtitle {
     pub remaining: f32,
 }
 
+impl Subtitle {
+    /// Is this the line's id standing in for text it does not have?
+    ///
+    /// An id in place of a line is the right thing to show in an editor,
+    /// where it is the gap you are looking for, and the wrong thing to
+    /// show a player, who reads `alchemy.00` as the game leaking a file
+    /// name at them. Kyrandia's intro has 64 such lines, all empty, so
+    /// this is not a rare case to leave to taste.
+    pub fn is_placeholder(&self) -> bool {
+        self.text == self.line
+    }
+}
+
 /// Files the host should start playing, and rooms it should show.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Request {
@@ -51,6 +64,10 @@ pub struct Request {
     pub music: Option<Option<String>>,
     /// Animation to show in the room.
     pub animation: Option<String>,
+    /// Where the script put it, when it said.
+    pub animation_at: Option<Vec2>,
+    /// The view moved this step.
+    pub camera_moved: bool,
     /// The room changed; anything cached about the old one is stale.
     pub room_changed: bool,
     /// The game asked to close.
@@ -418,7 +435,14 @@ impl Host {
                         })
                 }));
             }
-            Event::PlayAnim { animation, wait } => {
+            Event::MoveCamera { .. } => {
+                // The state already knows where it is going; the host
+                // only has to say the view changed, so a renderer that
+                // caches anything about it knows to look again.
+                request.camera_moved = true;
+            }
+            Event::PlayAnim { animation, wait, at } => {
+                request.animation_at = at;
                 if wait {
                     let seconds = self
                         .project

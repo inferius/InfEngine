@@ -207,6 +207,7 @@ fn apply(
     language: &LanguageChoice,
 ) {
     match event {
+        Event::MoveCamera { .. } => {}
         Event::Say { line, speaker } => {
             let text = locales.text(&line, &language.text).to_string();
             // An id with no translation shows as the id. Blanking it
@@ -232,7 +233,7 @@ fn apply(
             });
             request.music = Some(music);
         }
-        Event::PlayAnim { animation, wait } => {
+        Event::PlayAnim { animation, wait, .. } => {
             if wait {
                 // An animation the index does not describe still has
                 // to end, or the script waits for ever on a typo.
@@ -457,6 +458,7 @@ mod tests {
             Action::PlayAnim {
                 animation: "door".into(),
                 wait: true,
+                at: None,
             },
             Action::SetFlag {
                 flag: "after".into(),

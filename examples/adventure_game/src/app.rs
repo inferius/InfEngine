@@ -30,8 +30,9 @@ pub struct Game {
     view: View,
     /// Layer and sheet textures, keyed by their project-relative path.
     textures: HashMap<String, Texture2dHandle>,
-    /// The animation playing in this room, and how far into it we are.
-    animation: Option<(Animation, f32)>,
+    /// The animation playing in this room, how far into it we are,
+    /// and where the script put it if it said.
+    animation: Option<(Animation, f32, Option<Vec2>)>,
     /// How far into the walk cycle the actor is.
     ///
     /// Kept across rooms: a figure that restarts its stride every time
@@ -102,6 +103,8 @@ impl Game {
             self.upload(&image);
         }
         self.view.room = self.host.room.size;
+        self.view.visible = self.host.room.camera.view_in(self.host.room.size);
+        self.view.camera = self.host.game.state.camera;
         self.view.fit();
     }
 
@@ -183,7 +186,7 @@ impl Game {
         if let Some(id) = request.animation {
             if let Some(animation) = self.host.project.animations.get(&id).cloned() {
                 self.upload(&animation.image);
-                self.animation = Some((animation, 0.0));
+                self.animation = Some((animation, 0.0, request.animation_at));
             } else {
                 warn!(id, "no such animation");
             }
@@ -320,6 +323,9 @@ impl AppHandler for Game {
         }
 
         let request = self.host.tick(ctx.delta_time);
+        // The view is wherever the game state says, every frame: a pan
+        // moves it, and so does a camera that follows the actor.
+        self.view.camera = self.host.game.state.camera;
         if !request.is_empty() {
             self.perform(request);
         }
@@ -335,7 +341,7 @@ impl AppHandler for Game {
             self.step += ctx.delta_time;
         }
 
-        if let Some((animation, time)) = self.animation.as_mut() {
+        if let Some((animation, time, _)) = self.animation.as_mut() {
             *time += ctx.delta_time;
             if !animation.looping && animation.finished_at(*time) {
                 let id = animation.id.clone();
@@ -350,19 +356,23 @@ impl AppHandler for Game {
             (position, self.host.room.scale.scale_at(position.y))
         };
         let sprite = self.actor_frame();
-        let frame = self.animation.as_ref().map(|(animation, time)| {
+        let frame = self.animation.as_ref().map(|(animation, time, at)| {
             (
                 animation.clone(),
                 animation.frame_at(*time),
                 self.textures.get(&animation.image).copied(),
+                *at,
             )
         });
 
         if let Some(renderer) = self.renderer.as_mut() {
             draw::sync_camera(renderer, &self.view);
             draw::layers(renderer, &self.host.room, &self.view, &self.textures);
-            if let Some((animation, index, Some(handle))) = frame {
-                let at = animation.position_in(room_size);
+            if let Some((animation, index, Some(handle), placed)) = frame {
+                // Where the script said, or where the animation says
+                // about itself - a script placing one is the only
+                // thing that knows about this particular playing.
+                let at = placed.unwrap_or_else(|| animation.position_in(room_size));
                 draw::animation_frame(renderer, &self.view, &animation, handle, index, at);
             }
             // No floor means nowhere to stand: a cutscene is a room

@@ -95,6 +95,14 @@ pub const ADVENTURE_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        id: "adv_move_camera",
+        label: "Move Camera",
+        category: "Adventure",
+        inputs: EXEC_IN,
+        outputs: EXEC_OUT,
+        contexts: &[],
+    },
+    NodeKindDef {
         id: "adv_play_anim",
         label: "Play Animation",
         category: "Adventure",
@@ -297,6 +305,7 @@ fn kind_of(action: &Action) -> &'static str {
         Action::OpenScreen { .. } => "adv_open_screen",
         Action::GoToRoom { .. } => "adv_goto_room",
         Action::PlayAnim { .. } => "adv_play_anim",
+        Action::MoveCamera { .. } => "adv_move_camera",
         Action::PlaySound { .. } => "adv_play_sound",
         Action::PlayMusic { .. } => "adv_play_music",
         Action::Wait { .. } => "adv_wait",
@@ -341,9 +350,18 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
                 set("entry", entry.clone());
             }
         }
-        Action::PlayAnim { animation, wait } => {
+        Action::PlayAnim { animation, wait, at } => {
             set("animation", animation.clone());
             set("wait", wait.to_string());
+            if let Some(at) = at {
+                set("x", at.x.to_string());
+                set("y", at.y.to_string());
+            }
+        }
+        Action::MoveCamera { to, seconds } => {
+            set("x", to.x.to_string());
+            set("y", to.y.to_string());
+            set("seconds", seconds.to_string());
         }
         Action::PlaySound { sound } => set("sound", sound.clone()),
         Action::PlayMusic { music } => {
@@ -405,6 +423,14 @@ fn read_action(node: &infengine_blueprint::Node) -> Option<Action> {
         "adv_play_anim" => Action::PlayAnim {
             animation: param(node, "animation"),
             wait: flag(node, "wait"),
+            // A node with no position left it to the animation, which is
+            // not the same as putting it at the room's origin.
+            at: (node.params.contains_key("x") || node.params.contains_key("y"))
+                .then(|| Vec2::new(number(node, "x"), number(node, "y"))),
+        },
+        "adv_move_camera" => Action::MoveCamera {
+            to: Vec2::new(number(node, "x"), number(node, "y")),
+            seconds: number(node, "seconds"),
         },
         "adv_play_sound" => Action::PlaySound {
             sound: param(node, "sound"),
@@ -519,6 +545,7 @@ mod tests {
         script.push(Action::PlayAnim {
             animation: "door_opens".into(),
             wait: true,
+            at: None,
         });
         script.push(Action::PlaySound {
             sound: "door_creak".into(),
@@ -673,6 +700,7 @@ mod tests {
             Action::PlayAnim {
                 animation: String::new(),
                 wait: false,
+                at: None,
             },
             Action::PlaySound {
                 sound: String::new(),

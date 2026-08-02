@@ -49,6 +49,11 @@ fn subtitle(ctx: &egui::Context, host: &Host) {
     let Some(subtitle) = host.subtitle.as_ref() else {
         return;
     };
+    // A line with no text shows as its own id, which is useful in an
+    // editor and is a file name leaking onto the screen in a game.
+    if subtitle.is_placeholder() {
+        return;
+    }
     let area = ctx.content_rect();
     egui::Area::new("subtitle".into())
         .fixed_pos(egui::pos2(area.center().x, area.max.y - 80.0))

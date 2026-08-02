@@ -19,6 +19,14 @@ pub struct View {
     pub viewport: Vec2,
     /// Room size in its own units.
     pub room: Vec2,
+    /// How much of the room is on screen at once.
+    ///
+    /// The whole room, for a room that fits one screen - which is most
+    /// of them. A room bigger than its view is one the camera moves
+    /// around inside, and this is the window it moves.
+    pub visible: Vec2,
+    /// Top-left of that window, in room units.
+    pub camera: Vec2,
     /// Pixels per room unit.
     pub scale: f32,
     /// Top-left of the drawn room, in window pixels.
@@ -30,6 +38,10 @@ impl Default for View {
         Self {
             viewport: Vec2::new(1280.0, 800.0),
             room: Vec2::new(320.0, 200.0),
+            // Zero is "all of it", the same as a room with no camera -
+            // so a view that nobody configured shows the whole room.
+            visible: Vec2::ZERO,
+            camera: Vec2::ZERO,
             scale: 1.0,
             origin: Vec2::ZERO,
         }
@@ -38,30 +50,42 @@ impl Default for View {
 
 impl View {
     /// Work out the scale and offset for the current sizes.
+    ///
+    /// What is scaled to the window is the visible part, not the whole
+    /// room. Scaling the room instead would shrink a wide one until all
+    /// of it fitted, which is the opposite of what a camera is for.
     pub fn fit(&mut self) {
-        let room = self.room.max(Vec2::ONE);
-        let fit = (self.viewport / room).min_element();
-        // Whole steps while the room still fits; below 1:1 there is no
-        // whole step left and a fractional one beats cropping.
+        let visible = self.visible().max(Vec2::ONE);
+        let fit = (self.viewport / visible).min_element();
+        // Whole steps while it still fits; below 1:1 there is no whole
+        // step left and a fractional one beats cropping.
         self.scale = if fit >= 1.0 { fit.floor() } else { fit.max(0.01) };
-        let drawn = room * self.scale;
+        let drawn = visible * self.scale;
         self.origin = ((self.viewport - drawn) * 0.5).max(Vec2::ZERO);
+    }
+
+    /// The window into the room, with zero meaning all of it.
+    pub fn visible(self) -> Vec2 {
+        let width = if self.visible.x > 0.0 { self.visible.x } else { self.room.x };
+        let height = if self.visible.y > 0.0 { self.visible.y } else { self.room.y };
+        Vec2::new(width.min(self.room.x), height.min(self.room.y))
     }
 
     /// Window pixel to room unit.
     pub fn to_room(self, window: Vec2) -> Vec2 {
-        (window - self.origin) / self.scale.max(f32::EPSILON)
+        self.camera + (window - self.origin) / self.scale.max(f32::EPSILON)
     }
 
     /// Room unit to window pixel.
     pub fn to_window(self, room: Vec2) -> Vec2 {
-        self.origin + room * self.scale
+        self.origin + (room - self.camera) * self.scale
     }
 
     /// Is this window point over the picture at all?
     pub fn contains(self, window: Vec2) -> bool {
-        let p = self.to_room(window);
-        p.x >= 0.0 && p.y >= 0.0 && p.x <= self.room.x && p.y <= self.room.y
+        let p = self.to_room(window) - self.camera;
+        let visible = self.visible();
+        p.x >= 0.0 && p.y >= 0.0 && p.x <= visible.x && p.y <= visible.y
     }
 }
 

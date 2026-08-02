@@ -57,6 +57,23 @@ pub enum Action {
         animation: String,
         #[serde(default)]
         wait: bool,
+        /// Where its top-left goes in the room. `None` leaves it where
+        /// the animation itself says, which is centred for one that says
+        /// nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<Vec2>,
+    },
+    /// Move the view to a place in the room.
+    ///
+    /// `seconds` of zero cuts; anything else pans, and the script waits
+    /// for it. A cut and a pan are the same instruction because they are
+    /// the same intent - "look here" - and making them two would mean
+    /// changing the instruction to change how fast it happens.
+    MoveCamera {
+        /// Top-left of the view, in room pixels.
+        to: Vec2,
+        #[serde(default)]
+        seconds: f32,
     },
     /// Play a sound or a recorded line.
     PlaySound { sound: String },
@@ -145,6 +162,13 @@ impl Action {
             Action::OpenScreen { screen } => format!("show {screen}"),
             Action::GoToRoom { room, .. } => format!("go to {room}"),
             Action::PlayAnim { animation, .. } => format!("play {animation}"),
+            Action::MoveCamera { to, seconds } => {
+                if *seconds > 0.0 {
+                    format!("pan to {:.0},{:.0} over {seconds}s", to.x, to.y)
+                } else {
+                    format!("cut to {:.0},{:.0}", to.x, to.y)
+                }
+            }
             Action::PlaySound { sound } => format!("sound {sound}"),
             Action::PlayMusic { music } => match music {
                 Some(m) => format!("music {m}"),
@@ -356,6 +380,7 @@ mod tests {
             Action::PlayAnim {
                 animation: "river".into(),
                 wait: false,
+                at: None,
             },
             Action::PlaySound {
                 sound: "s.wav".into(),

@@ -12,6 +12,8 @@
 //! recording and on the reading speed the player chose - neither of
 //! which the interpreter can know.
 
+use glam::Vec2;
+
 use crate::action::{Action, Script};
 use crate::room::Room;
 
@@ -33,7 +35,11 @@ pub enum Event {
         animation: String,
         /// Whether the script is waiting for it to finish.
         wait: bool,
+        /// Where the script wants it, if it said.
+        at: Option<Vec2>,
     },
+    /// Move the view. `seconds` of zero means cut.
+    MoveCamera { to: Vec2, seconds: f32 },
     /// Show a screen. The script carries on underneath it; the host
     /// decides whether that means paused.
     OpenScreen(String),
@@ -65,6 +71,10 @@ enum Block {
     Animation(String),
     /// A room change, cleared by the host once the room is loaded.
     RoomChange,
+    /// The view panning. Counted down here rather than cleared by the
+    /// host, because unlike an animation the runner knows how long it
+    /// takes - it said so itself.
+    Camera(f32),
 }
 
 /// One level of the action tree being executed.
@@ -155,6 +165,7 @@ impl Runner {
         // The actor keeps walking whether or not a script is running -
         // clicking the floor with no script is the common case.
         state.actor.advance(dt);
+        state.step_camera(room, dt);
 
         let mut events = Vec::new();
         match &mut self.block {
@@ -167,6 +178,15 @@ impl Runner {
             }
             Some(Block::Walking) => {
                 if state.actor.is_walking() {
+                    return events;
+                }
+                self.block = None;
+            }
+            // A pan is the one wait the runner can time itself, because
+            // the script said how long it takes.
+            Some(Block::Camera(left)) => {
+                *left -= dt;
+                if *left > 0.0 {
                     return events;
                 }
                 self.block = None;
@@ -233,13 +253,24 @@ impl Runner {
                     entry: entry.clone(),
                 });
             }
-            Action::PlayAnim { animation, wait } => {
+            Action::PlayAnim { animation, wait, at } => {
                 if *wait {
                     self.block = Some(Block::Animation(animation.clone()));
                 }
                 events.push(Event::PlayAnim {
                     animation: animation.clone(),
                     wait: *wait,
+                    at: *at,
+                });
+            }
+            Action::MoveCamera { to, seconds } => {
+                state.camera_to(*to, *seconds);
+                if *seconds > 0.0 {
+                    self.block = Some(Block::Camera(*seconds));
+                }
+                events.push(Event::MoveCamera {
+                    to: *to,
+                    seconds: *seconds,
                 });
             }
             Action::PlaySound { sound } => events.push(Event::PlaySound(sound.clone())),
@@ -383,6 +414,7 @@ mod tests {
             Action::PlayAnim {
                 animation: "door_opens".into(),
                 wait: true,
+                at: None,
             },
             Action::SetFlag {
                 flag: "after".into(),
@@ -409,6 +441,7 @@ mod tests {
             Action::PlayAnim {
                 animation: "torch".into(),
                 wait: false,
+                at: None,
             },
             Action::SetFlag {
                 flag: "after".into(),
