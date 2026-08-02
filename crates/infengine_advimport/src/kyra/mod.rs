@@ -15,6 +15,7 @@ pub mod cps;
 pub mod decompile;
 pub mod emc;
 pub mod format40;
+pub mod fnt;
 pub mod format80;
 pub mod frames;
 pub mod functions;
@@ -59,6 +60,8 @@ const VOICE_DIR: &str = "voice";
 const MUSIC_DIR: &str = "music";
 /// Where decompiled room logic goes.
 const SCRIPT_DIR: &str = "scripts";
+/// Where the game's own lettering goes.
+const FONT_DIR: &str = "fonts";
 
 /// Height of the playable area of a screen.
 ///
@@ -466,6 +469,8 @@ pub fn import_pak(
         scripted.insert(stem_of_entry.to_ascii_uppercase());
         debug!(archive = %stem, entry = %entry.name, "imported background");
     }
+
+    export_extras(&pak, out_dir, language, locale, report)?;
 
     // Scripts that belong to no room. The loop above only reaches a
     // `.EMC` whose stem also has a picture, a mask and a `.DAT`, and
@@ -898,6 +903,116 @@ fn export_animations(
         report.frames += animation.frame_count();
     }
     Ok(())
+}
+
+/// Pull out the things that are neither art, script nor sound.
+///
+/// The game's own lettering and its closing credits. Small next to
+/// eighty rooms of background, and both were being left behind - the
+/// font because nothing asked for it, the credits because a `.TXT` in a
+/// game archive looks like a leftover until you read it.
+fn export_extras(
+    pak: &pak::Pak<'_>,
+    out_dir: &Path,
+    language: &str,
+    locale: &mut Locale,
+    report: &mut ImportReport,
+) -> Result<(), ImportError> {
+    for (index, entry) in pak.with_extension("FNT") {
+        let Some(data) = pak.data_at(index) else {
+            continue;
+        };
+        let font = match fnt::decode(data) {
+            Ok(font) => font,
+            Err(err) => {
+                report.skipped.push(Skipped {
+                    name: entry.name.clone(),
+                    reason: err.to_string(),
+                });
+                continue;
+            }
+        };
+        let stem = entry
+            .name
+            .rsplit_once('.')
+            .map(|(stem, _)| stem)
+            .unwrap_or(&entry.name)
+            .to_ascii_lowercase();
+        let (width, height, rgba) = font_sheet(&font);
+        let rel = format!("{FONT_DIR}/{stem}.png");
+        write_png(&out_dir.join(&rel), width, height, &rgba)?;
+        report.fonts += 1;
+        debug!(font = %stem, glyphs = font.drawn(), "font");
+    }
+
+    for (index, entry) in pak.with_extension("TXT") {
+        let Some(data) = pak.data_at(index) else {
+            continue;
+        };
+        // The credits are text the game shows, so they belong with the
+        // rest of the text it shows rather than in a file of their own -
+        // which is also what makes them translatable.
+        // Whatever the release's own encoding is, so a translated
+        // copy's credits do not arrive as mojibake.
+        let (text, _) = crate::encoding::decode(data, encoding_for(language));
+        let mut written = 0usize;
+        // Carriage returns alone, the way a 1992 DOS tool wrote them,
+        // and a handful of control bytes that pick the lettering rather
+        // than say anything. Splitting on newlines finds one line in the
+        // whole file.
+        for line in text.split(['\r', '\n']) {
+            let line: String = line
+                .chars()
+                .filter(|c| !c.is_control())
+                .collect::<String>()
+                .trim()
+                .to_string();
+            if line.is_empty() {
+                continue;
+            }
+            locale.insert(format!("credits.{written:03}"), Line::text(&line));
+            written += 1;
+        }
+        report.lines += written;
+        debug!(entry = %entry.name, lines = written, "credits");
+    }
+    Ok(())
+}
+
+/// Lay a font out as one glyph per cell, sixteen to a row.
+///
+/// A grid rather than a strip: a font is 256 characters and a strip of
+/// them is 2560 pixels of mostly nothing, which no atlas wants.
+fn font_sheet(font: &fnt::Font) -> (u32, u32, Vec<u8>) {
+    const COLUMNS: u32 = 16;
+    let cell_w = font.max_width().max(1);
+    let cell_h = font.line_height().max(1);
+    let rows = (fnt::GLYPHS as u32).div_ceil(COLUMNS);
+    let (width, height) = (cell_w * COLUMNS, cell_h * rows);
+    let mut rgba = vec![0u8; (width * height * 4) as usize];
+
+    for (code, glyph) in font.glyphs.iter().enumerate() {
+        let code = code as u32;
+        let (cx, cy) = (code % COLUMNS * cell_w, code / COLUMNS * cell_h);
+        for y in 0..glyph.height as u32 {
+            for x in 0..glyph.width as u32 {
+                let index = glyph.pixels[(y * glyph.width as u32 + x) as usize];
+                if index == 0 {
+                    continue;
+                }
+                // A font carries no colours: the nibble is an index into
+                // whatever palette the text is drawn with. Written white
+                // with the index as alpha, so tinting it later is a
+                // multiply rather than a lookup.
+                let at = (((cy + glyph.top as u32 + y) * width + cx + x) * 4) as usize;
+                if at + 4 <= rgba.len() {
+                    let alpha = (index as u32 * 255 / 15) as u8;
+                    rgba[at..at + 4].copy_from_slice(&[255, 255, 255, alpha]);
+                }
+            }
+        }
+    }
+    (width, height, rgba)
 }
 
 /// Walkable region for `stem`, traced from its `.MSC` mask.

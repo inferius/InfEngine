@@ -30,6 +30,8 @@ pub struct ImportReport {
     pub masks: usize,
     /// Clickable regions recovered from script bytecode.
     pub hotspots: usize,
+    /// Bitmap fonts the game draws its own text with.
+    pub fonts: usize,
     /// Arrival spots worked out from the doors that lead into a room.
     pub entry_points: usize,
     /// Images that are pictures rather than rooms: title cards, cutscene
@@ -75,6 +77,7 @@ impl ImportReport {
         self.images += other.images;
         self.rooms += other.rooms;
         self.hotspots += other.hotspots;
+        self.fonts += other.fonts;
         self.masks += other.masks;
         self.entry_points += other.entry_points;
         self.sprites += other.sprites;
