@@ -70,6 +70,14 @@ pub struct Editor {
     task: crate::inspector::Task,
     /// The page that explains the window.
     help: crate::help::HelpUi,
+    /// The script the timeline is laying out, if any.
+    scene_script: Option<String>,
+    /// How wide a second is drawn.
+    timeline_zoom: f32,
+    /// The step the timeline has selected.
+    timeline_selected: Option<Vec<usize>>,
+    /// Scripts changed by dragging, which are saved with the room.
+    scripts_dirty: bool,
     /// How big the interface is drawn. Applied to egui each frame.
     ui_scale: f32,
     tool: Tool,
@@ -158,6 +166,10 @@ impl Editor {
             overlays: Overlays::default(),
             task: crate::inspector::Task::default(),
             help: crate::help::HelpUi::default(),
+            scene_script: None,
+            timeline_zoom: 1.0,
+            timeline_selected: None,
+            scripts_dirty: false,
             ui_scale: 1.0,
             tool: Tool::default(),
             selection: Selection::None,
@@ -656,10 +668,45 @@ impl Editor {
         }
     }
 
+    /// Write back the script file the timeline changed.
+    ///
+    /// Whole file rather than one script: they are stored per room and
+    /// rewriting one of them would drop the rest.
+    fn save_scripts(&mut self) {
+        use infengine_adventure::script_io;
+        let prefix = self.room.script_prefix().to_string();
+        let mut scripts: Vec<_> = self
+            .project
+            .scripts
+            .iter()
+            .filter(|(id, _)| id.starts_with(&format!("{prefix}.")))
+            .map(|(_, script)| script.clone())
+            .collect();
+        scripts.sort_by(|a, b| a.id.cmp(&b.id));
+        if scripts.is_empty() {
+            return;
+        }
+        let dir = self.project.root.join(script_io::SCRIPT_DIR);
+        match script_io::save_room(&prefix, &scripts, &dir) {
+            Ok(()) => self.scripts_dirty = false,
+            Err(err) => {
+                warn!(%err, "scripts not saved");
+                self.status = err.to_string();
+            }
+        }
+    }
+
     fn save(&mut self) {
         let Some(path) = self.room_path.clone() else {
             return;
         };
+        // A script dragged on the timeline goes with the room, because
+        // the two are one edit: a scene is a room and the script that
+        // plays in it, and saving half of that is a scene that has
+        // changed its mind.
+        if self.scripts_dirty {
+            self.save_scripts();
+        }
         match infengine_adventure::save(&self.room, &path) {
             Ok(()) => {
                 self.dirty = false;
@@ -745,6 +792,49 @@ impl Editor {
         self.status = format!("added {name} - drag it into place");
     }
 
+    /// The script the Scene tab is showing, laid out on a clock.
+    fn scene_timeline(&self) -> Option<infengine_adventure::schedule::Timeline> {
+        use infengine_adventure::schedule::{self, Timings};
+        // Whatever was last run, or the room's own if nothing has been.
+        let id = self
+            .scene_script
+            .clone()
+            .unwrap_or_else(|| format!("{}.entry", self.room.script_prefix()));
+        let script = self.project.scripts.get(&id)?;
+        let animations = &self.project.animations;
+        let locales = &self.project.locales;
+        let language = self.language.text.clone();
+        Some(schedule::timeline(
+            script,
+            &Timings {
+                animation: &|id| animations.get(id).map(|a| a.duration()),
+                line: &|id| Some(locales.text(id, &language).to_string()),
+            },
+        ))
+    }
+
+    /// Apply a drag on the timeline.
+    fn apply_timeline(&mut self, actions: crate::timeline::TimelineActions) {
+        if let Some(path) = actions.selected {
+            self.timeline_selected = Some(path);
+        }
+        let Some((path, seconds)) = actions.set_seconds else {
+            return;
+        };
+        let id = self
+            .scene_script
+            .clone()
+            .unwrap_or_else(|| format!("{}.entry", self.room.script_prefix()));
+        let Some(script) = self.project.scripts.get_mut(&id) else {
+            return;
+        };
+        if crate::timeline::set_seconds(&mut script.actions, &path, seconds) {
+            self.scripts_dirty = true;
+            self.dirty = true;
+            self.status = format!("{id}: {seconds:.1}s");
+        }
+    }
+
     fn apply_actions(&mut self, actions: UiActions) {
         if let Some(index) = actions.open_room {
             self.open_room(index);
@@ -762,6 +852,11 @@ impl Editor {
             self.delete_selection();
         }
         if let Some(id) = actions.run_script {
+            self.scene_script = Some(if id.is_empty() {
+                format!("{}.entry", self.room.script_prefix())
+            } else {
+                id.clone()
+            });
             // An empty id means the room's own script, which is what
             // "play this scene" means when nobody picked one.
             if id.is_empty() {
@@ -1010,6 +1105,12 @@ impl AppHandler for Editor {
         let mut screen_actions = ui_screen::ScreenActions::default();
         let mut graph_actions = ui_graph::GraphActions::default();
         let mut menu_actions = crate::menu::MenuActions::default();
+        let mut timeline_actions = crate::timeline::TimelineActions::default();
+        // Only laid out when the Scene tab is open: a timeline is a tab's
+        // worth of screen, and a room being traced does not want one.
+        let scene_line = (self.task == crate::inspector::Task::Scene)
+            .then(|| self.scene_timeline())
+            .flatten();
         let mut content = None;
         if let Some(ui) = self.ui.as_mut() {
             let mut state = UiState {
@@ -1069,6 +1170,8 @@ impl AppHandler for Editor {
             self.help.offer_once();
             let help_ui = &mut self.help;
             let ui_scale = &mut self.ui_scale;
+            let timeline_zoom = &mut self.timeline_zoom;
+            let timeline_selected = &self.timeline_selected;
             ui.run(window.raw(), |ctx| {
                 // Applied before anything is laid out, so the whole
                 // frame is measured at the size it will be drawn at.
@@ -1080,6 +1183,16 @@ impl AppHandler for Editor {
                 game_actions = ui_game::window(ctx, game_ui, &room_names, &languages);
                 screen_actions = ui_screen::window(ctx, screen_ui, &languages);
                 graph_actions = ui_graph::window(ctx, graph_ui, &script_ids);
+                if let Some(line) = scene_line.as_ref() {
+                    timeline_actions = crate::timeline::panel(
+                        ctx,
+                        line,
+                        play.active,
+                        play.elapsed,
+                        timeline_zoom,
+                        timeline_selected,
+                    );
+                }
                 if let Some(screen) = screen_ui.preview_screen() {
                     screen_actions.fired =
                         ui_screen::preview(ctx, screen, &locales, &language);
@@ -1108,6 +1221,7 @@ impl AppHandler for Editor {
         }
 
         self.apply_actions(actions);
+        self.apply_timeline(timeline_actions);
         self.apply_menu(menu_actions);
         self.apply_play_actions(play_actions);
         self.apply_game_actions(game_actions);

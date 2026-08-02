@@ -24,6 +24,7 @@ mod menu;
 mod play;
 mod playback;
 mod sheet;
+mod timeline;
 mod ui;
 mod ui_game;
 mod ui_graph;
