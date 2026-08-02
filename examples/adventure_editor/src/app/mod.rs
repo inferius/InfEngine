@@ -78,6 +78,15 @@ pub struct Editor {
     timeline_selected: Option<Vec<usize>>,
     /// Scripts changed by dragging, which are saved with the room.
     scripts_dirty: bool,
+    /// The map of the whole game, and its window.
+    story_ui: crate::ui_story::StoryUi,
+    /// Built when the window opens; dropped when a save changes what it
+    /// would show.
+    story_cache: Option<infengine_adventure::story::Story>,
+    /// Project-relative image paths under pictures/, for the timeline's
+    /// image picker. Refreshed when a room opens, which is often enough
+    /// for a folder that changes when an import runs.
+    pictures: Vec<String>,
     /// How big the interface is drawn. Applied to egui each frame.
     ui_scale: f32,
     tool: Tool,
@@ -126,6 +135,7 @@ impl std::fmt::Debug for Editor {
 
 impl Editor {
     pub fn new(root: PathBuf) -> Self {
+        let settings = crate::settings::Settings::load();
         let project = Project::open(&root);
         let play = PlayMode::with_scripts(project.scripts.clone());
         // A project with no manifest yet gets an empty one rather than
@@ -166,11 +176,14 @@ impl Editor {
             overlays: Overlays::default(),
             task: crate::inspector::Task::default(),
             help: crate::help::HelpUi::default(),
+            pictures: Vec::new(),
+            story_ui: crate::ui_story::StoryUi::default(),
+            story_cache: None,
             scene_script: None,
-            timeline_zoom: 1.0,
+            timeline_zoom: settings.timeline_zoom,
             timeline_selected: None,
             scripts_dirty: false,
-            ui_scale: 1.0,
+            ui_scale: settings.ui_scale,
             tool: Tool::default(),
             selection: Selection::None,
             cursor: Vec2::ZERO,
@@ -200,6 +213,7 @@ impl Editor {
     }
 
     fn open_room(&mut self, index: usize) {
+        self.refresh_pictures();
         let Some(path) = self.project.rooms.get(index).cloned() else {
             return;
         };
@@ -707,6 +721,7 @@ impl Editor {
         if self.scripts_dirty {
             self.save_scripts();
         }
+        self.story_cache = None;
         match infengine_adventure::save(&self.room, &path) {
             Ok(()) => {
                 self.dirty = false;
@@ -752,6 +767,11 @@ impl Editor {
         }
         if actions.open_graph {
             self.graph_ui.open = true;
+        }
+        if actions.open_story {
+            self.story_ui.open = true;
+            // Fresh on every open: the map is cheap next to being wrong.
+            self.story_cache = None;
         }
         if actions.open_help {
             self.help.open = true;
@@ -813,25 +833,74 @@ impl Editor {
         ))
     }
 
-    /// Apply a drag on the timeline.
+    /// List the images a Show Image step can pick from.
+    fn refresh_pictures(&mut self) {
+        let mut out = Vec::new();
+        for dir in ["pictures", "sprites"] {
+            let Ok(entries) = std::fs::read_dir(self.project.root.join(dir)) else {
+                continue;
+            };
+            for path in entries.flatten().map(|e| e.path()) {
+                if path.extension().is_some_and(|e| e == "png")
+                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                {
+                    out.push(format!("{dir}/{name}"));
+                }
+            }
+        }
+        out.sort();
+        self.pictures = out;
+    }
+
+    /// The script the timeline is showing.
+    fn scene_script_id(&self) -> String {
+        self.scene_script
+            .clone()
+            .unwrap_or_else(|| format!("{}.entry", self.room.script_prefix()))
+    }
+
+    /// Apply what the timeline asked for.
     fn apply_timeline(&mut self, actions: crate::timeline::TimelineActions) {
         if let Some(path) = actions.selected {
             self.timeline_selected = Some(path);
         }
-        let Some((path, seconds)) = actions.set_seconds else {
-            return;
-        };
-        let id = self
-            .scene_script
-            .clone()
-            .unwrap_or_else(|| format!("{}.entry", self.room.script_prefix()));
-        let Some(script) = self.project.scripts.get_mut(&id) else {
-            return;
-        };
-        if crate::timeline::set_seconds(&mut script.actions, &path, seconds) {
+        let id = self.scene_script_id();
+
+        // Adding a step to a script that does not exist yet creates it:
+        // the point of the Add menu is starting a scene from nothing,
+        // and refusing until a file exists would make the first step
+        // impossible to take in the same place as the rest.
+        if let Some((after, action)) = actions.insert {
+            let script = self
+                .project
+                .scripts
+                .entry(id.clone())
+                .or_insert_with(|| infengine_adventure::Script::new(id.clone()));
+            let landed =
+                crate::timeline::insert_after(&mut script.actions, after.as_deref(), action);
+            self.timeline_selected = Some(landed);
             self.scripts_dirty = true;
             self.dirty = true;
-            self.status = format!("{id}: {seconds:.1}s");
+        }
+
+        let mut touched = false;
+        if let Some(script) = self.project.scripts.get_mut(&id) {
+            if let Some((path, seconds)) = actions.set_seconds {
+                touched |= crate::timeline::set_seconds(&mut script.actions, &path, seconds);
+            }
+            if let Some((path, action)) = actions.edit {
+                touched |= crate::timeline::replace(&mut script.actions, &path, action);
+            }
+            if let Some(path) = actions.remove
+                && crate::timeline::remove(&mut script.actions, &path)
+            {
+                self.timeline_selected = None;
+                touched = true;
+            }
+        }
+        if touched {
+            self.scripts_dirty = true;
+            self.dirty = true;
         }
     }
 
@@ -974,6 +1043,17 @@ impl AppHandler for Editor {
         }
     }
 
+    fn on_exit(&mut self) {
+        // The scale and the zoom are set once for a monitor and a pair
+        // of eyes; losing them every launch turns a preference into a
+        // chore.
+        crate::settings::Settings {
+            ui_scale: self.ui_scale,
+            timeline_zoom: self.timeline_zoom,
+        }
+        .save();
+    }
+
     fn on_key(&mut self, key: Key, pressed: bool) {
         if !pressed {
             return;
@@ -1106,11 +1186,35 @@ impl AppHandler for Editor {
         let mut graph_actions = ui_graph::GraphActions::default();
         let mut menu_actions = crate::menu::MenuActions::default();
         let mut timeline_actions = crate::timeline::TimelineActions::default();
+        let mut story_actions = crate::ui_story::StoryActions::default();
+        if self.story_ui.open && self.story_cache.is_none() {
+            self.story_cache =
+                Some(infengine_adventure::story::Story::of(&self.project));
+        }
+        let story_start = self
+            .project
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.start_room.clone())
+            .unwrap_or_default();
         // Only laid out when the Scene tab is open: a timeline is a tab's
         // worth of screen, and a room being traced does not want one.
         let scene_line = (self.task == crate::inspector::Task::Scene)
             .then(|| self.scene_timeline())
             .flatten();
+        // The selected step's current values, for the details column.
+        let scene_detail: Option<infengine_adventure::Action> = self
+            .timeline_selected
+            .as_ref()
+            .zip(self.project.scripts.get(&self.scene_script_id()))
+            .and_then(|(path, script)| {
+                crate::timeline::action_at(&script.actions, path).cloned()
+            });
+        let picker_animations: Vec<String> =
+            self.project.animations.iter().map(|a| a.id.clone()).collect();
+        let picker_sounds: Vec<String> = self.project.sounds.ids().map(str::to_string).collect();
+        let picker_rooms: Vec<String> = self.project.room_ids();
+        let picker_images = self.pictures.clone();
         let mut content = None;
         if let Some(ui) = self.ui.as_mut() {
             let mut state = UiState {
@@ -1171,6 +1275,8 @@ impl AppHandler for Editor {
             let help_ui = &mut self.help;
             let ui_scale = &mut self.ui_scale;
             let timeline_zoom = &mut self.timeline_zoom;
+            let story_ui = &mut self.story_ui;
+            let story_cache = &self.story_cache;
             let timeline_selected = &self.timeline_selected;
             ui.run(window.raw(), |ctx| {
                 // Applied before anything is laid out, so the whole
@@ -1183,6 +1289,12 @@ impl AppHandler for Editor {
                 game_actions = ui_game::window(ctx, game_ui, &room_names, &languages);
                 screen_actions = ui_screen::window(ctx, screen_ui, &languages);
                 graph_actions = ui_graph::window(ctx, graph_ui, &script_ids);
+                if story_ui.open
+                    && let Some(story) = story_cache.as_ref()
+                {
+                    story_actions =
+                        crate::ui_story::window(ctx, story_ui, story, &story_start);
+                }
                 if let Some(line) = scene_line.as_ref() {
                     timeline_actions = crate::timeline::panel(
                         ctx,
@@ -1191,6 +1303,13 @@ impl AppHandler for Editor {
                         play.elapsed,
                         timeline_zoom,
                         timeline_selected,
+                        scene_detail.as_ref(),
+                        &crate::timeline::Pickers {
+                            animations: &picker_animations,
+                            sounds: &picker_sounds,
+                            rooms: &picker_rooms,
+                            images: &picker_images,
+                        },
                     );
                 }
                 if let Some(screen) = screen_ui.preview_screen() {
@@ -1221,6 +1340,15 @@ impl AppHandler for Editor {
         }
 
         self.apply_actions(actions);
+        if let Some(id) = story_actions.open_room
+            && let Some(index) = self
+                .project
+                .rooms
+                .iter()
+                .position(|path| infengine_adventure::Project::room_label(path) == id)
+        {
+            self.open_room(index);
+        }
         self.apply_timeline(timeline_actions);
         self.apply_menu(menu_actions);
         self.apply_play_actions(play_actions);

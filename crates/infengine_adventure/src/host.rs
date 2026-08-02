@@ -68,6 +68,9 @@ pub struct Request {
     pub animation_at: Option<Vec2>,
     /// The view moved this step.
     pub camera_moved: bool,
+    /// A picture to show over the room, and for how long. Zero means
+    /// until the room changes.
+    pub still: Option<(String, f32)>,
     /// The room changed; anything cached about the old one is stale.
     pub room_changed: bool,
     /// The game asked to close.
@@ -87,6 +90,8 @@ pub enum Note {
     Sound(String),
     Music(Option<String>),
     Entered(String),
+    /// A picture put on screen.
+    Image(String),
     /// A step the import could not translate.
     Skipped(String),
     /// Something the data names but the project does not have.
@@ -101,6 +106,7 @@ impl std::fmt::Display for Note {
             Note::Music(Some(id)) => write!(f, "music: {id}"),
             Note::Music(None) => write!(f, "music off"),
             Note::Entered(room) => write!(f, "entered {room}"),
+            Note::Image(image) => write!(f, "image: {image}"),
             Note::Skipped(call) => write!(f, "SKIPPED {call}"),
             Note::Missing(what) => write!(f, "MISSING {what}"),
         }
@@ -434,6 +440,10 @@ impl Host {
                             None
                         })
                 }));
+            }
+            Event::ShowImage { image, seconds } => {
+                self.note(Note::Image(image.clone()));
+                request.still = Some((image, seconds));
             }
             Event::MoveCamera { .. } => {
                 // The state already knows where it is going; the host

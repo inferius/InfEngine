@@ -75,6 +75,18 @@ pub enum Action {
         #[serde(default)]
         seconds: f32,
     },
+    /// Show a picture over the room for a while.
+    ///
+    /// A cutscene is mostly stills: a title card, a close-up, a page of
+    /// handwriting. Before this, showing one meant abusing a one-frame
+    /// animation and pairing it with a wait by hand - two steps for one
+    /// intent, and nothing an editor could offer as "add an image".
+    /// Zero seconds means until the room changes.
+    ShowImage {
+        image: String,
+        #[serde(default)]
+        seconds: f32,
+    },
     /// Play a sound or a recorded line.
     PlaySound { sound: String },
     /// Play or change the music.
@@ -167,6 +179,13 @@ impl Action {
                     format!("pan to {:.0},{:.0} over {seconds}s", to.x, to.y)
                 } else {
                     format!("cut to {:.0},{:.0}", to.x, to.y)
+                }
+            }
+            Action::ShowImage { image, seconds } => {
+                if *seconds > 0.0 {
+                    format!("show {image} for {seconds}s")
+                } else {
+                    format!("show {image}")
                 }
             }
             Action::PlaySound { sound } => format!("sound {sound}"),

@@ -111,6 +111,14 @@ pub const ADVENTURE_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        id: "adv_show_image",
+        label: "Show Image",
+        category: "Adventure",
+        inputs: EXEC_IN,
+        outputs: EXEC_OUT,
+        contexts: &[],
+    },
+    NodeKindDef {
         id: "adv_play_sound",
         label: "Play Sound",
         category: "Adventure",
@@ -306,6 +314,7 @@ fn kind_of(action: &Action) -> &'static str {
         Action::GoToRoom { .. } => "adv_goto_room",
         Action::PlayAnim { .. } => "adv_play_anim",
         Action::MoveCamera { .. } => "adv_move_camera",
+        Action::ShowImage { .. } => "adv_show_image",
         Action::PlaySound { .. } => "adv_play_sound",
         Action::PlayMusic { .. } => "adv_play_music",
         Action::Wait { .. } => "adv_wait",
@@ -361,6 +370,10 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
         Action::MoveCamera { to, seconds } => {
             set("x", to.x.to_string());
             set("y", to.y.to_string());
+            set("seconds", seconds.to_string());
+        }
+        Action::ShowImage { image, seconds } => {
+            set("image", image.clone());
             set("seconds", seconds.to_string());
         }
         Action::PlaySound { sound } => set("sound", sound.clone()),
@@ -430,6 +443,10 @@ fn read_action(node: &infengine_blueprint::Node) -> Option<Action> {
         },
         "adv_move_camera" => Action::MoveCamera {
             to: Vec2::new(number(node, "x"), number(node, "y")),
+            seconds: number(node, "seconds"),
+        },
+        "adv_show_image" => Action::ShowImage {
+            image: param(node, "image"),
             seconds: number(node, "seconds"),
         },
         "adv_play_sound" => Action::PlaySound {
@@ -549,6 +566,10 @@ mod tests {
         });
         script.push(Action::PlaySound {
             sound: "door_creak".into(),
+        });
+        script.push(Action::ShowImage {
+            image: "pictures/note.png".into(),
+            seconds: 3.0,
         });
         script.push(Action::PlayMusic { music: None });
         script.push(Action::Wait { seconds: 1.5 });

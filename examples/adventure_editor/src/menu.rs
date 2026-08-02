@@ -37,6 +37,7 @@ pub struct MenuActions {
     pub open_game: bool,
     pub open_screens: bool,
     pub open_graph: bool,
+    pub open_story: bool,
     pub open_help: bool,
     /// Switch the inspector to a job.
     pub task: Option<Task>,
@@ -226,6 +227,14 @@ fn project_menu(ui: &mut egui::Ui, menu: MenuContext, actions: &mut MenuActions)
             .clicked()
         {
             actions.open_screens = true;
+            ui.close();
+        }
+        if ui
+            .button("Story map...")
+            .on_hover_text("Every place in the game and the ways between them")
+            .clicked()
+        {
+            actions.open_story = true;
             ui.close();
         }
         if ui

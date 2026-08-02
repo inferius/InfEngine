@@ -38,6 +38,11 @@ impl SoundSet {
         self.sounds.get(id).map(String::as_str)
     }
 
+    /// Every id, sorted - which a BTreeMap already is.
+    pub fn ids(&self) -> impl Iterator<Item = &str> {
+        self.sounds.keys().map(String::as_str)
+    }
+
     pub fn len(&self) -> usize {
         self.sounds.len()
     }

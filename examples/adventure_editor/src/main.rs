@@ -23,6 +23,7 @@ mod inspector;
 mod menu;
 mod play;
 mod playback;
+mod settings;
 mod sheet;
 mod timeline;
 mod ui;
@@ -30,6 +31,7 @@ mod ui_game;
 mod ui_graph;
 mod ui_play;
 mod ui_screen;
+mod ui_story;
 mod view;
 
 use std::path::PathBuf;

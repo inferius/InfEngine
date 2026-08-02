@@ -40,6 +40,8 @@ pub enum Event {
     },
     /// Move the view. `seconds` of zero means cut.
     MoveCamera { to: Vec2, seconds: f32 },
+    /// Show a picture for a while. Zero means until the room changes.
+    ShowImage { image: String, seconds: f32 },
     /// Show a screen. The script carries on underneath it; the host
     /// decides whether that means paused.
     OpenScreen(String),
@@ -270,6 +272,18 @@ impl Runner {
                 }
                 events.push(Event::MoveCamera {
                     to: *to,
+                    seconds: *seconds,
+                });
+            }
+            Action::ShowImage { image, seconds } => {
+                // The script waits the picture out: a still is shown so
+                // it can be looked at, and running on underneath it
+                // would end it the moment something else happened.
+                if *seconds > 0.0 {
+                    self.block = Some(Block::Timer(*seconds));
+                }
+                events.push(Event::ShowImage {
+                    image: image.clone(),
                     seconds: *seconds,
                 });
             }

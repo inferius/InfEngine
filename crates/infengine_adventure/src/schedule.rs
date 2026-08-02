@@ -151,6 +151,9 @@ fn length(action: &Action, timings: &Timings<'_>) -> (f32, bool) {
             (if *wait { timings.anim_seconds(animation) } else { 0.0 }, false)
         }
         Action::Say { line, .. } => (timings.say_seconds(line), false),
+        // A still's length is its own number, which is the whole point
+        // of it as an action.
+        Action::ShowImage { seconds, .. } => (seconds.max(0.0), true),
         _ => (0.0, false),
     }
 }

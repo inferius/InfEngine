@@ -124,6 +124,24 @@ pub fn actor_sprite(renderer: &mut Renderer, view: &View, look: &ActorFrame<'_>)
     renderer.draw_texture(handle, instance);
 }
 
+/// Draw a still: a whole picture centred in what the player sees.
+///
+/// Centred in the visible window rather than in the room, because a
+/// still shown during a pan should sit where the player is looking, not
+/// where the room's middle happens to be.
+pub fn still(renderer: &mut Renderer, view: &View, handle: Texture2dHandle) {
+    let Some((w, h)) = renderer.texture_size(handle) else {
+        return;
+    };
+    let size = Vec2::new(w as f32, h as f32) * view.scale;
+    let centre_room = view.camera + view.visible() * 0.5;
+    let centre = view.to_window(centre_room);
+    renderer.draw_texture(
+        handle,
+        SpriteInstance::new([centre.x, flip(view, centre.y)], [size.x, size.y]),
+    );
+}
+
 /// Draw the actor as an outline.
 ///
 /// What a project gets before its character sheets are cut: a marker

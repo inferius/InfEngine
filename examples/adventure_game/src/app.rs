@@ -33,6 +33,9 @@ pub struct Game {
     /// The animation playing in this room, how far into it we are,
     /// and where the script put it if it said.
     animation: Option<(Animation, f32, Option<Vec2>)>,
+    /// A picture over the room, and the seconds it has left.
+    /// Infinity means until the room changes.
+    still: Option<(String, f32)>,
     /// How far into the walk cycle the actor is.
     ///
     /// Kept across rooms: a figure that restarts its stride every time
@@ -60,6 +63,7 @@ impl Game {
             view: View::default(),
             textures: HashMap::new(),
             animation: None,
+            still: None,
             step: 0.0,
             cursor: Vec2::ZERO,
             status: String::new(),
@@ -91,6 +95,7 @@ impl Game {
             }
         }
         self.animation = None;
+        self.still = None;
 
         let images: Vec<String> = self
             .host
@@ -196,6 +201,11 @@ impl Game {
             } else {
                 warn!(id, "no such animation");
             }
+        }
+        if let Some((image, seconds)) = request.still {
+            self.upload(&image);
+            let left = if seconds > 0.0 { seconds } else { f32::INFINITY };
+            self.still = Some((image, left));
         }
         for file in [request.voice, request.sound]
             .into_iter()
@@ -347,6 +357,13 @@ impl AppHandler for Game {
             self.step += ctx.delta_time;
         }
 
+        if let Some((_, left)) = self.still.as_mut() {
+            *left -= ctx.delta_time;
+            if *left <= 0.0 {
+                self.still = None;
+            }
+        }
+
         if let Some((animation, time, _)) = self.animation.as_mut() {
             let was = *time;
             *time += ctx.delta_time;
@@ -389,6 +406,13 @@ impl AppHandler for Game {
                 // thing that knows about this particular playing.
                 let at = placed.unwrap_or_else(|| animation.position_in(room_size));
                 draw::animation_frame(renderer, &self.view, &animation, handle, index, at);
+            }
+            if let Some(handle) = self
+                .still
+                .as_ref()
+                .and_then(|(image, _)| self.textures.get(image).copied())
+            {
+                draw::still(renderer, &self.view, handle);
             }
             // No floor means nowhere to stand: a cutscene is a room
             // the player is not in, and drawing a figure on it would be

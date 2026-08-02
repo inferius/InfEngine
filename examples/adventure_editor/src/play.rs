@@ -235,6 +235,9 @@ fn apply(
 ) {
     match event {
         Event::MoveCamera { .. } => {}
+        // The editor's preview does not draw stills yet; saying so in
+        // the log beats quietly showing a scene without them.
+        Event::ShowImage { image, .. } => play.note(format!("image: {image}")),
         Event::Say { line, speaker } => {
             let text = locales.text(&line, &language.text).to_string();
             // An id with no translation shows as the id. Blanking it
