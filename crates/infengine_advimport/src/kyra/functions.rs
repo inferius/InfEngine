@@ -210,9 +210,9 @@ pub enum Kind {
 /// how often they appear: 375 calls to show a cursor, hide it, and
 /// repaint the player, none of which our engine needs told.
 const PLUMBING: &[i32] = &[
-    3, 13, 15, 22, 41, 42, 49, 50, 51, 53, 54, 55, 59, 63, 65, 68, 70, 84,
-    86, 87, 94, 98, 101, 125, 126, 132, 137, 138, 149, 151, 152, 153, 154,
-    155,
+    3, 13, 15, 22, 40, 41, 42, 49, 50, 51, 53, 54, 55, 59, 63, 65, 68, 70,
+    84, 86, 87, 94, 98, 101, 125, 126, 132, 137, 138, 143, 149, 151, 152,
+    153, 154, 155,
 ];
 
 /// Slots that answer a question.

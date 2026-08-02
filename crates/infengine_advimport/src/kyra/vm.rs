@@ -180,6 +180,12 @@ pub fn call_at(instructions: &[Instruction], index: usize) -> Option<CallSite> {
     let (Op::Call, Some(function)) = (instruction.op, instruction.operand) else {
         return None;
     };
+    // The byte-operand encoding is signed, which is right for
+    // constants and wrong here: a call's operand is an index into the
+    // function table, and the table has slots past 127. Read as
+    // signed, `message` (139) becomes -117 and a fifth of the game's
+    // narration goes untranslated.
+    let function = if function < 0 { function & 0xFF } else { function };
     let mut args = Vec::new();
     let mut back = index;
     while back > 0 {

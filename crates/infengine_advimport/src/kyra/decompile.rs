@@ -54,6 +54,8 @@ const FN_PLAY_MUSIC: i32 = 24;
 const FN_ENTER_SCENE: i32 = 45;
 /// Pauses for a number of seconds.
 const FN_DELAY_SECS: i32 = 33;
+/// Pauses for a number of ticks, sixty to the second.
+const FN_DELAY_TICKS: i32 = 2;
 /// Puts an item in the inventory.
 const FN_ADD_ITEM: i32 = 105;
 /// Asks whether a story flag is set. A condition, not a step.
@@ -129,12 +131,30 @@ impl RoomScripts {
 /// came last in the file, which is right whenever the open and the play
 /// sit together and is a guess otherwise. A slot nothing has opened
 /// resolves to nothing rather than to the last file seen.
+///
+/// The fallback is the same guess widened to the whole script: an
+/// entry point often plays from a slot that a *later* entry point's
+/// text happens to bind - the game bound it at run time, in whatever
+/// order the player clicked. A slot no open call anywhere names still
+/// resolves to nothing.
 #[derive(Debug, Clone, Default)]
 struct WsaSlots {
     open: std::collections::HashMap<i32, String>,
+    fallback: std::collections::HashMap<i32, String>,
 }
 
 impl WsaSlots {
+    /// Slots seeded with every binding the whole script ever makes.
+    fn with_fallback(sites: &[CallSite], texts: &[String]) -> Self {
+        let mut all = Self::default();
+        for site in sites {
+            all.observe(site, texts);
+        }
+        Self {
+            open: Default::default(),
+            fallback: all.open,
+        }
+    }
     /// Note what a call does to the slots.
     fn observe(&mut self, site: &CallSite, texts: &[String]) {
         match site.function {
@@ -159,7 +179,10 @@ impl WsaSlots {
     }
 
     fn get(&self, slot: i32) -> Option<&str> {
-        self.open.get(&slot).map(String::as_str)
+        self.open
+            .get(&slot)
+            .or_else(|| self.fallback.get(&slot))
+            .map(String::as_str)
     }
 }
 
@@ -279,6 +302,15 @@ fn translate(
         FN_DELAY_SECS => site.args.first().copied().map(|seconds| Action::Wait {
             seconds: seconds as f32,
         }),
+        // The other delay counts in ticks, sixty to the second.
+        FN_DELAY_TICKS => site
+            .args
+            .first()
+            .copied()
+            .filter(|ticks| *ticks >= 0)
+            .map(|ticks| Action::Wait {
+                seconds: ticks as f32 / 60.0,
+            }),
         FN_ADD_ITEM => site.args.first().copied().map(|item| Action::Give {
             item: format!("kyra.item{item}"),
         }),
@@ -419,9 +451,15 @@ impl Pass<'_> {
             }
         }
 
-        let on = self.condition(at);
-        let then = self.structure(at + 1..then_end);
-        let otherwise = self.structure(otherwise);
+        let (on, flipped) = self.condition(at);
+        let mut then = self.structure(at + 1..then_end);
+        let mut otherwise = self.structure(otherwise);
+        // A negated test - `if (!flag)` - reads as the flag itself
+        // with the two sides swapped, which is the same behaviour
+        // without a negation the runtime would need to learn.
+        if flipped {
+            std::mem::swap(&mut then, &mut otherwise);
+        }
 
         // A branch that decides nothing and does nothing is not worth a
         // node; its condition was machinery.
@@ -436,34 +474,113 @@ impl Pass<'_> {
         resume
     }
 
-    /// What the conditional at `at` is testing.
+    /// What the conditional at `at` is testing, and whether its two
+    /// sides are swapped.
     ///
-    /// A flag query right before it is the one question we can express.
-    /// Anything else keeps its name and its arguments, so the editor
-    /// shows a branch on a real question rather than a branch on
-    /// nothing - and the runtime takes the else side, which is at least
-    /// a decision it can explain.
-    fn condition(&self, at: usize) -> Condition {
-        // Back over the answer being pushed and the stack cleanup.
+    /// The retail scripts phrase a test as a call, its answer pushed,
+    /// and then at most one negation or one comparison against a
+    /// constant: `!f()`, `f() == 0`, `f() == -1`. The comparison
+    /// operator numbers were measured, not assumed - see the
+    /// `emc_evals` example; equality is pinned by the do-once idiom,
+    /// where `if (queryGameFlag(f) == 0)` sets the same flag on its
+    /// then side, and it does in every occurrence.
+    ///
+    /// A flag query is the one question the runtime can answer, so
+    /// `!flag` and `flag == 0` come out as [`Condition::Flag`] with the
+    /// branch sides swapped. Every other question keeps its name and
+    /// its comparison in the label - `kyra:getHandItem == -1` - so the
+    /// editor shows a branch on something a reader can act on, and the
+    /// runtime takes the else side, a decision it can explain.
+    fn condition(&self, at: usize) -> (Condition, bool) {
+        // Back to the call whose answer is being tested.
         let mut back = at;
-        while back > 0 {
+        let call = loop {
+            if back == 0 {
+                return (unresolved_condition(None), false);
+            }
             back -= 1;
             let previous = self.instructions[back];
             match previous.op {
-                Op::PushReturn | Op::AddStack | Op::Negate | Op::Eval => continue,
-                Op::Call => break,
-                _ => return unresolved_condition(None),
+                Op::PushReturn
+                | Op::AddStack
+                | Op::Negate
+                | Op::Eval
+                | Op::Push
+                | Op::PushAlt
+                | Op::JumpOrConst
+                | Op::PopFrameNeg
+                | Op::PushFrameNeg
+                | Op::PopReturn => continue,
+                Op::Call => break back,
+                _ => return (unresolved_condition(None), false),
+            }
+        };
+        let Some(site) = vm::call_at(self.instructions, call) else {
+            return (unresolved_condition(None), false);
+        };
+
+        // Forward over what happens to the answer.
+        let mut answered = false;
+        let mut flip = false;
+        let mut constant: Option<i32> = None;
+        let mut compare: Option<(i32, i32)> = None;
+        for previous in &self.instructions[call + 1..at] {
+            match previous.op {
+                Op::AddStack | Op::PopFrameNeg | Op::PushFrameNeg | Op::PopReturn => {}
+                Op::PushReturn => answered = true,
+                Op::Negate => {
+                    // The operand picks the negation; only the logical
+                    // one (or none written, which the interpreter reads
+                    // as it) is a branch with its sides swapped.
+                    let logical = previous
+                        .operand
+                        .is_none_or(|which| which == NEGATE_LOGICAL);
+                    if logical && compare.is_none() && constant.is_none() {
+                        flip = !flip;
+                    } else {
+                        // Arithmetic negation, or a negation between
+                        // the comparison's parts: shapes this does not
+                        // read.
+                        return (unresolved_condition(Some(&site)), false);
+                    }
+                }
+                Op::Push | Op::PushAlt | Op::JumpOrConst => match previous.operand {
+                    Some(value) if constant.is_none() => constant = Some(value),
+                    _ => return (unresolved_condition(Some(&site)), false),
+                },
+                Op::Eval => match (previous.operand, constant.take(), compare) {
+                    (Some(op), Some(value), None) => compare = Some((op, value)),
+                    // An Eval with no constant of its own is joining
+                    // conditions (and/or); one question at a time is
+                    // as far as this reads.
+                    _ => return (unresolved_condition(Some(&site)), false),
+                },
+                _ => return (unresolved_condition(Some(&site)), false),
             }
         }
-        let Some(site) = vm::call_at(self.instructions, back) else {
-            return unresolved_condition(None);
-        };
-        if site.function == FN_QUERY_FLAG
-            && let Some(&flag) = site.args.first()
-        {
-            return Condition::Flag(format!("kyra.flag{flag}"));
+        if !answered {
+            // Whatever is being tested, it is not this call's answer.
+            return (unresolved_condition(None), false);
         }
-        unresolved_condition(Some(&site))
+
+        let flag = (site.function == FN_QUERY_FLAG)
+            .then(|| site.args.first().map(|flag| format!("kyra.flag{flag}")))
+            .flatten();
+        match (compare, flag) {
+            (None, Some(flag)) => (Condition::Flag(flag), flip),
+            (Some((EVAL_EQ, 0)), Some(flag)) => (Condition::Flag(flag), !flip),
+            (Some((EVAL_EQ, _)), Some(flag)) => (Condition::Flag(flag), flip),
+            (Some((EVAL_NE, 0)), Some(flag)) => (Condition::Flag(flag), flip),
+            (Some((EVAL_NE, _)), Some(flag)) => (Condition::Flag(flag), !flip),
+            (None, None) => (unresolved_condition(Some(&site)), flip),
+            (Some((op, value)), _) => (
+                Condition::Unresolved {
+                    call: format!("{} {} {}", functions::label(site.function), sign(op), value),
+                    args: site.args.clone(),
+                },
+                flip,
+            ),
+        }
     }
 
     /// Add one call as a step, or count why it is not one.
@@ -473,6 +590,39 @@ impl Pass<'_> {
             Translated::Dropped(functions::Kind::Query) => self.queries_dropped += 1,
             Translated::Dropped(_) => self.plumbing_dropped += 1,
         }
+    }
+}
+
+/// The comparison operators of the Eval instruction.
+///
+/// Two independent sources agree on equality: the published interpreter
+/// table (ScummVM's EMC eval), and a measurement over the retail
+/// scripts (the `emc_evals` example) - the do-once idiom, where
+/// `if (queryGameFlag(f) == 0)` sets that same flag on its then side,
+/// holds in every occurrence only with 2 as equality. The rest of the
+/// mapping follows the published table, in which 4..7 read `>`, `>=`,
+/// `<`, `<=` - greater-than first, the reverse of the tempting guess.
+const EVAL_EQ: i32 = 2;
+const EVAL_NE: i32 = 3;
+
+/// What negation the Negate instruction's operand asks for. Only the
+/// logical one may swap branch sides.
+const NEGATE_LOGICAL: i32 = 0;
+
+/// The symbol an Eval operand compares with, for composed labels.
+///
+/// Reads as "answer OP constant": the constant is pushed after the
+/// answer, and the interpreter applies the operator second-to-top
+/// first.
+fn sign(op: i32) -> String {
+    match op {
+        2 => "==".into(),
+        3 => "!=".into(),
+        4 => ">".into(),
+        5 => ">=".into(),
+        6 => "<".into(),
+        7 => "<=".into(),
+        other => format!("cmp{other}"),
     }
 }
 
@@ -587,7 +737,7 @@ pub fn decompile_known(
             instructions: &instructions,
             texts: &script.texts,
             known,
-            slots: WsaSlots::default(),
+            slots: WsaSlots::with_fallback(&sites, &script.texts),
             plumbing_dropped: 0,
             queries_dropped: 0,
         };
@@ -674,7 +824,7 @@ pub fn hotspots_known(
             instructions: &instructions,
             texts: &script.texts,
             known,
-            slots: WsaSlots::default(),
+            slots: WsaSlots::with_fallback(&vm::call_sites(&instructions), &script.texts),
             plumbing_dropped: 0,
             queries_dropped: 0,
         };
@@ -924,6 +1074,147 @@ mod tests {
                 flag: "kyra.flag2".into(),
                 value: true
             }
+        );
+    }
+
+    /// A logical negation of the top of the stack.
+    fn negate() -> Vec<u8> {
+        vec![16, 0]
+    }
+
+    /// A comparison of the top of the stack against a constant: the
+    /// constant, then Eval with the operator.
+    fn compare(op: u8, with: i8) -> Vec<u8> {
+        vec![0x40 | 4, with as u8, 0x40 | 17, op]
+    }
+
+    /// The branch sides around a test already emitted into `code`.
+    fn branch_around(mut code: Vec<u8>, then: Vec<u8>, otherwise: Vec<u8>) -> Vec<u8> {
+        let after_test = code.len() / 2 + 2;
+        let else_at = after_test + then.len() / 2 + 2;
+        let end_at = else_at + otherwise.len() / 2;
+        code.extend(jump_if_false(else_at as u16));
+        code.extend(then);
+        code.extend(jump(end_at as u16));
+        code.extend(otherwise);
+        code
+    }
+
+    /// The branch a script starts with, with its sides as flag numbers.
+    fn first_branch(code: Vec<u8>) -> (Condition, i32, i32) {
+        let out = decompile("x", &script_with(code, 4, vec![0]));
+        let Some(Action::Branch { on, then, otherwise }) = out.scripts[0].actions.first()
+        else {
+            panic!("not a branch: {:?}", out.scripts[0].actions);
+        };
+        let side = |actions: &[Action]| match actions.first() {
+            Some(Action::SetFlag { flag, .. }) => {
+                flag.trim_start_matches("kyra.flag").parse().unwrap()
+            }
+            other => panic!("not a set flag: {other:?}"),
+        };
+        (on.clone(), side(then), side(otherwise))
+    }
+
+    #[test]
+    fn a_negated_test_swaps_the_branch_sides() {
+        // `if (!queryGameFlag(7)) { A } else { B }` must run A when the
+        // flag is clear. Reading it as the flag itself and swapping the
+        // sides says exactly that without teaching the runtime negation.
+        let mut code = ask_flag(7);
+        code.extend(negate());
+        let (on, then, otherwise) = first_branch(branch_around(code, set_flag(1), set_flag(2)));
+        assert_eq!(on, Condition::Flag("kyra.flag7".into()));
+        assert_eq!((then, otherwise), (2, 1), "sides swapped");
+    }
+
+    #[test]
+    fn comparing_a_flag_with_zero_swaps_the_branch_sides() {
+        // `if (queryGameFlag(7) == 0)` is the same question as the
+        // negation, and the retail scripts write both.
+        let mut code = ask_flag(7);
+        code.extend(compare(2, 0));
+        let (on, then, otherwise) = first_branch(branch_around(code, set_flag(1), set_flag(2)));
+        assert_eq!(on, Condition::Flag("kyra.flag7".into()));
+        assert_eq!((then, otherwise), (2, 1), "sides swapped");
+    }
+
+    #[test]
+    fn comparing_a_flag_with_one_keeps_the_sides() {
+        let mut code = ask_flag(7);
+        code.extend(compare(2, 1));
+        let (on, then, otherwise) = first_branch(branch_around(code, set_flag(1), set_flag(2)));
+        assert_eq!(on, Condition::Flag("kyra.flag7".into()));
+        assert_eq!((then, otherwise), (1, 2));
+    }
+
+    #[test]
+    fn another_question_keeps_its_comparison_in_the_label() {
+        // The runtime cannot answer it, but the editor can show it.
+        let mut code = call(34);
+        code.extend_from_slice(&[0x40 | 2, 0]); // PushReturn
+        code.extend(compare(2, -1));
+        let (on, _, _) = first_branch(branch_around(code, set_flag(1), set_flag(2)));
+        assert_eq!(
+            on,
+            Condition::Unresolved {
+                call: "kyra:getCharacterScene == -1".into(),
+                args: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn a_call_past_slot_127_is_read_unsigned() {
+        // The byte operand encoding is signed; a function index is not.
+        // 139 is `message`, which says a line - narration all over the
+        // game, and a fifth of it was arriving as `kyra:-117`.
+        let mut code = push(1);
+        code.extend(vec![0x40 | 14, 139]);
+        let out = decompile("x", &script_with(code, 4, vec![0]));
+        assert_eq!(
+            out.scripts[0].actions.first(),
+            Some(&Action::Say {
+                line: emc::Script::line_id("x", 1),
+                speaker: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_delay_in_ticks_becomes_seconds() {
+        let mut code = push(90);
+        code.extend(call(FN_DELAY_TICKS as u16));
+        let out = decompile("x", &script_with(code, 4, vec![0]));
+        assert_eq!(
+            out.scripts[0].actions.first(),
+            Some(&Action::Wait { seconds: 1.5 })
+        );
+    }
+
+    #[test]
+    fn a_slot_opened_by_a_later_entry_point_still_names_the_animation() {
+        // The game binds slots at run time in whatever order the player
+        // clicks, so an early entry point may play from a slot whose
+        // open call sits later in the file.
+        let mut code = play_wsa(0);
+        let second_entry = code.len() as u16;
+        code.extend(open_wsa(1, 0));
+        let out = decompile(
+            "belroom",
+            &emc::Script {
+                entry_points: vec![0, second_entry],
+                texts: vec!["x".into(), "RINGBELL.WSA".into()],
+                code,
+            },
+        );
+        assert_eq!(
+            out.scripts[0].actions.first(),
+            Some(&Action::PlayAnim {
+                animation: "belroom_ringbell".into(),
+                wait: true,
+                at: None,
+            })
         );
     }
 
