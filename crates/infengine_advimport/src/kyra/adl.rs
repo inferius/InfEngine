@@ -113,6 +113,12 @@ pub const HEADER_LEN: usize = 1000;
 pub const TRACKS: usize = 120;
 /// Entries in the program offset table.
 pub const PROGRAMS: usize = 440;
+/// How many of those are tracks; the rest are instruments.
+///
+/// The split is what the driver's own instrument lookup implies:
+/// it indexes at 500 bytes in, which is the 120-byte track table
+/// plus 190 pointers of two bytes each.
+pub const TRACK_PROGRAMS: usize = 190;
 /// Marker for an unused track entry.
 pub const NO_PROGRAM: u8 = 0xFF;
 /// Marker for an unused program offset.
@@ -318,6 +324,16 @@ impl<'a> AdlFile<'a> {
             .min()
             .unwrap_or(self.data.len());
         Some(&self.data[start..end])
+    }
+
+    /// One instrument's register bytes.
+    ///
+    /// The pointer array is not 440 programs but 190 tracks followed by
+    /// 250 instruments, which is why the driver reaches instruments at
+    /// an offset of 500 bytes into the header rather than at its start:
+    /// 120 for the track table plus 190 pointers of two bytes each.
+    pub fn instrument(&self, instrument: usize) -> Option<&'a [u8]> {
+        self.program(TRACK_PROGRAMS + instrument)
     }
 
     /// How many programs the file actually defines.

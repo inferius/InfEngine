@@ -11,6 +11,7 @@
 //! data into our own format once, offline.
 
 pub mod adl;
+pub mod adlplay;
 pub mod cps;
 pub mod decompile;
 pub mod emc;

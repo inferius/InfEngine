@@ -2392,6 +2392,7 @@ dependencies = [
  "glam 0.30.10",
  "image",
  "infengine_adventure",
+ "infengine_opl",
  "moont",
  "ron",
  "thiserror 2.0.18",
