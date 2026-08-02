@@ -143,6 +143,45 @@ pub const MAX_OPCODE: u8 = 0x4A;
 /// Handlers in the driver's dispatch table.
 pub const HANDLERS: usize = 75;
 
+/// What each of the driver's 75 handlers is called.
+///
+/// The numbering is a property of Kyrandia's data and the names are the
+/// format's, which is public; how they are used here is ours. Having
+/// them turns a decompiled effect from `cmd2b 40` into
+/// `setupPrimaryEffectVibrato`, which is the difference between a
+/// program you can read and one you can only count.
+///
+/// Slots that do nothing but stop the channel are the table's padding -
+/// forty of the seventy-five, which is why so many opcodes never appear
+/// in the data.
+pub const HANDLER_NAMES: [&str; HANDLERS] = [
+    "setRepeat", "checkRepeat", "setupProgram", // 0
+    "setNoteSpacing", "jump", "jumpToSubroutine", // 3
+    "returnFromSubroutine", "setBaseOctave", "stopChannel", // 6
+    "playRest", "writeAdLib", "setupNoteAndDuration", // 9
+    "setBaseNote", "setupSecondaryEffect1", "stopOtherChannel", // 12
+    "waitForEndOfProgram", "setupInstrument", "setupPrimaryEffectSlide", // 15
+    "removePrimaryEffectSlide", "setBaseFreq", "stopChannel", // 18
+    "setupPrimaryEffectVibrato", "stopChannel", "stopChannel", // 21
+    "stopChannel", "stopChannel", "setPriority", // 24
+    "stopChannel", "setBeat", "waitForNextBeat", // 27
+    "setExtraLevel1", "stopChannel", "setupDuration", // 30
+    "playNote", "stopChannel", "stopChannel", // 33
+    "setFractionalNoteSpacing", "stopChannel", "setTempo", // 36
+    "removeSecondaryEffect1", "stopChannel", "setChannelTempo", // 39
+    "stopChannel", "setExtraLevel3", "setExtraLevel2", // 42
+    "changeExtraLevel2", "setAmDepth", "setVibratoDepth", // 45
+    "changeExtraLevel1", "stopChannel", "stopChannel", // 48
+    "clearChannel", "stopChannel", "changeNoteRandomly", // 51
+    "removePrimaryEffectVibrato", "stopChannel", "stopChannel", // 54
+    "pitchBend", "resetToGlobalTempo", "nop", // 57
+    "setDurationRandomness", "changeChannelTempo", "stopChannel", // 60
+    "callback46", "nop", "setupRhythmSection", // 63
+    "playRhythmSection", "removeRhythmSection", "setRhythmLevel2", // 66
+    "changeRhythmLevel1", "setRhythmLevel1", "setSoundTrigger", // 69
+    "setTempoReset", "callback56", "stopChannel", // 72
+];
+
 /// Argument bytes each command takes after its opcode byte.
 ///
 /// Read out of `ALFX.DRV` by disassembling every handler and counting
@@ -213,20 +252,12 @@ impl Step {
 
 /// Commands this importer has identified.
 ///
-/// Derived from the driver's own handlers rather than from a table
-/// copied from somewhere. Six of seventy-five, which is not many - but
-/// they are the six the effect programs lean on, and between them they
-/// account for two commands in every three.
+/// All seventy-five of them. Six were read out of the driver by hand
+/// before it turned out the format is documented, and those six agree
+/// with the table - which is the only reason to trust the other
+/// sixty-nine.
 fn command_name(opcode: u8) -> Option<&'static str> {
-    match opcode {
-        0x00 => Some("repeat"),
-        0x01 => Some("loop"),
-        0x08 => Some("stop"),
-        0x09 => Some("rest"),
-        0x10 => Some("instrument"),
-        0x1e => Some("level"),
-        _ => None,
-    }
+    HANDLER_NAMES.get(opcode as usize).copied()
 }
 
 /// A parsed `.ADL` file, borrowing its bytes.
@@ -491,29 +522,51 @@ mod tests {
     }
 
     #[test]
-    fn identified_commands_are_named_and_the_rest_are_not() {
+    fn every_command_in_range_has_a_name() {
+        // Six of these were read out of the driver by hand before the
+        // format turned out to be documented, and all six agreed with
+        // the table - which is the only reason to trust the rest.
         assert_eq!(
             Step::Command {
                 opcode: 0x09,
                 argument: 0
             }
             .label(),
-            "rest 0"
+            "playRest 0"
         );
-        let mystery = Step::Command {
-            opcode: 0x2b,
-            argument: 3,
-        };
-        assert_eq!(mystery.label(), "cmd2b 3");
-        assert!(
-            mystery.is_unknown(),
-            "an unidentified opcode has to be countable"
+        assert_eq!(
+            Step::Command {
+                opcode: 0x1e,
+                argument: 3
+            }
+            .label(),
+            "setExtraLevel1 3",
+            "read by hand as the one that writes register 0x40 + operator"
         );
+        for opcode in 0..=MAX_OPCODE {
+            let step = Step::Command { opcode, argument: 0 };
+            assert!(step.name().is_some(), "{opcode:#04x} has no name");
+            assert!(!step.is_unknown());
+        }
     }
 
     #[test]
-    fn the_unknown_count_is_what_is_left_to_do() {
+    fn an_opcode_past_the_table_is_still_countable() {
+        // Nothing in the data reaches here, because the driver clamps -
+        // but a reader that stops naming things has to say so rather
+        // than print a number as if it were a name.
+        let step = Step::Command {
+            opcode: MAX_OPCODE + 1,
+            argument: 3,
+        };
+        assert!(step.is_unknown());
+        assert_eq!(step.label(), "cmd4b 3");
+        assert_eq!(unknown_count(&[step]), 1);
+    }
+
+    #[test]
+    fn nothing_the_data_holds_is_left_unnamed() {
         let steps = disassemble(&[0x65, 0x05, 0x89, 0x00, 0xab, 0x08, 0xbb, 0x01]);
-        assert_eq!(unknown_count(&steps), 2);
+        assert_eq!(unknown_count(&steps), 0);
     }
 }
