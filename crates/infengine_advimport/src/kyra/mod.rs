@@ -49,9 +49,20 @@ use palette::Palette;
 
 /// Subdirectory of the output that receives decoded images.
 const IMAGE_DIR: &str = "images";
-/// Where images that are not room backgrounds go: title cards, cutscene
-/// stills, item close-ups.
+/// Where sheets of cut-out figures go: characters, items, effects.
 const SPRITE_DIR: &str = "sprites";
+/// Where whole painted screens that are not rooms go: title cards,
+/// cutscene stills, the map of the island.
+const PICTURE_DIR: &str = "pictures";
+/// Above this share of background, an image is a sheet rather than a
+/// picture.
+///
+/// Measured rather than chosen. Across the thirty non-room images
+/// Kyrandia ships, the painted ones run from 6% to 41% background and
+/// the sheets from 70% to 97% - a gap of nearly thirty points with
+/// nothing in it. Anywhere in that gap gives the same answer, which is
+/// what makes it worth splitting on at all.
+const SHEET_BACKGROUND: f32 = 0.55;
 /// Where animation sheets go.
 const ANIM_DIR: &str = "animations";
 /// Where recorded dialogue goes.
@@ -378,11 +389,28 @@ pub fn import_pak(
             .all(|ext| names.iter().any(|n| *n == format!("{stem_of_entry}{ext}")));
 
         if !is_room {
-            let image_rel = format!("{SPRITE_DIR}/{name}.png");
+            // A sheet of figures on a transparent field and a painted
+            // screen are both full-size images with no mask, and they
+            // were landing in one folder - so the editor offered to cut
+            // the island map into animation frames and called the
+            // closing scene a sprite.
+            let empty = background_share(&rgba);
+            let dir = if empty >= SHEET_BACKGROUND {
+                SPRITE_DIR
+            } else {
+                PICTURE_DIR
+            };
+            let image_rel = format!("{dir}/{name}.png");
             write_png(&out_dir.join(&image_rel), image.width, image.height, &rgba)?;
             report.images += 1;
             report.sprites += 1;
-            debug!(archive = %stem, entry = %entry.name, "imported picture, not a room");
+            debug!(
+                archive = %stem,
+                entry = %entry.name,
+                empty = format!("{:.0}%", empty * 100.0),
+                dir,
+                "not a room"
+            );
             continue;
         }
 
@@ -1013,6 +1041,25 @@ fn font_sheet(font: &fnt::Font) -> (u32, u32, Vec<u8>) {
         }
     }
     (width, height, rgba)
+}
+
+/// How much of an image is background.
+///
+/// Kyrandia's background is opaque black rather than transparent, so
+/// alpha says nothing here. Black is also a colour the art uses, but
+/// only in outlines and shadows - the difference between a screen that
+/// is a tenth black and a sheet that is four fifths black is not
+/// something an outline moves.
+fn background_share(rgba: &[u8]) -> f32 {
+    if rgba.is_empty() {
+        return 0.0;
+    }
+    let pixels = rgba.len() / 4;
+    let empty = rgba
+        .chunks_exact(4)
+        .filter(|p| p[3] == 0 || (p[0], p[1], p[2]) == (0, 0, 0))
+        .count();
+    empty as f32 / pixels.max(1) as f32
 }
 
 /// Walkable region for `stem`, traced from its `.MSC` mask.
