@@ -99,6 +99,11 @@ impl Animation {
     /// A sheet is what an editor and a sprite renderer both want; the
     /// individual frames stay available for anything that needs them
     /// separately.
+    /// Frames across the sheet this writes.
+    pub fn sheet_columns(&self) -> u32 {
+        infengine_adventure::Animation::columns_for(self.width as f32, self.frames.len().max(1) as u32)
+    }
+
     pub fn to_sheet_rgba(&self, fallback: Option<&Palette>) -> (u32, u32, Vec<u8>) {
         let owned;
         let palette = match (self.palette.as_ref(), fallback) {
@@ -110,20 +115,29 @@ impl Animation {
             }
         };
 
+        // Laid out as a grid rather than one row. Kyrandia's intro has
+        // a 185-frame animation 320 wide, and a row of those is 59200
+        // pixels across - past what any graphics card will take, so the
+        // game died the first time it was asked to draw one.
         let count = self.frames.len().max(1) as u32;
-        let sheet_w = self.width * count;
-        let mut rgba = vec![0u8; sheet_w as usize * self.height as usize * 4];
+        let columns = infengine_adventure::Animation::columns_for(self.width as f32, count);
+        let rows = count.div_ceil(columns);
+        let sheet_w = self.width * columns;
+        let sheet_h = self.height * rows;
+        let mut rgba = vec![0u8; sheet_w as usize * sheet_h as usize * 4];
         for (index, frame) in self.frames.iter().enumerate() {
             let expanded = palette.expand_rgba(frame, Some(0));
-            let ox = index as u32 * self.width;
+            let index = index as u32;
+            let ox = (index % columns) * self.width;
+            let oy = (index / columns) * self.height;
             for y in 0..self.height as usize {
                 let src = y * self.width as usize * 4;
-                let dst = (y * sheet_w as usize + ox as usize) * 4;
+                let dst = ((oy as usize + y) * sheet_w as usize + ox as usize) * 4;
                 let span = self.width as usize * 4;
                 rgba[dst..dst + span].copy_from_slice(&expanded[src..src + span]);
             }
         }
-        (sheet_w, self.height, rgba)
+        (sheet_w, sheet_h, rgba)
     }
 }
 

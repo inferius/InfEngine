@@ -921,12 +921,14 @@ fn export_animations(
         let id = format!("{archive}_{name}");
         let rel = format!("{ANIM_DIR}/{id}.png");
         write_png(&out_dir.join(&rel), width, height, &rgba)?;
-        animations.insert(Animation::new(
+        let mut entry = Animation::new(
             &id,
             &rel,
             animation.frame_count() as u32,
             Vec2::new(animation.width as f32, animation.height as f32),
-        ));
+        );
+        entry.columns = animation.sheet_columns();
+        animations.insert(entry);
         report.images += 1;
         report.animations += 1;
         report.frames += animation.frame_count();

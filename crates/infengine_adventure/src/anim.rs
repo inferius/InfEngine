@@ -42,6 +42,16 @@ pub struct Animation {
     pub frames: u32,
     /// Size of one frame in pixels.
     pub frame_size: Vec2,
+    /// Frames across the sheet before it wraps to the next row.
+    ///
+    /// Zero means one long row, which is what every sheet written
+    /// before this field existed is. That layout has a ceiling: a
+    /// graphics card will not take a texture wider than 32768 pixels,
+    /// and Kyrandia's intro has a 185-frame animation 320 wide - 59200
+    /// across, which crashes the game on the frame it is asked for. A
+    /// grid has no such edge.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub columns: u32,
     #[serde(default = "default_fps")]
     pub fps: f32,
     #[serde(default = "default_true")]
@@ -63,6 +73,16 @@ fn default_fps() -> f32 {
     DEFAULT_FPS
 }
 
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+/// Widest sheet worth writing.
+///
+/// Well inside what any card will take, and small enough that the grid
+/// comes out roughly square rather than a strip with one wrap in it.
+pub const MAX_SHEET_WIDTH: u32 = 2048;
+
 fn default_true() -> bool {
     true
 }
@@ -74,6 +94,9 @@ impl Animation {
             image: image.into(),
             frames: frames.max(1),
             frame_size,
+            // One row, which is what a sheet is until somebody lays it
+            // out otherwise.
+            columns: 0,
             fps: DEFAULT_FPS,
             looping: true,
             room: None,
@@ -136,8 +159,34 @@ impl Animation {
     /// Where frame `index` sits in the sheet, as `(min, max)` in pixels.
     pub fn frame_rect(&self, index: u32) -> (Vec2, Vec2) {
         let index = index.min(self.frames.saturating_sub(1));
-        let min = Vec2::new(index as f32 * self.frame_size.x, 0.0);
+        let columns = self.columns();
+        let min = Vec2::new(
+            (index % columns) as f32 * self.frame_size.x,
+            (index / columns) as f32 * self.frame_size.y,
+        );
         (min, min + self.frame_size)
+    }
+
+    /// Frames across the sheet, with the old one-row layout spelled out.
+    pub fn columns(&self) -> u32 {
+        if self.columns == 0 {
+            self.frames.max(1)
+        } else {
+            self.columns
+        }
+    }
+
+    /// Rows the sheet needs.
+    pub fn rows(&self) -> u32 {
+        self.frames.max(1).div_ceil(self.columns())
+    }
+
+    /// How many frames fit across before a sheet gets too wide to be a
+    /// texture.
+    pub fn columns_for(frame_width: f32, frames: u32) -> u32 {
+        let width = frame_width.max(1.0) as u32;
+        let fit = (MAX_SHEET_WIDTH / width.max(1)).max(1);
+        fit.min(frames.max(1))
     }
 
     /// The same rectangle as texture coordinates, given the sheet's
@@ -150,7 +199,12 @@ impl Animation {
 
     /// Width the whole sheet should be.
     pub fn sheet_width(&self) -> f32 {
-        self.frame_size.x * self.frames as f32
+        self.frame_size.x * self.columns() as f32
+    }
+
+    /// The size the whole sheet should be.
+    pub fn sheet_size(&self) -> Vec2 {
+        Vec2::new(self.sheet_width(), self.frame_size.y * self.rows() as f32)
     }
 }
 
@@ -258,6 +312,43 @@ pub fn load_index(dir: &Path) -> Result<AnimationSet, AnimIoError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_animation_wraps_instead_of_growing_past_a_texture() {
+        // 185 frames of 320 is 59200 across, and a card will not take
+        // more than 32768 - so the game died on the frame it was asked
+        // for rather than on the frame it was written.
+        let columns = Animation::columns_for(320.0, 185);
+        assert!(columns * 320 <= MAX_SHEET_WIDTH, "{columns}");
+        assert!(columns > 1);
+
+        let mut animation = Animation::new("tree", "a.png", 185, Vec2::new(320.0, 128.0));
+        animation.columns = columns;
+        assert!(animation.sheet_size().x <= MAX_SHEET_WIDTH as f32);
+        assert_eq!(animation.rows(), 185u32.div_ceil(columns));
+    }
+
+    #[test]
+    fn frames_read_across_then_down() {
+        let mut animation = Animation::new("x", "a.png", 6, Vec2::new(10.0, 20.0));
+        animation.columns = 3;
+        assert_eq!(animation.frame_rect(0).0, Vec2::new(0.0, 0.0));
+        assert_eq!(animation.frame_rect(2).0, Vec2::new(20.0, 0.0));
+        assert_eq!(animation.frame_rect(3).0, Vec2::new(0.0, 20.0));
+        assert_eq!(animation.frame_rect(5).0, Vec2::new(20.0, 20.0));
+    }
+
+    #[test]
+    fn a_sheet_written_before_this_still_reads_as_one_row() {
+        // Every index already on disk says nothing about columns, and
+        // reading those as a one-column grid would stack the whole
+        // animation into a vertical strip nobody wrote.
+        let animation = Animation::new("old", "a.png", 4, Vec2::new(10.0, 20.0));
+        assert_eq!(animation.columns, 0);
+        assert_eq!(animation.columns(), 4);
+        assert_eq!(animation.rows(), 1);
+        assert_eq!(animation.frame_rect(3).0, Vec2::new(30.0, 0.0));
+    }
 
     fn river() -> Animation {
         Animation::new("bridge_0", "animations/bridge_0.png", 3, Vec2::new(56.0, 32.0))
