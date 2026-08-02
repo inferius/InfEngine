@@ -46,6 +46,160 @@ struct Cli {
     /// leading somewhere and clicks running something.
     #[arg(long)]
     walk: Option<usize>,
+
+    /// Visit every room, run its entry script, click everything in it,
+    /// and report what broke. The whole game, not a stroll through it.
+    ///
+    /// A walk finds what a player would; this finds what any player
+    /// ever could, because it does not depend on the doors between -
+    /// a room is audited even if nothing leads to it yet.
+    #[arg(long)]
+    audit: bool,
+}
+
+/// Close whatever screens a script opened, so the world keeps moving.
+fn dismiss_screens(host: &mut infengine_adventure::Host) {
+    use infengine_adventure::screen::ScreenAction;
+    if host.screen.is_some() {
+        host.fire(&ScreenAction::Resume);
+    }
+}
+
+/// Everything wrong with a project, found by playing all of it.
+fn audit(project: Project) {
+    use infengine_adventure::host::Note;
+    use infengine_adventure::Host;
+    use std::collections::BTreeMap;
+
+    let ids = project.room_ids();
+    let mut host = Host::new(project);
+    host.log_limit = usize::MAX;
+
+    let (mut clicked, mut exits_taken) = (0usize, 0usize);
+    for id in &ids {
+        host.enter(id, None);
+        settle(&mut host);
+        // A script may open a screen - the intro ends on the title menu -
+        // and a screen stops the world, which for an audit means one
+        // room's cutscene freezing the remaining two hundred. Found the
+        // hard way: the first run reported every door in the game shut.
+        dismiss_screens(&mut host);
+
+        let spots: Vec<glam::Vec2> = host
+            .room
+            .hotspots
+            .iter()
+            .filter(|spot| spot.enabled)
+            .map(|spot| spot.shape.center())
+            .collect();
+        for point in spots {
+            host.click(point);
+            settle(&mut host);
+            dismiss_screens(&mut host);
+            clicked += 1;
+        }
+
+        // Exits change the room, so the room is re-entered after each -
+        // an audit of a room has to happen in that room.
+        //
+        // The click lands on a point of the door the click actually
+        // reaches. A door's centre is often under a scripted hotspot -
+        // the cave walls sit over the edges of the cave exits - and a
+        // player clicks around such things without noticing. Only a
+        // door with no reachable point at all is a finding.
+        let doors: Vec<(String, Vec<glam::Vec2>)> = host
+            .room
+            .exits
+            .iter()
+            .filter(|exit| exit.enabled && !exit.target_room.is_empty())
+            .map(|exit| {
+                let c = exit.shape.center();
+                let (lo, hi) = match exit.shape {
+                    infengine_adventure::interact::Shape::Rect { min, max } => (min, max),
+                    _ => (c, c),
+                };
+                let inset = |a: f32, b: f32, t: f32| a + (b - a) * t;
+                let samples = vec![
+                    c,
+                    glam::Vec2::new(inset(lo.x, hi.x, 0.2), inset(lo.y, hi.y, 0.2)),
+                    glam::Vec2::new(inset(lo.x, hi.x, 0.8), inset(lo.y, hi.y, 0.2)),
+                    glam::Vec2::new(inset(lo.x, hi.x, 0.2), inset(lo.y, hi.y, 0.8)),
+                    glam::Vec2::new(inset(lo.x, hi.x, 0.8), inset(lo.y, hi.y, 0.8)),
+                    glam::Vec2::new(inset(lo.x, hi.x, 0.5), inset(lo.y, hi.y, 0.1)),
+                    glam::Vec2::new(inset(lo.x, hi.x, 0.5), inset(lo.y, hi.y, 0.9)),
+                ];
+                (exit.id.clone(), samples)
+            })
+            .collect();
+        for (door, samples) in doors {
+            let point = samples.iter().copied().find(|p| {
+                matches!(
+                    host.resolve(*p),
+                    infengine_adventure::game::Click::Exit { id, .. } if id == door
+                )
+            });
+            let Some(point) = point else {
+                tracing::warn!(room = %id, %door, "a door fully covered by scenery");
+                continue;
+            };
+            let was = host.room.id.clone();
+            host.click(point);
+            settle(&mut host);
+            dismiss_screens(&mut host);
+            if host.room.id != was {
+                exits_taken += 1;
+                host.enter(id, None);
+                settle(&mut host);
+            } else {
+                tracing::warn!(room = %was, "a door that did not open");
+            }
+        }
+    }
+
+    // The log is the evidence; the summary is what it adds up to.
+    let mut missing: BTreeMap<String, usize> = BTreeMap::new();
+    let mut skipped: BTreeMap<String, usize> = BTreeMap::new();
+    for note in &host.log {
+        match note {
+            Note::Missing(what) => {
+                // "sound kyra.sfx7" groups as "sound", keeping the ids
+                // for the detail list.
+                *missing.entry(what.clone()).or_default() += 1;
+            }
+            Note::Skipped(call) => *skipped.entry(call.clone()).or_default() += 1,
+            _ => {}
+        }
+    }
+
+    tracing::info!(
+        rooms = ids.len(),
+        clicks = clicked,
+        exits = exits_taken,
+        notes = host.log.len(),
+        "audited"
+    );
+    let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
+    for what in missing.keys() {
+        let kind = what.split_whitespace().next().unwrap_or("other");
+        *kinds.entry(kind).or_default() += 1;
+    }
+    for (kind, count) in &kinds {
+        tracing::warn!(kind, distinct = count, "missing");
+    }
+    for (what, count) in missing.iter().take(30) {
+        tracing::info!(%what, count, "missing detail");
+    }
+    let total_skipped: usize = skipped.values().sum();
+    tracing::info!(
+        distinct = skipped.len(),
+        total = total_skipped,
+        "steps the import could not translate"
+    );
+    let mut by_count: Vec<(&String, &usize)> = skipped.iter().collect();
+    by_count.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
+    for (call, count) in by_count.iter().take(10) {
+        tracing::info!(%call, count, "skipped");
+    }
 }
 
 /// Play the game by taking doors, and report what was reachable.
@@ -97,6 +251,7 @@ fn walk(project: Project, moves: usize) {
         for point in spots {
             host.click(point);
             settle(&mut host);
+            dismiss_screens(&mut host);
             clicked += 1;
         }
 
@@ -253,6 +408,10 @@ fn main() {
     }
     if let Some(moves) = cli.walk {
         walk(project, moves);
+        return;
+    }
+    if cli.audit {
+        audit(project);
         return;
     }
 
