@@ -72,6 +72,12 @@ pub struct PlayMode {
     pub log: VecDeque<String>,
     /// A blocking animation and the time left on it.
     anim_wait: Option<(String, f32)>,
+    /// Seconds since the scene started.
+    ///
+    /// A cutscene is edited against a clock: "the pan starts at four
+    /// seconds" is something to act on, and "it happens after the title"
+    /// is not.
+    pub elapsed: f32,
 }
 
 impl std::fmt::Debug for PlayMode {
@@ -93,6 +99,7 @@ impl Default for PlayMode {
             verb: Verb::Walk,
             log: VecDeque::new(),
             anim_wait: None,
+            elapsed: 0.0,
         }
     }
 }
@@ -111,10 +118,28 @@ impl PlayMode {
     /// The state is *not* reset: a tester who has set up flags by hand
     /// wants to keep them when jumping to the scene they are testing.
     /// Resetting is a separate, deliberate button.
+    /// What the scene is doing right now, for the editor to show.
+    pub fn doing(&self) -> String {
+        if let Some(subtitle) = self.subtitle.as_ref() {
+            return format!("saying {}", subtitle.text);
+        }
+        if let Some((animation, left)) = self.anim_wait.as_ref() {
+            return format!("{animation}, {left:.1}s left");
+        }
+        if self.game.state.camera_moving() {
+            return "moving the camera".to_string();
+        }
+        if self.game.runner.is_running() {
+            return "running".to_string();
+        }
+        "finished".to_string()
+    }
+
     pub fn begin(&mut self, room: &Room) {
         self.active = true;
         self.subtitle = None;
         self.anim_wait = None;
+        self.elapsed = 0.0;
         self.game.enter(room, None);
         self.note(format!("entered {}", room.id));
     }
@@ -124,6 +149,7 @@ impl PlayMode {
         self.active = false;
         self.subtitle = None;
         self.anim_wait = None;
+        self.elapsed = 0.0;
         self.game.runner.stop();
     }
 
@@ -172,6 +198,7 @@ pub fn tick(
     if !play.active {
         return request;
     }
+    play.elapsed += dt.max(0.0);
 
     // Time-based blocks expire before the script is stepped, so a line
     // and the action after it can share one frame rather than costing an

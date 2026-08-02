@@ -33,6 +33,10 @@ pub struct UiActions {
     pub save_sheet: bool,
     /// The draft was abandoned.
     pub close_sheet: bool,
+    /// A script the Scene tab asked to run. Empty means the room's own.
+    pub run_script: Option<String>,
+    /// It asked to stop instead.
+    pub stop_play: bool,
     pub save: bool,
     pub reload: bool,
     pub fit_view: bool,
@@ -73,6 +77,12 @@ pub struct UiState<'a> {
     pub lines: &'a [(String, String, bool)],
     /// The sheet being cut into frames, if any.
     pub sheet: &'a mut Option<crate::sheet::SheetDraft>,
+    /// Whether a scene is running, how far into it, and what it is doing.
+    pub playing: bool,
+    pub elapsed: f32,
+    pub now: String,
+    /// Where the view is, while one runs.
+    pub camera: glam::Vec2,
 }
 
 impl std::fmt::Debug for UiState<'_> {

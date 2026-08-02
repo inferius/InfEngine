@@ -23,6 +23,7 @@
 pub mod floor;
 pub mod motion;
 pub mod room;
+pub mod scene;
 pub mod talk;
 pub mod things;
 
@@ -44,15 +45,18 @@ pub enum Task {
     Motion,
     /// What is said.
     Talk,
+    /// What happens over time: a cutscene, and the shot it is filmed in.
+    Scene,
 }
 
 impl Task {
-    pub const ALL: [Task; 5] = [
+    pub const ALL: [Task; 6] = [
         Task::Room,
         Task::Floor,
         Task::Things,
         Task::Motion,
         Task::Talk,
+        Task::Scene,
     ];
 
     /// Tab label.
@@ -63,6 +67,7 @@ impl Task {
             Task::Things => "Things",
             Task::Motion => "Motion",
             Task::Talk => "Talk",
+            Task::Scene => "Scene",
         }
     }
 
@@ -78,6 +83,9 @@ impl Task {
             Task::Things => "What the player can click - the scenery, and the ways out.",
             Task::Motion => "What moves here, and the sheets the frames are cut from.",
             Task::Talk => "What is said here, and how much of it has been recorded.",
+            Task::Scene => {
+                "What happens here over time, and the shot it is filmed in."
+            }
         }
     }
 
@@ -90,7 +98,7 @@ impl Task {
             Task::Room => &[],
             Task::Floor => &[Tool::DrawFloor, Tool::Select, Tool::WalkPreview],
             Task::Things => &[Tool::DrawHotspot, Tool::Select],
-            Task::Motion | Task::Talk => &[],
+            Task::Motion | Task::Talk | Task::Scene => &[],
         }
     }
 
@@ -110,6 +118,12 @@ impl Task {
                 overlays.exits = true;
             }
             Task::Motion | Task::Talk => {}
+            // The shot is what this tab is about, so the room's edge is
+            // the one overlay that says where it ends.
+            Task::Scene => {
+                overlays.bounds = true;
+                overlays.camera = true;
+            }
         }
     }
 
@@ -124,6 +138,15 @@ impl Task {
             Task::Things => state.room.hotspots.len() + state.room.exits.len(),
             Task::Motion => state.animations.len(),
             Task::Talk => state.lines.len(),
+            Task::Scene => {
+                let prefix = format!("{}.", state.room.script_prefix());
+                state
+                    .project
+                    .scripts
+                    .keys()
+                    .filter(|id| id.starts_with(&prefix))
+                    .count()
+            }
         }
     }
 }
@@ -154,6 +177,7 @@ pub fn panel(ctx: &egui::Context, state: &mut UiState<'_>, actions: &mut UiActio
                         Task::Things => things::show(ui, state, actions),
                         Task::Motion => motion::show(ui, state, actions),
                         Task::Talk => talk::show(ui, state, actions),
+                        Task::Scene => scene::show(ui, state, actions),
                     }
                     ui.add_space(12.0);
                     problems(ui, state);
@@ -323,6 +347,7 @@ mod tests {
             exits: false,
             entries: false,
             bounds: false,
+            camera: false,
         };
         Task::Floor.reveal(&mut overlays);
         assert!(overlays.floor && overlays.entries);

@@ -26,6 +26,9 @@ pub mod color {
     pub const SELECTED: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
     pub const PATH: [f32; 4] = [1.0, 0.55, 0.1, 1.0];
     pub const BOUNDS: [f32; 4] = [0.45, 0.45, 0.55, 0.7];
+    /// The frame of what the player sees. Brighter than the
+    /// room's edge, because it is the one that moves.
+    pub const CAMERA: [f32; 4] = [1.0, 1.0, 0.55, 0.95];
     pub const PREVIEW: [f32; 4] = [1.0, 0.9, 0.3, 0.8];
     pub const ACTOR: [f32; 4] = [0.4, 1.0, 0.6, 0.9];
 }
@@ -38,6 +41,9 @@ pub struct Overlays {
     pub exits: bool,
     pub entries: bool,
     pub bounds: bool,
+    /// The frame of what the player sees, for a room bigger than one
+    /// screen.
+    pub camera: bool,
 }
 
 impl Default for Overlays {
@@ -48,6 +54,7 @@ impl Default for Overlays {
             exits: true,
             entries: true,
             bounds: true,
+            camera: true,
         }
     }
 }
@@ -210,6 +217,7 @@ pub fn draw_overlays(
     overlays: &Overlays,
     selected_points: &[Vec2],
     path: &[Vec2],
+    camera_at: Vec2,
 ) {
     if overlays.bounds {
         outline(
@@ -222,6 +230,26 @@ pub fn draw_overlays(
                 Vec2::new(0.0, room.size.y),
             ],
             color::BOUNDS,
+        );
+    }
+
+    // What the player will actually see, when that is less than the
+    // room. Drawn as a frame over the whole room rather than by cropping
+    // the editor's own view: the point of editing a shot is seeing what
+    // is outside it as well as what is in.
+    if overlays.camera && room.camera.scrolls(room.size) {
+        let size = room.camera.view_in(room.size);
+        let at = room.camera.clamp(room.size, camera_at);
+        outline(
+            renderer,
+            view,
+            &[
+                at,
+                at + Vec2::new(size.x, 0.0),
+                at + size,
+                at + Vec2::new(0.0, size.y),
+            ],
+            color::CAMERA,
         );
     }
 

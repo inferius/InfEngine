@@ -761,6 +761,24 @@ impl Editor {
         if actions.delete_selection {
             self.delete_selection();
         }
+        if let Some(id) = actions.run_script {
+            // An empty id means the room's own script, which is what
+            // "play this scene" means when nobody picked one.
+            if id.is_empty() {
+                self.start_play();
+            } else {
+                if !self.play.active {
+                    self.start_play();
+                }
+                if !self.play.game.run_script(&id) {
+                    self.status = format!("no script {id}");
+                }
+            }
+        }
+        if actions.stop_play {
+            self.play.end();
+            self.status = "stopped".into();
+        }
         if let Some(id) = actions.play_animation {
             self.playback.select(id);
         }
@@ -972,6 +990,7 @@ impl AppHandler for Editor {
                 &self.overlays,
                 &selected,
                 &walk_line,
+                self.play.game.state.camera,
             );
             if let Some((position, scale)) = actor {
                 draw::draw_actor(renderer, &self.view, position, scale);
@@ -1012,6 +1031,14 @@ impl AppHandler for Editor {
                 voice_language: &mut self.language.voice,
                 lines: &self.lines,
                 sheet: &mut self.sheet,
+                playing: self.play.active,
+                elapsed: self.play.elapsed,
+                now: if self.play.active {
+                    self.play.doing()
+                } else {
+                    String::new()
+                },
+                camera: self.play.game.state.camera,
                 content_min: egui::Vec2::ZERO,
                 content_max: egui::Vec2::ZERO,
             };
