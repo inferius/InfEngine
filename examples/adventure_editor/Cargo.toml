@@ -21,6 +21,7 @@ infengine_editor = { path = "../../crates/infengine_editor" }
 infengine_render = { path = "../../crates/infengine_render" }
 infengine_window = { path = "../../crates/infengine_window" }
 egui = { workspace = true }
+image = { workspace = true }
 glam = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }

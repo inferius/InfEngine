@@ -80,6 +80,9 @@ pub struct Editor {
     scripts_dirty: bool,
     /// The map of the whole game, and its window.
     story_ui: crate::ui_story::StoryUi,
+    library_ui: crate::library::LibraryUi,
+    /// Scene-list thumbnails and summaries, filled a few per frame.
+    cards: crate::cards::Cards,
     /// Built when the window opens; dropped when a save changes what it
     /// would show.
     story_cache: Option<infengine_adventure::story::Story>,
@@ -178,6 +181,8 @@ impl Editor {
             help: crate::help::HelpUi::default(),
             pictures: Vec::new(),
             story_ui: crate::ui_story::StoryUi::default(),
+            library_ui: crate::library::LibraryUi::default(),
+            cards: crate::cards::Cards::default(),
             story_cache: None,
             scene_script: None,
             timeline_zoom: settings.timeline_zoom,
@@ -720,6 +725,7 @@ impl Editor {
         // changed its mind.
         if self.scripts_dirty {
             self.save_scripts();
+            self.cards.forget(&self.room.id.clone());
         }
         self.story_cache = None;
         match infengine_adventure::save(&self.room, &path) {
@@ -767,6 +773,10 @@ impl Editor {
         }
         if actions.open_graph {
             self.graph_ui.open = true;
+        }
+        if actions.open_library {
+            self.refresh_pictures();
+            self.library_ui.open = true;
         }
         if actions.open_story {
             self.story_ui.open = true;
@@ -1187,6 +1197,7 @@ impl AppHandler for Editor {
         let mut menu_actions = crate::menu::MenuActions::default();
         let mut timeline_actions = crate::timeline::TimelineActions::default();
         let mut story_actions = crate::ui_story::StoryActions::default();
+        let mut library_actions = crate::library::LibraryActions::default();
         if self.story_ui.open && self.story_cache.is_none() {
             self.story_cache =
                 Some(infengine_adventure::story::Story::of(&self.project));
@@ -1246,6 +1257,7 @@ impl AppHandler for Editor {
                 camera: self.play.game.state.camera,
                 content_min: egui::Vec2::ZERO,
                 content_max: egui::Vec2::ZERO,
+                cards: &mut self.cards,
             };
             let play = &mut self.play;
             let play_draft = &mut self.play_draft;
@@ -1276,6 +1288,7 @@ impl AppHandler for Editor {
             let ui_scale = &mut self.ui_scale;
             let timeline_zoom = &mut self.timeline_zoom;
             let story_ui = &mut self.story_ui;
+            let library_ui = &mut self.library_ui;
             let story_cache = &self.story_cache;
             let timeline_selected = &self.timeline_selected;
             ui.run(window.raw(), |ctx| {
@@ -1294,6 +1307,10 @@ impl AppHandler for Editor {
                 {
                     story_actions =
                         crate::ui_story::window(ctx, story_ui, story, &story_start);
+                }
+                if library_ui.open {
+                    library_actions =
+                        crate::library::window(ctx, library_ui, state.project, &picker_images);
                 }
                 if let Some(line) = scene_line.as_ref() {
                     timeline_actions = crate::timeline::panel(
@@ -1348,6 +1365,19 @@ impl AppHandler for Editor {
                 .position(|path| infengine_adventure::Project::room_label(path) == id)
         {
             self.open_room(index);
+        }
+        if let Some(action) = library_actions.add {
+            // Land it in the scene's timeline and turn the inspector
+            // there, so the step arrives somewhere visible.
+            self.task = crate::inspector::Task::Scene;
+            self.apply_timeline(crate::timeline::TimelineActions {
+                insert: Some((self.timeline_selected.clone(), action)),
+                ..Default::default()
+            });
+            self.status = "step added - it is on the scene's timeline".into();
+        }
+        if let Some(id) = library_actions.preview {
+            self.playback.select(id);
         }
         self.apply_timeline(timeline_actions);
         self.apply_menu(menu_actions);

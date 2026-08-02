@@ -38,6 +38,7 @@ pub struct MenuActions {
     pub open_screens: bool,
     pub open_graph: bool,
     pub open_story: bool,
+    pub open_library: bool,
     pub open_help: bool,
     /// Switch the inspector to a job.
     pub task: Option<Task>,
@@ -227,6 +228,14 @@ fn project_menu(ui: &mut egui::Ui, menu: MenuContext, actions: &mut MenuActions)
             .clicked()
         {
             actions.open_screens = true;
+            ui.close();
+        }
+        if ui
+            .button("Library...")
+            .on_hover_text("Every picture, animation, and sound the project holds")
+            .clicked()
+        {
+            actions.open_library = true;
             ui.close();
         }
         if ui

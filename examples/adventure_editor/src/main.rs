@@ -16,10 +16,12 @@
 mod add;
 mod app;
 mod assets;
+mod cards;
 mod draw;
 mod edit;
 mod help;
 mod inspector;
+mod library;
 mod menu;
 mod play;
 mod playback;

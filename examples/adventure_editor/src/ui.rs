@@ -83,6 +83,8 @@ pub struct UiState<'a> {
     pub now: String,
     /// Where the view is, while one runs.
     pub camera: glam::Vec2,
+    /// Thumbnails and summaries for the scene list.
+    pub cards: &'a mut crate::cards::Cards,
 }
 
 impl std::fmt::Debug for UiState<'_> {
@@ -100,6 +102,9 @@ pub fn build(ctx: &egui::Context, state: &mut UiState<'_>) -> UiActions {
     let screen = ctx.content_rect();
     state.content_min = egui::vec2(screen.left(), screen.top());
     state.content_max = egui::vec2(screen.right(), screen.bottom());
+    // Answer a few of the scene list's thumbnail requests from last
+    // frame before drawing it again.
+    state.cards.tick(ctx, state.project, 3);
     rooms_panel(ctx, state, &mut actions);
     state.content_max.x = crate::inspector::panel(ctx, state, &mut actions);
     status_bar(ctx, state);
@@ -108,9 +113,9 @@ pub fn build(ctx: &egui::Context, state: &mut UiState<'_>) -> UiActions {
 
 fn rooms_panel(ctx: &egui::Context, state: &mut UiState<'_>, actions: &mut UiActions) {
     let response = egui::SidePanel::left("rooms")
-        .default_width(220.0)
+        .default_width(230.0)
         .show(ctx, |ui| {
-            ui.heading("Rooms");
+            ui.heading("Scenes");
             ui.label(
                 egui::RichText::new(state.project.root.display().to_string())
                     .small()
@@ -119,7 +124,7 @@ fn rooms_panel(ctx: &egui::Context, state: &mut UiState<'_>, actions: &mut UiAct
 
             if state.project.is_empty() {
                 ui.separator();
-                ui.label("No rooms found.");
+                ui.label("No scenes found.");
                 ui.label(
                     egui::RichText::new("Point the editor at a folder containing rooms/.")
                         .small()
@@ -152,22 +157,146 @@ fn rooms_panel(ctx: &egui::Context, state: &mut UiState<'_>, actions: &mut UiAct
             egui::ScrollArea::vertical()
                 .id_salt("room_list")
                 .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for index in matches {
-                        let Some(path) = state.project.rooms.get(index) else {
-                            continue;
-                        };
-                        let selected = state.current_room == Some(index);
-                        if ui
-                            .selectable_label(selected, Project::room_label(path))
-                            .clicked()
-                        {
-                            actions.open_room = Some(index);
-                        }
-                    }
-                });
+                .show(ui, |ui| scene_list(ui, state, actions, &matches));
         });
     state.content_min.x = response.response.rect.right();
+}
+
+/// The list body: scene cards, with same-background families folded.
+///
+/// `gencavb_127` through `gencavb_140` are one cave photographed
+/// fourteen times, and a flat list of them buries the scenes that are
+/// actually distinct. Folding a family behind its shared name keeps the
+/// panel the length of the game, not the length of the data. A search
+/// unfolds everything, because someone typing a name wants the row
+/// itself, not the drawer it is in.
+fn scene_list(
+    ui: &mut egui::Ui,
+    state: &mut UiState<'_>,
+    actions: &mut UiActions,
+    matches: &[usize],
+) {
+    let labels: Vec<(usize, String)> = matches
+        .iter()
+        .filter_map(|&index| {
+            let path = state.project.rooms.get(index)?;
+            Some((index, Project::room_label(path)))
+        })
+        .collect();
+    let searching = !state.room_filter.trim().is_empty();
+    for (family, members) in group_by_family(&labels) {
+        if members.len() == 1 || searching {
+            for &(index, ref label) in &members {
+                scene_row(ui, state, actions, index, label);
+            }
+            continue;
+        }
+        let holds_current = members
+            .iter()
+            .any(|(index, _)| state.current_room == Some(*index));
+        egui::CollapsingHeader::new(format!("{family} \u{b7} {}", members.len()))
+            .id_salt(("family", family))
+            .default_open(holds_current)
+            .show(ui, |ui| {
+                for &(index, ref label) in &members {
+                    scene_row(ui, state, actions, index, label);
+                }
+            });
+    }
+}
+
+/// One scene's row: its background, its name, and what it holds.
+fn scene_row(
+    ui: &mut egui::Ui,
+    state: &mut UiState<'_>,
+    actions: &mut UiActions,
+    index: usize,
+    label: &str,
+) {
+    if let Some(path) = state.project.rooms.get(index) {
+        state.cards.request(label, path);
+    }
+    let card = state.cards.get(label);
+    let selected = state.current_room == Some(index);
+
+    let mut text = egui::text::LayoutJob::default();
+    text.append(
+        label,
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(13.0),
+            color: ui.visuals().strong_text_color(),
+            ..Default::default()
+        },
+    );
+    if let Some(card) = card {
+        text.append(
+            &format!("\n{}", crate::cards::caption(card)),
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(10.0),
+                color: ui.visuals().weak_text_color(),
+                ..Default::default()
+            },
+        );
+    }
+
+    let button = match card.and_then(|card| card.thumb.as_ref()) {
+        Some(texture) => {
+            let size = texture.size_vec2();
+            let scale = crate::cards::THUMB / size.x.max(1.0);
+            egui::Button::image_and_text(
+                egui::Image::new((texture.id(), size * scale)),
+                text,
+            )
+        }
+        None => egui::Button::new(text),
+    };
+    let row = ui.add_sized(
+        [ui.available_width(), 30.0],
+        button.selected(selected).frame(selected),
+    );
+    if row.clicked() {
+        actions.open_room = Some(index);
+    }
+}
+
+/// Which family a scene belongs to: its name up to a numbered suffix.
+///
+/// The numbered suffixes are how instances of one background are told
+/// apart, so the family is exactly "the scenes sharing a picture".
+pub fn family(label: &str) -> &str {
+    match label.rsplit_once('_') {
+        Some((head, tail))
+            if !head.is_empty() && !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            head
+        }
+        _ => label,
+    }
+}
+
+/// Group labelled rooms by family, keeping first-seen order.
+pub fn group_by_family(labels: &[(usize, String)]) -> Vec<(String, Vec<(usize, String)>)> {
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, Vec<(usize, String)>> = Default::default();
+    for (index, label) in labels {
+        let family = family(label).to_string();
+        if !groups.contains_key(&family) {
+            order.push(family.clone());
+        }
+        groups
+            .entry(family)
+            .or_default()
+            .push((*index, label.clone()));
+    }
+    order
+        .into_iter()
+        .map(|family| {
+            let members = groups.remove(&family).unwrap_or_default();
+            (family, members)
+        })
+        .collect()
 }
 
 /// Indices of the rooms whose name contains `filter`, case-insensitively.
@@ -277,6 +406,30 @@ mod tests {
         assert_eq!(matching_rooms(&project, "RID"), vec![1]);
         assert_eq!(matching_rooms(&project, "c"), vec![0, 2]);
         assert!(matching_rooms(&project, "zzz").is_empty());
+    }
+
+    #[test]
+    fn a_family_is_the_name_before_the_numbered_suffix() {
+        assert_eq!(family("gencavb_127"), "gencavb");
+        assert_eq!(family("bridge"), "bridge");
+        assert_eq!(family("_intro"), "_intro", "no name before the underscore");
+        assert_eq!(family("note_v2_final"), "note_v2_final", "letters in the tail");
+    }
+
+    #[test]
+    fn grouping_keeps_first_seen_order_and_gathers_families() {
+        let labels = vec![
+            (0, "bridge".to_string()),
+            (1, "gencavb_127".to_string()),
+            (2, "gencavb_128".to_string()),
+            (3, "well".to_string()),
+        ];
+        let groups = group_by_family(&labels);
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0].0, "bridge");
+        assert_eq!(groups[1].0, "gencavb");
+        assert_eq!(groups[1].1.len(), 2);
+        assert_eq!(groups[2].0, "well");
     }
 
     #[test]
