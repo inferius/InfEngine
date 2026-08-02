@@ -184,7 +184,13 @@ impl Game {
             self.quit = true;
         }
         if let Some(id) = request.animation {
-            if let Some(animation) = self.host.project.animations.get(&id).cloned() {
+            // Playing nothing takes the last one off. A finished
+            // animation now holds its last frame, which is what a title
+            // card wants - so there has to be a way to say "and now it
+            // is gone" that is not a room change.
+            if id.is_empty() {
+                self.animation = None;
+            } else if let Some(animation) = self.host.project.animations.get(&id).cloned() {
                 self.upload(&animation.image);
                 self.animation = Some((animation, 0.0, request.animation_at));
             } else {
@@ -342,10 +348,19 @@ impl AppHandler for Game {
         }
 
         if let Some((animation, time, _)) = self.animation.as_mut() {
+            let was = *time;
             *time += ctx.delta_time;
-            if !animation.looping && animation.finished_at(*time) {
+            // A finished animation releases the script but stays on
+            // screen. A title card is an animation that plays once and
+            // then holds, and clearing it the moment it ended left
+            // Kyrandia's title on screen for four seconds where the
+            // original holds it for eleven - the script's own waits had
+            // nothing to hold.
+            if !animation.looping
+                && animation.finished_at(*time)
+                && !animation.finished_at(was)
+            {
                 let id = animation.id.clone();
-                self.animation = None;
                 self.host.game.runner.finish_animation(&id);
             }
         }

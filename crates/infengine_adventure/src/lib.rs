@@ -51,6 +51,7 @@ pub mod save;
 pub mod scale;
 pub mod sound;
 pub mod story;
+pub mod schedule;
 pub mod screen;
 pub mod script_io;
 pub mod walk;

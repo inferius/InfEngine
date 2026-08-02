@@ -443,6 +443,13 @@ impl Host {
             }
             Event::PlayAnim { animation, wait, at } => {
                 request.animation_at = at;
+                // An empty name is "show nothing", which is how a card
+                // that holds its last frame is taken off again.
+                if animation.is_empty() {
+                    self.anim_wait = None;
+                    request.animation = Some(String::new());
+                    return;
+                }
                 if wait {
                     let seconds = self
                         .project
