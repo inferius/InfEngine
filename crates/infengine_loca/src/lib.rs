@@ -36,6 +36,7 @@
 #![forbid(unsafe_code)]
 
 pub mod plural;
+pub mod tag;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -184,9 +185,18 @@ pub struct Spoken<'a> {
 /// Every line in one language.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Locale {
-    /// Language tag, e.g. `en` or `cs`. Used as the file stem.
+    /// BCP 47 language tag: `en`, `cs`, `pt-BR`. Also the file stem.
+    ///
+    /// Canonicalised on the way in, because case carries no meaning in
+    /// a tag but does in the map this is a key of - so `en-US` and
+    /// `EN-us` would otherwise be two languages with half the lines
+    /// each.
     pub language: String,
     /// Name shown in the language menu, written in that language.
+    ///
+    /// Filled from the tag when nothing better is given: a menu offering
+    /// "cs" makes the reader work out what that is, and "Čeština" does
+    /// not.
     #[serde(default)]
     pub display_name: String,
     /// Lines keyed by id. Ordered so a diff between two revisions of a
@@ -197,10 +207,31 @@ pub struct Locale {
 
 impl Locale {
     pub fn new(language: impl Into<String>, display_name: impl Into<String>) -> Self {
+        let language = crate::tag::canonical(&language.into());
+        let display_name = display_name.into();
+        // A display name that is only the tag repeated is not one, and
+        // that is what every import wrote before there was a table to
+        // look the language up in.
+        let display_name = if display_name.is_empty()
+            || crate::tag::same(&display_name, &language)
+        {
+            crate::tag::display_name(&language)
+        } else {
+            display_name
+        };
         Self {
-            language: language.into(),
-            display_name: display_name.into(),
+            language,
+            display_name,
             lines: BTreeMap::new(),
+        }
+    }
+
+    /// The name to show, falling back to the tag's own.
+    pub fn menu_name(&self) -> String {
+        if self.display_name.is_empty() {
+            crate::tag::display_name(&self.language)
+        } else {
+            self.display_name.clone()
         }
     }
 
@@ -247,7 +278,16 @@ impl Locales {
         }
     }
 
-    pub fn insert(&mut self, locale: Locale) {
+    pub fn insert(&mut self, mut locale: Locale) {
+        // Whatever route the locale came in by - a file read straight
+        // off disk skips `Locale::new` entirely - its tag is a map key
+        // and has to be spelled the one way.
+        locale.language = crate::tag::canonical(&locale.language);
+        if locale.display_name.is_empty()
+            || crate::tag::same(&locale.display_name, &locale.language)
+        {
+            locale.display_name = crate::tag::display_name(&locale.language);
+        }
         if self.fallback.is_empty() {
             self.fallback = locale.language.clone();
         }
@@ -255,7 +295,9 @@ impl Locales {
     }
 
     pub fn get(&self, language: &str) -> Option<&Locale> {
-        self.locales.get(language)
+        self.locales
+            .get(language)
+            .or_else(|| self.locales.get(&crate::tag::canonical(language)))
     }
 
     pub fn get_mut(&mut self, language: &str) -> Option<&mut Locale> {
@@ -459,6 +501,36 @@ pub fn load_dir(dir: &Path, fallback: &str) -> Result<Locales, LocaError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tag_is_one_language_however_it_is_spelled() {
+        // Keyed by the raw string, two spellings become two languages
+        // with half the lines each.
+        let mut locales = Locales::new("en");
+        let mut a = Locale::new("EN-us", "");
+        a.insert("greet", Line::text("hello"));
+        locales.insert(a);
+
+        assert_eq!(locales.get("en-US").map(|l| l.language.as_str()), Some("en-US"));
+        assert!(locales.get("en_us").is_some(), "underscores are the same tag");
+        assert!(locales.get("EN-US").is_some());
+    }
+
+    #[test]
+    fn a_language_menu_shows_a_name_rather_than_a_code() {
+        let plain = Locale::new("cs", "");
+        assert_eq!(plain.display_name, "Čeština");
+        assert_eq!(plain.menu_name(), "Čeština");
+
+        // Every import wrote the tag into both fields, which is not a
+        // display name however you read it.
+        let imported = Locale::new("de", "de");
+        assert_eq!(imported.display_name, "Deutsch");
+
+        // A name someone actually chose is left alone.
+        let chosen = Locale::new("en", "English (Kyrandia)");
+        assert_eq!(chosen.display_name, "English (Kyrandia)");
+    }
 
     fn sample() -> Locales {
         let mut english = Locale::new("en", "English");

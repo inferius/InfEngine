@@ -186,7 +186,10 @@ pub fn import_dir(
         warn!("no palette found; images will be written as greyscale");
     }
 
-    let mut locale = Locale::new(language, language);
+    // Empty rather than the tag repeated: the locale fills in what
+    // the language calls itself, and a menu offering "cs" makes the
+    // reader work out what that is.
+    let mut locale = Locale::new(language, "");
     let mut animations = AnimationSet::default();
     // Archives whose recordings have been read, so the sweep below can
     // find the ones no room owns.
