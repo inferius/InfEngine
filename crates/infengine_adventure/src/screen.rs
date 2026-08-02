@@ -22,6 +22,8 @@ use std::path::Path;
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
+use crate::action::Condition;
+
 /// Directory holding screen files, relative to the project root.
 pub const SCREEN_DIR: &str = "screens";
 /// Suffix identifying one.
@@ -146,6 +148,15 @@ pub struct Widget {
     pub kind: WidgetKind,
     #[serde(default = "default_true")]
     pub visible: bool,
+    /// When the game shows this widget at all. `None` means always.
+    ///
+    /// This is how the interface follows the story: a spell button
+    /// carrying `Flag("spell.healing")` exists from the moment the
+    /// scene that teaches the spell sets the flag, with no code in
+    /// between. An `Unresolved` condition holds never, the same
+    /// reading a branch gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shown_if: Option<Condition>,
 }
 
 fn default_true() -> bool {
@@ -167,6 +178,18 @@ impl Widget {
     pub fn translate(&mut self, delta: Vec2) {
         self.min += delta;
         self.max += delta;
+    }
+
+    /// Whether the game shows this widget, given which flags hold.
+    pub fn shown(&self, flag_holds: &dyn Fn(&str) -> bool) -> bool {
+        if !self.visible {
+            return false;
+        }
+        match &self.shown_if {
+            None => true,
+            Some(Condition::Flag(flag)) => flag_holds(flag),
+            Some(Condition::Unresolved { .. }) => false,
+        }
     }
 }
 
@@ -199,9 +222,22 @@ impl Screen {
     /// button drawn on top of a panel has to be reachable, and it is
     /// always the tighter rectangle.
     pub fn widget_at(&self, p: Vec2) -> Option<&Widget> {
+        self.widget_at_when(p, &|_| true)
+    }
+
+    /// The topmost widget under `p` among those the game is showing.
+    ///
+    /// The same lookup as [`Screen::widget_at`], honouring each
+    /// widget's condition - a button the story has not revealed yet
+    /// must not be pressable by someone who knows where it will be.
+    pub fn widget_at_when(
+        &self,
+        p: Vec2,
+        flag_holds: &dyn Fn(&str) -> bool,
+    ) -> Option<&Widget> {
         self.widgets
             .iter()
-            .filter(|widget| widget.visible && widget.contains(p))
+            .filter(|widget| widget.shown(flag_holds) && widget.contains(p))
             .min_by(|a, b| {
                 a.area()
                     .partial_cmp(&b.area())
@@ -259,6 +295,11 @@ impl Screen {
             }
             if widget.area() <= 0.0 {
                 problems.push(format!("{} has no area", widget.id));
+            }
+            if let Some(Condition::Flag(flag)) = &widget.shown_if
+                && flag.trim().is_empty()
+            {
+                problems.push(format!("{} is shown by a flag with no name", widget.id));
             }
             if let WidgetKind::Button { action, line, .. } = &widget.kind {
                 if *action == ScreenAction::None {
@@ -366,6 +407,7 @@ mod tests {
                 action,
             },
             visible: true,
+            shown_if: None,
         }
     }
 
@@ -379,6 +421,7 @@ mod tests {
                 image: "images/title.png".into(),
             },
             visible: true,
+            shown_if: None,
         });
         screen.widgets.push(button(
             "new",
@@ -503,6 +546,60 @@ mod tests {
         assert!(errors[0].to_string().contains("bad.screen.ron"));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_widget_waits_for_its_flag() {
+        let mut screen = title_screen();
+        screen.widgets[1].shown_if = Some(Condition::Flag("spell.healing".into()));
+        let learned = |flag: &str| flag == "spell.healing";
+        let not_yet = |_: &str| false;
+
+        // Before the flag: invisible and unpressable, the backdrop wins.
+        assert_eq!(
+            screen
+                .widget_at_when(Vec2::new(160.0, 130.0), &not_yet)
+                .map(|w| w.id.as_str()),
+            Some("backdrop")
+        );
+        // After: the button is simply there.
+        assert_eq!(
+            screen
+                .widget_at_when(Vec2::new(160.0, 130.0), &learned)
+                .map(|w| w.id.as_str()),
+            Some("new")
+        );
+        // The plain lookup still sees everything, for the editor.
+        assert_eq!(
+            screen.widget_at(Vec2::new(160.0, 130.0)).map(|w| w.id.as_str()),
+            Some("new")
+        );
+    }
+
+    #[test]
+    fn an_unresolved_condition_holds_never() {
+        let mut screen = title_screen();
+        screen.widgets[1].shown_if = Some(Condition::Unresolved {
+            call: "kyra:7".into(),
+            args: vec![],
+        });
+        assert!(!screen.widgets[1].shown(&|_| true));
+    }
+
+    #[test]
+    fn a_condition_on_a_nameless_flag_is_a_complaint() {
+        let mut screen = title_screen();
+        screen.widgets[1].shown_if = Some(Condition::Flag("  ".into()));
+        let problems = screen.problems();
+        assert!(problems.iter().any(|p| p.contains("no name")), "{problems:?}");
+    }
+
+    #[test]
+    fn a_widget_with_no_condition_round_trips_without_one() {
+        // The field must not appear in files that do not use it, so
+        // every screen written before it existed stays byte-stable.
+        let text = ron::ser::to_string(&title_screen()).expect("serialise");
+        assert!(!text.contains("shown_if"), "{text}");
     }
 
     #[test]

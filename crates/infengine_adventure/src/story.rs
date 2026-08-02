@@ -297,6 +297,7 @@ mod tests {
                 },
             },
             visible: true,
+            shown_if: None,
         });
         screen::save(&title, &root.join(screen::SCREEN_DIR)).expect("title");
         screen::save(

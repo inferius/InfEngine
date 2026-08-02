@@ -570,6 +570,7 @@ mod tests {
                 image: "images/title.png".into(),
             },
             visible: true,
+            shown_if: None,
         });
         screen::save(&title, &root.join(screen::SCREEN_DIR)).expect("screen");
         touch(&root, "images/title.png");

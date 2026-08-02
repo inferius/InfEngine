@@ -1211,6 +1211,9 @@ impl AppHandler for Editor {
         // see that through the closure.
         let language = self.language.clone();
         let locales = self.project.locales.clone();
+        // For the screen preview: which flags the test run has set, so
+        // conditional widgets show as the game would show them.
+        let play_flags = self.play.game.state.flags.clone();
         let mut play_actions = ui_play::PlayActions::default();
         let mut game_actions = ui_game::GameActions::default();
         let mut screen_actions = ui_screen::ScreenActions::default();
@@ -1352,7 +1355,7 @@ impl AppHandler for Editor {
                 }
                 if let Some(screen) = screen_ui.preview_screen() {
                     screen_actions.fired =
-                        ui_screen::preview(ctx, screen, &locales, &language);
+                        ui_screen::preview(ctx, screen, &locales, &language, &play_flags);
                 }
                 actions = ui::build(ctx, &mut state);
             });

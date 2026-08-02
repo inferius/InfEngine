@@ -6,6 +6,7 @@
 //! buttons live, which is the only way to find out that the Czech word
 //! for "Continue" does not fit the button someone sized in English.
 
+use infengine_adventure::action::Condition;
 use infengine_adventure::loca::{LanguageChoice, Locales};
 use infengine_adventure::screen::{Align, Screen, ScreenAction, Widget, WidgetKind};
 use glam::Vec2;
@@ -219,6 +220,7 @@ fn widget_list(
                     max: middle + Vec2::new(60.0, 12.0),
                     kind,
                     visible: true,
+            shown_if: None,
                 });
                 *selected = Some(screen.widgets.len() - 1);
                 *dirty = true;
@@ -247,6 +249,33 @@ fn widget_editor(
         ui.label("id");
         *dirty |= ui.text_edit_singleline(&mut widget.id).changed();
         *dirty |= ui.checkbox(&mut widget.visible, "visible").changed();
+    });
+    // The condition: how the interface follows the story. A widget can
+    // wait for a flag - a spell button appears when the scene teaching
+    // the spell sets it.
+    ui.horizontal(|ui| {
+        let mut gated = widget.shown_if.is_some();
+        if ui
+            .checkbox(&mut gated, "only after a flag")
+            .on_hover_text("Shown once the named flag is set; scripts set flags with a Set flag step")
+            .changed()
+        {
+            widget.shown_if = gated.then(|| Condition::Flag(String::new()));
+            *dirty = true;
+        }
+        match widget.shown_if.as_mut() {
+            Some(Condition::Flag(flag)) => {
+                *dirty |= ui.text_edit_singleline(flag).changed();
+            }
+            Some(Condition::Unresolved { call, .. }) => {
+                ui.label(
+                    egui::RichText::new(format!("{call}? (from an import, not runnable)"))
+                        .small()
+                        .color(egui::Color32::from_rgb(255, 180, 100)),
+                );
+            }
+            None => {}
+        }
     });
     ui.horizontal(|ui| {
         ui.label("from");
@@ -398,6 +427,7 @@ pub fn preview(
     screen: &Screen,
     locales: &Locales,
     language: &LanguageChoice,
+    flags: &std::collections::BTreeMap<String, bool>,
 ) -> Option<ScreenAction> {
     let area = ctx.content_rect();
     // Fit the design size into the free area, keeping its proportions -
@@ -425,14 +455,33 @@ pub fn preview(
                 if !widget.visible {
                     continue;
                 }
+                // Unlike the game, the preview draws what a condition
+                // hides - ghosted, tagged with the flag it waits for -
+                // because an author needs to see what exists, not what
+                // one particular save would show.
+                let ghost =
+                    !widget.shown(&|flag| flags.get(flag).copied().unwrap_or(false));
                 let lo = widget.min.min(widget.max);
                 let hi = widget.min.max(widget.max);
                 let bounds = egui::Rect::from_min_max(
                     rect.min + egui::vec2(lo.x * scale, lo.y * scale),
                     rect.min + egui::vec2(hi.x * scale, hi.y * scale),
                 );
-                if let Some(action) = draw_widget(ui, widget, bounds, scale, locales, language) {
+                let action =
+                    draw_widget(ui, widget, bounds, scale, locales, language, ghost);
+                if let Some(action) = action
+                    && !ghost
+                {
                     fired = Some(action);
+                }
+                if ghost && let Some(Condition::Flag(flag)) = &widget.shown_if {
+                    ui.painter().text(
+                        bounds.right_top() + egui::vec2(-2.0, 1.0),
+                        egui::Align2::RIGHT_TOP,
+                        format!("⚑ {flag}"),
+                        egui::FontId::proportional(9.0),
+                        egui::Color32::from_rgb(180, 160, 100),
+                    );
                 }
             }
         });
@@ -446,7 +495,16 @@ fn draw_widget(
     scale: f32,
     locales: &Locales,
     language: &LanguageChoice,
+    ghost: bool,
 ) -> Option<ScreenAction> {
+    let ui = &mut ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(ui.max_rect())
+            .layout(*ui.layout()),
+    );
+    if ghost {
+        ui.set_opacity(0.35);
+    }
     match &widget.kind {
         WidgetKind::Image { image } => {
             // The preview does not upload art; it shows where it goes.

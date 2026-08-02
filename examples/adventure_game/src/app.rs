@@ -43,6 +43,8 @@ pub struct Game {
     step: f32,
     cursor: Vec2,
     status: String,
+    /// Screen art and appearance animation state.
+    screen_fx: ui::ScreenFx,
     /// Set when a screen asks to quit; the window closes next frame.
     quit: bool,
 }
@@ -58,6 +60,7 @@ impl Game {
         Self {
             renderer: None,
             ui: None,
+            screen_fx: ui::ScreenFx::default(),
             audio: AudioSystem::new().ok(),
             host: Host::new(project),
             view: View::default(),
@@ -440,8 +443,9 @@ impl AppHandler for Game {
         if let Some(ui_state) = self.ui.as_mut() {
             let host = &self.host;
             let status = self.status.clone();
+            let fx = &mut self.screen_fx;
             ui_state.run(window.raw(), |ctx| {
-                events = ui::build(ctx, host, &status);
+                events = ui::build(ctx, host, &status, fx);
             });
         }
         if let Some(action) = events.fired {

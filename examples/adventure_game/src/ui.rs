@@ -4,8 +4,13 @@
 //! stacked over the room. Nothing here is an editor panel - a shipped
 //! game shows the game and nothing else.
 
+use std::collections::{HashMap, HashSet};
+
 use infengine_adventure::host::Host;
 use infengine_adventure::screen::{Align, Screen, ScreenAction, WidgetKind};
+
+/// How long a widget that just appeared pops for, in seconds.
+const POP: f32 = 0.45;
 
 /// What the player pressed this frame.
 #[derive(Debug, Default)]
@@ -13,13 +18,36 @@ pub struct UiEvents {
     pub fired: Option<ScreenAction>,
 }
 
+/// The interface's own state between frames.
+///
+/// Screens are data; this is what drawing them accumulates: their art
+/// as textures, and the little clocks behind appearance animations.
+/// When a widget's condition comes true mid-game - a spell learned, a
+/// chapter turned - the widget pops in rather than blinking into
+/// place, which is what tells the player something new arrived.
+#[derive(Default)]
+pub struct ScreenFx {
+    /// Which screen the bookkeeping below is about.
+    screen: String,
+    /// Widgets shown last frame, to notice appearances.
+    seen: HashSet<String>,
+    /// Seconds since each recent appearance, while under [`POP`].
+    pops: HashMap<String, f32>,
+    /// Screen art, loaded the first time a widget wants it. `None`
+    /// records a miss so a broken path is not retried every frame.
+    art: HashMap<String, Option<egui::TextureHandle>>,
+}
+
 /// Draw the game's own interface.
-pub fn build(ctx: &egui::Context, host: &Host, status: &str) -> UiEvents {
+pub fn build(ctx: &egui::Context, host: &Host, status: &str, fx: &mut ScreenFx) -> UiEvents {
     let mut events = UiEvents::default();
     if let Some(screen) = host.active_screen() {
-        events.fired = draw_screen(ctx, screen, host);
+        events.fired = draw_screen(ctx, screen, host, fx);
         return events;
     }
+    fx.screen.clear();
+    fx.seen.clear();
+    fx.pops.clear();
     status_line(ctx, status);
     subtitle(ctx, host);
     events
@@ -81,13 +109,49 @@ fn subtitle(ctx: &egui::Context, host: &Host) {
 }
 
 /// Draw a screen and return whatever was pressed.
-fn draw_screen(ctx: &egui::Context, screen: &Screen, host: &Host) -> Option<ScreenAction> {
+fn draw_screen(
+    ctx: &egui::Context,
+    screen: &Screen,
+    host: &Host,
+    fx: &mut ScreenFx,
+) -> Option<ScreenAction> {
     let area = ctx.content_rect();
     let scale = (area.width() / screen.size.x.max(1.0))
         .min(area.height() / screen.size.y.max(1.0))
         .max(0.05);
     let drawn = egui::vec2(screen.size.x * scale, screen.size.y * scale);
     let origin = area.center() - drawn * 0.5;
+
+    // Which widgets the game shows right now, conditions included.
+    let holds = |flag: &str| host.game.state.flag(flag);
+    let shown: Vec<&infengine_adventure::screen::Widget> = screen
+        .widgets
+        .iter()
+        .filter(|widget| widget.shown(&holds))
+        .collect();
+
+    // Notice appearances. On the first frame of a screen everything is
+    // new, and popping a whole menu open would be noise - so that frame
+    // only records. Pops are for what arrives *while* the player looks:
+    // a script sets a flag, and the button it reveals announces itself.
+    let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
+    for left in fx.pops.values_mut() {
+        *left += dt;
+    }
+    fx.pops.retain(|_, t| *t < POP);
+    let now: HashSet<String> = shown.iter().map(|w| w.id.clone()).collect();
+    if fx.screen == screen.id {
+        for id in now.difference(&fx.seen) {
+            fx.pops.insert(id.clone(), 0.0);
+        }
+    } else {
+        fx.screen = screen.id.clone();
+        fx.pops.clear();
+    }
+    fx.seen = now;
+    if !fx.pops.is_empty() {
+        ctx.request_repaint();
+    }
 
     let mut fired = None;
     egui::Area::new("screen".into())
@@ -103,22 +167,55 @@ fn draw_screen(ctx: &egui::Context, screen: &Screen, host: &Host) -> Option<Scre
                 egui::Color32::from_black_alpha(if screen.overlay { 160 } else { 240 }),
             );
 
-            for widget in &screen.widgets {
-                if !widget.visible {
-                    continue;
-                }
+            for widget in shown {
                 let lo = widget.min.min(widget.max);
                 let hi = widget.min.max(widget.max);
-                let bounds = egui::Rect::from_min_max(
+                let mut bounds = egui::Rect::from_min_max(
                     rect.min + egui::vec2(lo.x * scale, lo.y * scale),
                     rect.min + egui::vec2(hi.x * scale, hi.y * scale),
                 );
-                if let Some(action) = widget_ui(ui, widget, bounds, scale, host) {
+                // The pop: briefly larger, settling to place.
+                let mut boost = 1.0;
+                if let Some(t) = fx.pops.get(&widget.id) {
+                    let eased = 1.0 - (t / POP).clamp(0.0, 1.0);
+                    boost += 0.28 * eased * eased;
+                    bounds = egui::Rect::from_center_size(
+                        bounds.center(),
+                        bounds.size() * boost,
+                    );
+                }
+                if let Some(action) =
+                    widget_ui(ui, widget, bounds, scale * boost, host, &mut fx.art)
+                {
                     fired = Some(action);
                 }
             }
         });
     fired
+}
+
+/// Fetch a widget's art, loading it on first use.
+///
+/// Resolved in the player's text language, the same rule room layers
+/// follow - a note is a picture of words.
+fn art_for<'a>(
+    ctx: &egui::Context,
+    host: &Host,
+    cache: &'a mut HashMap<String, Option<egui::TextureHandle>>,
+    image: &str,
+) -> &'a Option<egui::TextureHandle> {
+    cache.entry(image.to_string()).or_insert_with(|| {
+        let path = host.project.resolve_in(image, &host.language.text);
+        let loaded = image::open(path).ok()?;
+        let rgba = loaded.to_rgba8();
+        let size = [rgba.width() as usize, rgba.height() as usize];
+        let pixels = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+        Some(ctx.load_texture(
+            format!("screen:{image}"),
+            pixels,
+            egui::TextureOptions::NEAREST,
+        ))
+    })
 }
 
 fn widget_ui(
@@ -127,12 +224,15 @@ fn widget_ui(
     bounds: egui::Rect,
     scale: f32,
     host: &Host,
+    art: &mut HashMap<String, Option<egui::TextureHandle>>,
 ) -> Option<ScreenAction> {
     match &widget.kind {
-        // The picture is the backdrop the room draws; a screen's own
-        // art is not uploaded here yet, so its place is left empty
-        // rather than filled with a placeholder the player would see.
-        WidgetKind::Image { .. } => None,
+        WidgetKind::Image { image } => {
+            if let Some(texture) = art_for(ui.ctx(), host, art, image) {
+                egui::Image::new((texture.id(), bounds.size())).paint_at(ui, bounds);
+            }
+            None
+        }
         WidgetKind::Label { line, size, align } => {
             paint(ui, bounds, &text_of(host, line), *size * scale, *align, egui::Color32::WHITE);
             None
