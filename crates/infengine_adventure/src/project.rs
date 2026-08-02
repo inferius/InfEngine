@@ -60,6 +60,18 @@ pub struct Project {
     pub manifest: Option<GameManifest>,
 }
 
+/// `sprites/note.png` and `cs` become `sprites/note.cs.png`.
+///
+/// The tag goes before the extension rather than after the whole name,
+/// so the file keeps its type and a folder listing still sorts every
+/// translation of one picture together.
+fn localised(relative: &str, tag: &str) -> String {
+    match relative.rsplit_once('.') {
+        Some((stem, ext)) => format!("{stem}.{tag}.{ext}"),
+        None => format!("{relative}.{tag}"),
+    }
+}
+
 impl Project {
     /// Open `root`, listing its rooms.
     ///
@@ -168,6 +180,35 @@ impl Project {
         self.root.join(relative)
     }
 
+    /// The file to use for `relative` when playing in `language`.
+    ///
+    /// A translated game is not only translated text. Kyrandia's note
+    /// from Kallak is a picture of handwriting, and the Czech release
+    /// ships a Czech picture - under the same file name as the English
+    /// one, which is how a project ends up with a file called `noteeng`
+    /// holding Czech and nobody noticing.
+    ///
+    /// So a picture may have translations beside it, named by tag:
+    ///
+    /// ```text
+    ///   sprites/note.png       what everyone gets
+    ///   sprites/note.cs.png    what a Czech player gets
+    ///   sprites/note.pt-BR.png
+    /// ```
+    ///
+    /// A language with no picture of its own falls back to the plain
+    /// name rather than to nothing, and a region falls back to its
+    /// language - so `pt-BR` will take `note.pt.png` before giving up.
+    pub fn resolve_in(&self, relative: &str, language: &str) -> PathBuf {
+        for tag in crate::loca::tag::fallbacks(language) {
+            let candidate = self.root.join(localised(relative, &tag));
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+        self.resolve(relative)
+    }
+
     /// Display name of a room file, without directory or suffix.
     pub fn room_label(path: &Path) -> String {
         path.file_name()
@@ -208,6 +249,45 @@ fn list_sheets(root: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_picture_can_be_translated_like_a_line() {
+        // A translated game is not only translated text: Kyrandia's
+        // note from Kallak is a picture of handwriting.
+        let root = std::env::temp_dir().join("infengine_project_localised");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("sprites")).expect("dir");
+        for name in ["note.png", "note.cs.png", "note.pt.png"] {
+            fs::write(root.join("sprites").join(name), b"x").expect("write");
+        }
+
+        let project = Project::open(&root);
+        let pick = |language| {
+            project
+                .resolve_in("sprites/note.png", language)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert_eq!(pick("cs"), "note.cs.png");
+        // No German picture, so everyone's.
+        assert_eq!(pick("de"), "note.png");
+        // A region takes its language's before giving up.
+        assert_eq!(pick("pt-BR"), "note.pt.png");
+        // And case in the tag is not a different language.
+        assert_eq!(pick("CS"), "note.cs.png");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_tag_goes_before_the_extension() {
+        // So the file keeps its type and a folder listing sorts every
+        // translation of one picture together.
+        assert_eq!(localised("sprites/note.png", "cs"), "sprites/note.cs.png");
+        assert_eq!(localised("noextension", "cs"), "noextension.cs");
+    }
 
     fn temp_project(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("adventure_editor_{name}"));

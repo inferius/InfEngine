@@ -74,6 +74,30 @@ pub fn language(tag: &str) -> String {
         .to_string()
 }
 
+/// Tags to try for a language, most specific first.
+///
+/// `pt-BR` should take a Brazilian file when there is one and a plain
+/// Portuguese one when there is not, before falling back to whatever
+/// the project ships for everybody. Dropping straight from the full tag
+/// to nothing would leave a Brazilian player reading English while a
+/// Portuguese translation sat in the folder.
+pub fn fallbacks(tag: &str) -> Vec<String> {
+    let tag = canonical(tag);
+    if tag.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![tag.clone()];
+    let mut parts: Vec<&str> = tag.split('-').collect();
+    while parts.len() > 1 {
+        parts.pop();
+        let shorter = parts.join("-");
+        if !out.contains(&shorter) {
+            out.push(shorter);
+        }
+    }
+    out
+}
+
 /// What a language calls itself, for the languages this engine's
 /// imports have produced so far.
 ///
@@ -177,6 +201,17 @@ mod tests {
         assert_eq!(display_name("pt"), "Português");
         assert_eq!(display_name("pt-BR"), "Português (BR)");
         assert_ne!(display_name("pt"), display_name("pt-BR"));
+    }
+
+    #[test]
+    fn a_region_tries_its_own_files_before_its_languages() {
+        // Dropping straight from the full tag to nothing leaves a
+        // Brazilian player reading English with a Portuguese
+        // translation sitting in the folder.
+        assert_eq!(fallbacks("pt-BR"), vec!["pt-BR", "pt"]);
+        assert_eq!(fallbacks("zh-Hant-CN"), vec!["zh-Hant-CN", "zh-Hant", "zh"]);
+        assert_eq!(fallbacks("cs"), vec!["cs"]);
+        assert!(fallbacks("").is_empty());
     }
 
     #[test]

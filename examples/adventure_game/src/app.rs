@@ -154,7 +154,12 @@ impl Game {
             return Some(*handle);
         }
         let renderer = self.renderer.as_mut()?;
-        let path = self.host.project.resolve(image);
+        // By the text language rather than the voice one: this picks a
+        // picture, and a picture of handwriting is something you read.
+        let path = self
+            .host
+            .project
+            .resolve_in(image, &self.host.language.text);
         match renderer.create_texture_from_file(&path, TextureFilter::Nearest) {
             Ok(handle) => {
                 self.textures.insert(image.to_string(), handle);
