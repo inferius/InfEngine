@@ -81,6 +81,8 @@ pub struct Editor {
     /// The map of the whole game, and its window.
     story_ui: crate::ui_story::StoryUi,
     library_ui: crate::library::LibraryUi,
+    /// The play preview's still: which image, and its texture.
+    play_still: Option<(String, infengine_render::Texture2dHandle)>,
     /// Scene-list thumbnails and summaries, filled a few per frame.
     cards: crate::cards::Cards,
     /// Built when the window opens; dropped when a save changes what it
@@ -182,6 +184,7 @@ impl Editor {
             pictures: Vec::new(),
             story_ui: crate::ui_story::StoryUi::default(),
             library_ui: crate::library::LibraryUi::default(),
+            play_still: None,
             cards: crate::cards::Cards::default(),
             story_cache: None,
             scene_script: None,
@@ -411,6 +414,13 @@ impl Editor {
                 // the audio system grows a handle to hold on to.
                 None => self.status = "music off".into(),
             }
+        }
+        if let Some(image) = request.still {
+            self.play_still = self
+                .renderer
+                .as_mut()
+                .and_then(|renderer| assets::upload_one(renderer, &self.project, &image))
+                .map(|handle| (image, handle));
         }
         if let Some((room, entry)) = request.enter_room {
             self.enter_room_by_id(&room, entry.as_deref());
@@ -1180,6 +1190,17 @@ impl AppHandler for Editor {
             if let Some((position, scale)) = actor {
                 draw::draw_actor(renderer, &self.view, position, scale);
             }
+            // The scene's still goes over everything the room drew,
+            // which is where a script put it.
+            if self.play.active
+                && self.play.still.is_some()
+                && let Some((_, handle)) = self.play_still
+            {
+                draw::draw_still(renderer, &self.room, &self.view, handle);
+            }
+        }
+        if self.play.still.is_none() {
+            self.play_still = None;
         }
 
         // Build the UI, then apply what it asked for after the borrow of

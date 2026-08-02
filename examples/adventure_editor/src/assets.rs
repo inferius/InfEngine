@@ -60,6 +60,16 @@ pub fn texture_for(
     Some(handle)
 }
 
+/// Load one project-relative image, for pictures a scene shows over
+/// itself rather than the room's own layers.
+pub fn upload_one(
+    renderer: &mut Renderer,
+    project: &Project,
+    image: &str,
+) -> Option<Texture2dHandle> {
+    upload(renderer, project, image)
+}
+
 fn upload(
     renderer: &mut Renderer,
     project: &Project,

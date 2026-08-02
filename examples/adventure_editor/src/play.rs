@@ -49,6 +49,8 @@ pub struct Request {
     pub music: Option<Option<String>>,
     /// Animation to show in the room.
     pub animation: Option<String>,
+    /// Image whose texture the host should load for the still.
+    pub still: Option<String>,
     /// Room to load, and where to put the actor.
     pub enter_room: Option<(String, Option<String>)>,
 }
@@ -72,6 +74,9 @@ pub struct PlayMode {
     pub log: VecDeque<String>,
     /// A blocking animation and the time left on it.
     anim_wait: Option<(String, f32)>,
+    /// A picture over the scene, and the seconds left on it. Infinite
+    /// for one that stays until the room changes.
+    pub still: Option<(String, f32)>,
     /// Seconds since the scene started.
     ///
     /// A cutscene is edited against a clock: "the pan starts at four
@@ -99,6 +104,7 @@ impl Default for PlayMode {
             verb: Verb::Walk,
             log: VecDeque::new(),
             anim_wait: None,
+            still: None,
             elapsed: 0.0,
         }
     }
@@ -139,6 +145,7 @@ impl PlayMode {
         self.active = true;
         self.subtitle = None;
         self.anim_wait = None;
+        self.still = None;
         self.elapsed = 0.0;
         self.game.enter(room, None);
         self.note(format!("entered {}", room.id));
@@ -149,6 +156,7 @@ impl PlayMode {
         self.active = false;
         self.subtitle = None;
         self.anim_wait = None;
+        self.still = None;
         self.elapsed = 0.0;
         self.game.runner.stop();
     }
@@ -176,6 +184,9 @@ impl PlayMode {
 
     /// The host loaded the room the game asked for.
     pub fn room_loaded(&mut self, room: &Room, entry: Option<&str>) {
+        // A still without its own clock lasts until the room changes,
+        // which is now.
+        self.still = None;
         self.game.state.enter(room, entry);
         self.game.runner.finish_room_change();
         self.note(format!("entered {}", room.id));
@@ -210,6 +221,12 @@ pub fn tick(
             play.game.runner.finish_speech();
         }
     }
+    if let Some((_, left)) = play.still.as_mut() {
+        *left -= dt;
+        if *left <= 0.0 {
+            play.still = None;
+        }
+    }
     if let Some((id, left)) = play.anim_wait.as_mut() {
         *left -= dt;
         if *left <= 0.0 {
@@ -235,9 +252,12 @@ fn apply(
 ) {
     match event {
         Event::MoveCamera { .. } => {}
-        // The editor's preview does not draw stills yet; saying so in
-        // the log beats quietly showing a scene without them.
-        Event::ShowImage { image, .. } => play.note(format!("image: {image}")),
+        Event::ShowImage { image, seconds } => {
+            play.note(format!("image: {image}"));
+            let left = if seconds > 0.0 { seconds } else { f32::INFINITY };
+            play.still = Some((image.clone(), left));
+            request.still = Some(image);
+        }
         Event::Say { line, speaker } => {
             let text = locales.text(&line, &language.text).to_string();
             // An id with no translation shows as the id. Blanking it

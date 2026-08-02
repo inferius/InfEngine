@@ -168,6 +168,20 @@ pub fn draw_animation_frame(
     );
 }
 
+/// Draw a scene's still: a picture over everything, centred on the
+/// room, at its own size - what the game does when a script shows one.
+pub fn draw_still(renderer: &mut Renderer, room: &Room, view: &View, handle: Texture2dHandle) {
+    let Some((w, h)) = renderer.texture_size(handle) else {
+        return;
+    };
+    let size = Vec2::new(w as f32, h as f32);
+    let center = view.room_to_world(room.size * 0.5);
+    renderer.draw_texture(
+        handle,
+        SpriteInstance::new([center.x, center.y], [size.x, size.y]),
+    );
+}
+
 /// Draw one closed polygon outline in room coordinates.
 fn outline(renderer: &mut Renderer, view: &View, points: &[Vec2], color: [f32; 4]) {
     if points.len() < 2 {
