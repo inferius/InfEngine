@@ -5,4 +5,5 @@
 //! obfuscation are public knowledge, so this module is a reader of a
 //! known format, not an excavation.
 
+pub mod adb;
 pub mod grp;
