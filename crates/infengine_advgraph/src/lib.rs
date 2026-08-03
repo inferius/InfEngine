@@ -167,6 +167,22 @@ pub const ADVENTURE_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        id: "adv_place_item",
+        label: "Place Item",
+        category: "Adventure",
+        inputs: EXEC_IN,
+        outputs: EXEC_OUT,
+        contexts: &[],
+    },
+    NodeKindDef {
+        id: "adv_pick_up",
+        label: "Pick Up Item",
+        category: "Adventure",
+        inputs: EXEC_IN,
+        outputs: EXEC_OUT,
+        contexts: &[],
+    },
+    NodeKindDef {
         id: "adv_set_hand",
         label: "Hold Item",
         category: "Adventure",
@@ -330,6 +346,8 @@ fn kind_of(action: &Action) -> &'static str {
         Action::Give { .. } => "adv_give",
         Action::Take { .. } => "adv_take",
         Action::SetHand { .. } => "adv_set_hand",
+        Action::PlaceItem { .. } => "adv_place_item",
+        Action::PickUp { .. } => "adv_pick_up",
         Action::EnableHotspot { .. } => "adv_enable_hotspot",
         Action::Branch { .. } => "adv_branch",
         Action::Unknown { .. } => "adv_unknown",
@@ -397,6 +415,12 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
             set("value", value.to_string());
         }
         Action::Give { item } | Action::Take { item } => set("item", item.clone()),
+        Action::PlaceItem { item, at } => {
+            set("item", item.clone());
+            set("x", at.x.to_string());
+            set("y", at.y.to_string());
+        }
+        Action::PickUp { item } => set("item", item.clone()),
         // An empty hand is the absence of the parameter, the same way
         // every other optional field works here.
         Action::SetHand { item } => {
@@ -483,6 +507,13 @@ fn read_action(node: &infengine_blueprint::Node) -> Option<Action> {
             value: flag(node, "value"),
         },
         "adv_give" => Action::Give {
+            item: param(node, "item"),
+        },
+        "adv_place_item" => Action::PlaceItem {
+            item: param(node, "item"),
+            at: glam::Vec2::new(number(node, "x"), number(node, "y")),
+        },
+        "adv_pick_up" => Action::PickUp {
             item: param(node, "item"),
         },
         "adv_set_hand" => Action::SetHand {

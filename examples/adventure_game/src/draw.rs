@@ -129,6 +129,27 @@ pub fn actor_sprite(renderer: &mut Renderer, view: &View, look: &ActorFrame<'_>)
 /// Centred in the visible window rather than in the room, because a
 /// still shown during a pan should sit where the player is looking, not
 /// where the room's middle happens to be.
+/// Draw one ground item at its spot.
+pub fn ground_item(renderer: &mut Renderer, view: &View, at: Vec2, handle: Texture2dHandle) {
+    let size = Vec2::splat(infengine_adventure::game::ITEM_SIZE) * view.scale;
+    let centre = view.to_window(at) + size * 0.5;
+    renderer.draw_texture(
+        handle,
+        SpriteInstance::new([centre.x, flip(view, centre.y)], [size.x, size.y]),
+    );
+}
+
+/// Draw the held item beside the cursor, slightly up-left so the
+/// pointer tip stays visible.
+pub fn held_item(renderer: &mut Renderer, view: &View, cursor: Vec2, handle: Texture2dHandle) {
+    let size = Vec2::splat(infengine_adventure::game::ITEM_SIZE) * view.scale;
+    let centre = view.to_window(cursor) - size * 0.4;
+    renderer.draw_texture(
+        handle,
+        SpriteInstance::new([centre.x, flip(view, centre.y)], [size.x, size.y]),
+    );
+}
+
 pub fn still(renderer: &mut Renderer, view: &View, handle: Texture2dHandle) {
     let Some((w, h)) = renderer.texture_size(handle) else {
         return;

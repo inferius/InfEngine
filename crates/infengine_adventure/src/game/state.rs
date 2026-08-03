@@ -21,6 +21,14 @@ use crate::room::Room;
 
 use super::actor::Actor;
 
+/// One item lying on a floor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroundItem {
+    pub item: String,
+    /// Top-left of its sprite, in room pixels.
+    pub at: Vec2,
+}
+
 /// The play state of a game in progress.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GameState {
@@ -45,6 +53,10 @@ pub struct GameState {
     /// Not the inventory; scripts test it with `Condition::Holding`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hand: Option<String>,
+    /// Items lying on floors, by room. World state: they stay where
+    /// they were left when the actor walks away and comes back.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ground: BTreeMap<String, Vec<GroundItem>>,
     /// What the player carries, in the order it was picked up.
     #[serde(default)]
     pub inventory: Vec<String>,
@@ -146,6 +158,29 @@ impl GameState {
 
     pub fn set_flag(&mut self, flag: impl Into<String>, value: bool) {
         self.flags.insert(flag.into(), value);
+    }
+
+    /// Lay an item on a room's floor.
+    pub fn place(&mut self, room: impl Into<String>, item: impl Into<String>, at: Vec2) {
+        self.ground
+            .entry(room.into())
+            .or_default()
+            .push(GroundItem {
+                item: item.into(),
+                at,
+            });
+    }
+
+    /// Take the first matching item off a room's floor.
+    pub fn take_ground(&mut self, room: &str, item: &str) -> Option<GroundItem> {
+        let items = self.ground.get_mut(room)?;
+        let index = items.iter().position(|g| g.item == item)?;
+        Some(items.remove(index))
+    }
+
+    /// What lies on a room's floor.
+    pub fn ground_in(&self, room: &str) -> &[GroundItem] {
+        self.ground.get(room).map(Vec::as_slice).unwrap_or(&[])
     }
 
     pub fn has(&self, item: &str) -> bool {

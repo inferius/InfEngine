@@ -400,9 +400,47 @@ impl AppHandler for Game {
             )
         });
 
+        // Items lying in this room, with their art fetched on first
+        // sight. The icon convention is items/<id>.png, project-wide.
+        let ground: Vec<(String, glam::Vec2)> = self
+            .host
+            .game
+            .state
+            .ground_in(&self.host.room.id)
+            .iter()
+            .map(|g| (g.item.clone(), g.at))
+            .collect();
+        for (item, _) in &ground {
+            item_texture(
+                self.renderer.as_mut(),
+                &self.host.project,
+                &mut self.textures,
+                item,
+            );
+        }
+        let held = self.host.game.state.hand.clone();
+        if let Some(item) = &held {
+            item_texture(
+                self.renderer.as_mut(),
+                &self.host.project,
+                &mut self.textures,
+                item,
+            );
+        }
+
         if let Some(renderer) = self.renderer.as_mut() {
             draw::sync_camera(renderer, &self.view);
             draw::layers(renderer, &self.host.room, &self.view, &self.textures);
+            for (item, at) in &ground {
+                if let Some(&handle) = self.textures.get(&icon_path(item)) {
+                    draw::ground_item(renderer, &self.view, *at, handle);
+                }
+            }
+            if let Some(item) = &held
+                && let Some(&handle) = self.textures.get(&icon_path(item))
+            {
+                draw::held_item(renderer, &self.view, self.cursor, handle);
+            }
             if let Some((animation, index, Some(handle), placed)) = frame {
                 // Where the script said, or where the animation says
                 // about itself - a script placing one is the only
@@ -458,5 +496,29 @@ impl AppHandler for Game {
                 ui.render(device, queue, encoder, view, size);
             });
         }
+    }
+}
+
+
+/// Project-relative path of an item's icon.
+fn icon_path(item: &str) -> String {
+    format!("items/{item}.png")
+}
+
+/// Fetch an item's icon into the texture cache, on first sight.
+fn item_texture(
+    renderer: Option<&mut Renderer>,
+    project: &infengine_adventure::Project,
+    textures: &mut HashMap<String, Texture2dHandle>,
+    item: &str,
+) {
+    let path = icon_path(item);
+    if textures.contains_key(&path) {
+        return;
+    }
+    let Some(renderer) = renderer else { return };
+    let file = project.resolve(&path);
+    if let Ok(handle) = renderer.create_texture_from_file(&file, TextureFilter::Nearest) {
+        textures.insert(path, handle);
     }
 }

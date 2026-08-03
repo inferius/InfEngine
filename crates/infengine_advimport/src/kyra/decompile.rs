@@ -60,6 +60,9 @@ const FN_DELAY_TICKS: i32 = 2;
 const FN_ADD_ITEM: i32 = 105;
 /// Puts an item in the hand, and empties it.
 const FN_SET_HAND: i32 = 14;
+/// Lay an item on this room's floor at a point.
+const FN_ITEM_APPEARS: i32 = 124;
+const FN_DROP_ITEM: i32 = 12;
 const FN_REMOVE_HAND: i32 = 20;
 /// The register scene scripts read the held item from.
 const REG_HAND: i32 = 4;
@@ -319,6 +322,17 @@ fn translate(
         FN_ADD_ITEM => site.args.first().copied().map(|item| Action::Give {
             item: format!("kyra.item{item}"),
         }),
+        // Both place an item on this room's floor at a point; they
+        // differ upstream only in animation flourish.
+        FN_ITEM_APPEARS | FN_DROP_ITEM => {
+            match (site.args.first().copied(), point(&site.args, 1)) {
+                (Some(item), Some(at)) if item >= 0 => Some(Action::PlaceItem {
+                    item: format!("kyra.item{item}"),
+                    at,
+                }),
+                _ => None,
+            }
+        }
         FN_SET_HAND => site.args.first().copied().map(|item| Action::SetHand {
             item: (item >= 0).then(|| format!("kyra.item{item}")),
         }),
@@ -1228,6 +1242,23 @@ mod tests {
         code.extend(compare(2, -1));
         let (on, _, _) = first_branch(branch_around(code, set_flag(1), set_flag(2)));
         assert_eq!(on, Condition::Holding(None));
+    }
+
+    #[test]
+    fn an_item_appearing_on_the_ground_becomes_place_item() {
+        // itemAppearsOnGround(item, x, y): pushed last argument first.
+        let mut code = push(90);
+        code.extend(push(120));
+        code.extend(push(23));
+        code.extend(call(124));
+        let out = decompile("x", &script_with(code, 4, vec![0]));
+        assert_eq!(
+            out.scripts[0].actions.first(),
+            Some(&Action::PlaceItem {
+                item: "kyra.item23".into(),
+                at: Vec2::new(120.0, 90.0),
+            })
+        );
     }
 
     #[test]

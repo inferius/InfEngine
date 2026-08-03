@@ -31,12 +31,17 @@ pub use state::GameState;
 ///
 /// Returned so the host can show it - the status line under the cursor
 /// is this, worked out before the button goes down.
+/// How big a ground item draws and clicks, in room pixels.
+pub const ITEM_SIZE: f32 = 16.0;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Click {
     /// Empty, unreachable space.
     Nothing,
-    /// Bare floor: walk there.
+    /// Bare floor: walk there - and drop the held item, if any.
     Walk { to: Vec2 },
+    /// An item lying on the floor: pick it up, swapping with the hand.
+    Item { item: String, at: Vec2 },
     /// A hotspot, with the script the verb resolves to, if any.
     Hotspot {
         id: String,
@@ -58,6 +63,7 @@ impl Click {
         match self {
             Click::Nothing => String::new(),
             Click::Walk { .. } => "walk".to_string(),
+            Click::Item { item, .. } => format!("take {item}"),
             Click::Hotspot { name, id, verb, .. } => {
                 let what = if name.is_empty() { id } else { name };
                 format!("{} {what}", verb.name())
@@ -179,6 +185,10 @@ impl Game {
     /// that does something should win, or a room becomes impossible to
     /// leave from that side.
     pub fn resolve(&self, room: &Room, point: Vec2, verb: Verb) -> Click {
+        // Items lie on top of everything, so they take the click first.
+        if let Some(click) = self.item_at(room, point) {
+            return click;
+        }
         if let Some(hotspot) = self.state.hotspot_at(room, point) {
             let verb = if verb == Verb::default() {
                 hotspot.default_verb
@@ -227,6 +237,25 @@ impl Game {
     /// Returns what was resolved so the caller can report it. A click
     /// while something is blocked on the host is ignored: a line being
     /// spoken should not be cut short by a stray click on the floor.
+    /// The ground item under a point, if any. Items draw on top of
+    /// scenery, so they win the click over hotspots the same way.
+    fn item_at(&self, room: &Room, point: Vec2) -> Option<Click> {
+        let _ = room;
+        self.state
+            .ground_in(&self.state.room)
+            .iter()
+            .find(|ground| {
+                point.x >= ground.at.x
+                    && point.x <= ground.at.x + ITEM_SIZE
+                    && point.y >= ground.at.y
+                    && point.y <= ground.at.y + ITEM_SIZE
+            })
+            .map(|ground| Click::Item {
+                item: ground.item.clone(),
+                at: ground.at,
+            })
+    }
+
     pub fn click(&mut self, room: &Room, point: Vec2, verb: Verb) -> Click {
         let click = self.resolve(room, point, verb);
         if self.runner.is_blocked() {
@@ -243,7 +272,25 @@ impl Game {
     fn actions_for(&self, room: &Room, click: &Click) -> Vec<Action> {
         match click {
             Click::Nothing => Vec::new(),
-            Click::Walk { to } => vec![Action::Walk { to: *to }],
+            // Walking with a full hand is how a thing is put down: go
+            // there, lay it where clicked, and the hand is free.
+            Click::Walk { to } => match self.state.hand.clone() {
+                Some(item) => vec![
+                    Action::Walk { to: *to },
+                    Action::PlaceItem {
+                        item,
+                        at: *to - glam::Vec2::new(ITEM_SIZE * 0.5, ITEM_SIZE),
+                    },
+                    Action::SetHand { item: None },
+                ],
+                None => vec![Action::Walk { to: *to }],
+            },
+            Click::Item { item, at } => vec![
+                Action::Walk {
+                    to: *at + glam::Vec2::new(ITEM_SIZE * 0.5, ITEM_SIZE),
+                },
+                Action::PickUp { item: item.clone() },
+            ],
             Click::Hotspot { id, script, .. } => {
                 let Some(hotspot) = room.hotspots.iter().find(|h| &h.id == id) else {
                     return Vec::new();
@@ -296,6 +343,51 @@ mod tests {
     /// A room where a clickable thing sits on top of a doorway, which
     /// is what an imported game looks like: the things come from
     /// bytecode and the doors are strips along the room's edge.
+    #[test]
+    fn a_ground_item_takes_the_click_and_swaps_with_the_hand() {
+        let room = room();
+        let mut game = Game::default();
+        game.state.enter(&room, None);
+        game.state.place("hall", "kyra.item5", Vec2::new(120.0, 40.0));
+
+        // Over the painting hotspot, but the item lies on top.
+        let click = game.resolve(&room, Vec2::new(125.0, 45.0), Verb::Walk);
+        assert!(matches!(&click, Click::Item { item, .. } if item == "kyra.item5"));
+
+        // The composed gesture: walk under it, then the atomic swap.
+        let actions = game.actions_for(&room, &click);
+        assert!(matches!(actions.last(), Some(Action::PickUp { .. })));
+
+        // The swap itself, straight through the runner's rules.
+        game.state.hand = Some("kyra.item9".into());
+        game.runner.start_actions(vec![Action::PickUp {
+            item: "kyra.item5".into(),
+        }]);
+        game.step(&room, 0.016);
+        assert_eq!(game.state.hand.as_deref(), Some("kyra.item5"));
+        let ground = game.state.ground_in("hall");
+        assert_eq!(ground.len(), 1);
+        assert_eq!(ground[0].item, "kyra.item9");
+        assert_eq!(ground[0].at, Vec2::new(120.0, 40.0), "left where the other lay");
+    }
+
+    #[test]
+    fn walking_with_a_full_hand_lays_the_item_down() {
+        let room = room();
+        let mut game = Game::default();
+        game.state.enter(&room, None);
+        game.state.hand = Some("kyra.item3".into());
+
+        let click = game.resolve(&room, Vec2::new(50.0, 150.0), Verb::Walk);
+        let actions = game.actions_for(&room, &click);
+        assert!(
+            matches!(actions.first(), Some(Action::Walk { .. })),
+            "{actions:?}"
+        );
+        assert!(matches!(&actions[1], Action::PlaceItem { item, .. } if item == "kyra.item3"));
+        assert_eq!(actions.last(), Some(&Action::SetHand { item: None }));
+    }
+
     fn room_with_overlap(script: bool) -> Room {
         let mut room = Room::new("cave", Vec2::new(320.0, 200.0));
         room.walk

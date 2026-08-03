@@ -102,6 +102,17 @@ pub enum Action {
     Give { item: String },
     /// Remove one.
     Take { item: String },
+    /// Put an item on this room's floor.
+    ///
+    /// Ground items are world state, not scenery: they can be picked
+    /// up, swapped against the hand, and dropped somewhere else.
+    PlaceItem { item: String, at: Vec2 },
+    /// Swap the hand with an item lying in this room.
+    ///
+    /// An empty hand just takes it; a full one leaves the held item
+    /// where the picked one lay. One action, so the swap cannot be
+    /// interrupted halfway.
+    PickUp { item: String },
     /// Put an item in the actor's hand, or empty it.
     ///
     /// The hand is not the inventory: it is the one item the player is
@@ -208,6 +219,10 @@ impl Action {
             Action::SetFlag { flag, value } => format!("set {flag} = {value}"),
             Action::Give { item } => format!("give {item}"),
             Action::Take { item } => format!("take {item}"),
+            Action::PlaceItem { item, at } => {
+                format!("put {item} at {:.0},{:.0}", at.x, at.y)
+            }
+            Action::PickUp { item } => format!("pick up {item}"),
             Action::SetHand { item: Some(item) } => format!("hold {item}"),
             Action::SetHand { item: None } => "empty the hand".into(),
             Action::EnableHotspot { hotspot, enabled } => {

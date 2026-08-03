@@ -326,6 +326,20 @@ impl Runner {
                 }
             }
             Action::SetHand { item } => state.hand = item.clone(),
+            Action::PlaceItem { item, at } => {
+                let room = state.room.clone();
+                state.place(room, item.clone(), *at);
+            }
+            Action::PickUp { item } => {
+                let room = state.room.clone();
+                if let Some(ground) = state.take_ground(&room, item) {
+                    // A full hand leaves its item where this one lay -
+                    // the classic swap, atomic on purpose.
+                    if let Some(held) = state.hand.replace(ground.item) {
+                        state.place(room, held, ground.at);
+                    }
+                }
+            }
             Action::Unknown { call, .. } => events.push(Event::Skipped { call: call.clone() }),
         }
     }
