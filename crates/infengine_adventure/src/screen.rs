@@ -190,7 +190,11 @@ impl Widget {
             Some(Condition::Flag(flag)) => flag_holds(flag),
             // A screen only sees the flags; a condition it cannot ask
             // holds never, the same reading a branch gives it.
-            Some(Condition::Holding(_)) | Some(Condition::Unresolved { .. }) => false,
+            Some(
+                Condition::Holding(_)
+                | Condition::ClickPastActor
+                | Condition::Unresolved { .. },
+            ) => false,
         }
     }
 }

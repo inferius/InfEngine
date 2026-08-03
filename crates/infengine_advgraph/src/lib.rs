@@ -441,6 +441,7 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
             // from "no condition written yet".
             Condition::Holding(Some(item)) => set("held", item.clone()),
             Condition::Holding(None) => set("empty_hand", "true".into()),
+            Condition::ClickPastActor => set("click_past", "true".into()),
             Condition::Unresolved { call, args } => {
                 set("call", call.clone());
                 if !args.is_empty() {
@@ -567,6 +568,9 @@ fn condition_of(node: &infengine_blueprint::Node) -> Condition {
     }
     if node.params.contains_key("empty_hand") {
         return Condition::Holding(None);
+    }
+    if node.params.contains_key("click_past") {
+        return Condition::ClickPastActor;
     }
     let call = param(node, "call");
     if call.is_empty() {

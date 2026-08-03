@@ -158,6 +158,12 @@ pub enum Condition {
     Flag(String),
     /// What the actor's hand holds: a particular item, or nothing.
     Holding(Option<String>),
+    /// Whether the last click fell at or past the actor, left to right.
+    ///
+    /// Imported scripts ask this to react to the player's intent - a
+    /// character stepping aside the way you clicked. Holds only while
+    /// a click is being carried out.
+    ClickPastActor,
     /// A test the import could not express.
     ///
     /// False at run time, so the branch takes its `otherwise` side, and
@@ -176,13 +182,17 @@ impl Condition {
             Condition::Flag(flag) => flag.clone(),
             Condition::Holding(Some(item)) => format!("holding {item}"),
             Condition::Holding(None) => "empty-handed".into(),
+            Condition::ClickPastActor => "clicked right of the actor".into(),
             Condition::Unresolved { call, .. } => format!("{call}?"),
         }
     }
 
     /// Is this a question we can actually answer?
     pub fn is_resolved(&self) -> bool {
-        matches!(self, Condition::Flag(_) | Condition::Holding(_))
+        matches!(
+            self,
+            Condition::Flag(_) | Condition::Holding(_) | Condition::ClickPastActor
+        )
     }
 }
 

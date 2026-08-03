@@ -261,6 +261,7 @@ impl Game {
         if self.runner.is_blocked() {
             return click;
         }
+        self.state.click = Some(point);
         let actions = self.actions_for(room, &click);
         if !actions.is_empty() {
             self.runner.start_actions(actions);
@@ -369,6 +370,45 @@ mod tests {
         assert_eq!(ground.len(), 1);
         assert_eq!(ground[0].item, "kyra.item9");
         assert_eq!(ground[0].at, Vec2::new(120.0, 40.0), "left where the other lay");
+    }
+
+    #[test]
+    fn the_click_side_condition_answers_from_the_remembered_click() {
+        let room = room();
+        let mut game = Game::default();
+        game.state.enter(&room, None);
+        game.state.actor.position = Vec2::new(100.0, 150.0);
+
+        // A click right of the actor takes the then side...
+        game.click(&room, Vec2::new(200.0, 150.0), Verb::Walk);
+        game.runner.stop();
+        game.runner.start_actions(vec![Action::Branch {
+            on: crate::action::Condition::ClickPastActor,
+            then: vec![Action::SetFlag {
+                flag: "right".into(),
+                value: true,
+            }],
+            otherwise: vec![Action::SetFlag {
+                flag: "left".into(),
+                value: true,
+            }],
+        }]);
+        game.step(&room, 0.016);
+        assert!(game.state.flag("right"));
+
+        // ...and one to the left, the other.
+        game.click(&room, Vec2::new(20.0, 150.0), Verb::Walk);
+        game.runner.stop();
+        game.runner.start_actions(vec![Action::Branch {
+            on: crate::action::Condition::ClickPastActor,
+            then: vec![],
+            otherwise: vec![Action::SetFlag {
+                flag: "left".into(),
+                value: true,
+            }],
+        }]);
+        game.step(&room, 0.016);
+        assert!(game.state.flag("left"));
     }
 
     #[test]

@@ -312,6 +312,9 @@ impl Runner {
                 let yes = match on {
                     crate::action::Condition::Flag(flag) => state.flag(flag),
                     crate::action::Condition::Holding(item) => state.hand == *item,
+                    crate::action::Condition::ClickPastActor => state
+                        .click
+                        .is_some_and(|click| click.x >= state.actor.position.x),
                     crate::action::Condition::Unresolved { call, .. } => {
                         events.push(Event::Skipped { call: call.clone() });
                         false

@@ -53,6 +53,12 @@ pub struct GameState {
     /// Not the inventory; scripts test it with `Condition::Holding`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hand: Option<String>,
+    /// Where the last click landed, while its actions run.
+    ///
+    /// Scripts branch on where the player pointed relative to the
+    /// actor; the point has to survive from the click into the script.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click: Option<Vec2>,
     /// Items lying on floors, by room. World state: they stay where
     /// they were left when the actor walks away and comes back.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

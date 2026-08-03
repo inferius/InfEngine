@@ -68,6 +68,8 @@ const FN_REMOVE_HAND: i32 = 20;
 const REG_HAND: i32 = 4;
 /// Asks whether a story flag is set. A condition, not a step.
 const FN_QUERY_FLAG: i32 = 4;
+/// Answers where the player character stands, on x.
+const FN_GET_CHAR_X: i32 = 56;
 /// Turns a character to face a direction.
 const FN_SET_FACING: i32 = 58;
 /// Which argument of [`FN_SET_FACING`] is the direction.
@@ -563,6 +565,7 @@ impl Pass<'_> {
         let mut flip = false;
         let mut constant: Option<i32> = None;
         let mut compare: Option<(i32, i32)> = None;
+        let mut lone_eval: Option<i32> = None;
         for previous in &self.instructions[call + 1..at] {
             match previous.op {
                 Op::AddStack | Op::PopFrameNeg | Op::PushFrameNeg | Op::PopReturn => {}
@@ -587,11 +590,14 @@ impl Pass<'_> {
                     Some(value) if constant.is_none() => constant = Some(value),
                     _ => return (unresolved_condition(site.as_ref()), false),
                 },
-                Op::Eval => match (previous.operand, constant.take(), compare) {
-                    (Some(op), Some(value), None) => compare = Some((op, value)),
-                    // An Eval with no constant of its own is joining
-                    // conditions (and/or); one question at a time is
-                    // as far as this reads.
+                Op::Eval => match (previous.operand, constant.take(), compare, lone_eval) {
+                    (Some(op), Some(value), None, _) => compare = Some((op, value)),
+                    // An Eval with nothing pushed between the call and
+                    // itself compares the answer against something from
+                    // before the call - the click-versus-actor idiom.
+                    // Remembered; whether it reads depends on what that
+                    // something was.
+                    (Some(op), None, None, None) => lone_eval = Some(op),
                     _ => return (unresolved_condition(site.as_ref()), false),
                 },
                 _ => return (unresolved_condition(site.as_ref()), false),
@@ -629,6 +635,20 @@ impl Pass<'_> {
         }
         let site = site.expect("a call site when no register was the source");
 
+        // "Is the click at or past the actor": the click's x, pushed
+        // before the call, at-least-compared against the actor's x.
+        // The two forms carry the click the two ways the engine hands
+        // it over - register 1 in room scripts, the first local in the
+        // hit-test entries - measured at 91 sites each, and no other
+        // shape uses a lone comparison here.
+        if compare.is_none()
+            && lone_eval == Some(5)
+            && site.function == FN_GET_CHAR_X
+            && self.click_x_before(call)
+        {
+            return (Condition::ClickPastActor, flip);
+        }
+
         let flag = (site.function == FN_QUERY_FLAG)
             .then(|| site.args.first().map(|flag| format!("kyra.flag{flag}")))
             .flatten();
@@ -647,6 +667,22 @@ impl Pass<'_> {
                 flip,
             ),
         }
+    }
+
+    /// Whether the value pushed just before a call's own arguments is
+    /// the click's x: register 1, or the hit-test's first local.
+    fn click_x_before(&self, call: usize) -> bool {
+        let mut back = call;
+        while back > 0 {
+            back -= 1;
+            let previous = self.instructions[back];
+            match previous.op {
+                Op::Push | Op::PushAlt | Op::JumpOrConst | Op::Eval => continue,
+                Op::PushReg | Op::PushFrame => return previous.operand == Some(1),
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Add one call as a step, or count why it is not one.
@@ -1337,6 +1373,34 @@ mod tests {
                 Action::SetHand { item: None },
             ]
         );
+    }
+
+    #[test]
+    fn click_versus_character_x_reads_as_click_past_actor() {
+        for push_click in [vec![0x40 | 5, 1], vec![0x40 | 7, 1]] {
+            // Register 1 in room scripts, the first local in hit-test
+            // entries: both carry the click's x.
+            let mut code = push_click;
+            code.extend(push(0));
+            code.extend(call(FN_GET_CHAR_X as u16));
+            code.extend(vec![0x40 | 12, 1, 0x40 | 2, 0, 0x40 | 17, 5]);
+            let (on, then, otherwise) =
+                first_branch(branch_around(code, set_flag(1), set_flag(2)));
+            assert_eq!(on, Condition::ClickPastActor);
+            assert_eq!((then, otherwise), (1, 2));
+        }
+    }
+
+    #[test]
+    fn a_lone_comparison_from_elsewhere_stays_unresolved() {
+        // The same shape but fed from register 2 is not the click's x,
+        // and pretending it is would run the wrong side of the story.
+        let mut code = vec![0x40 | 5, 2];
+        code.extend(push(0));
+        code.extend(call(FN_GET_CHAR_X as u16));
+        code.extend(vec![0x40 | 12, 1, 0x40 | 2, 0, 0x40 | 17, 5]);
+        let (on, _, _) = first_branch(branch_around(code, set_flag(1), set_flag(2)));
+        assert!(matches!(on, Condition::Unresolved { .. }), "{on:?}");
     }
 
     #[test]
