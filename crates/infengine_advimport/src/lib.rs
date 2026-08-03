@@ -22,6 +22,7 @@
 pub mod ogg;
 pub mod wav;
 pub mod bm;
+pub mod bm1;
 pub mod encoding;
 pub mod kyra;
 pub mod report;
