@@ -154,8 +154,18 @@ pub fn still(renderer: &mut Renderer, view: &View, handle: Texture2dHandle) {
     let Some((w, h)) = renderer.texture_size(handle) else {
         return;
     };
-    let size = Vec2::new(w as f32, h as f32) * view.scale;
-    let centre_room = view.camera + view.visible() * 0.5;
+    let image = Vec2::new(w as f32, h as f32);
+    let size = image * view.scale;
+    let visible = view.visible();
+    // A picture bigger than the window is scenery: anchored to the
+    // room, so a camera move actually travels across it - the intro's
+    // sky scrolls down to the island. One that fits is a card, centred
+    // on whatever the camera happens to show.
+    let centre_room = if image.x > visible.x + 0.5 || image.y > visible.y + 0.5 {
+        image * 0.5
+    } else {
+        view.camera + visible * 0.5
+    };
     let centre = view.to_window(centre_room);
     renderer.draw_texture(
         handle,

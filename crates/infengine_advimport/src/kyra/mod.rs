@@ -447,15 +447,17 @@ pub fn import_pak(
             let rel = format!("{ANIM_DIR}/{id}.png");
             write_png(&out_dir.join(&rel), sheet.0, sheet.1, &sheet.2)?;
             let frame = group.first().map(|f| (f.width, f.height)).unwrap_or((1, 1));
-            animations.insert(
-                Animation::new(
-                    &id,
-                    &rel,
-                    group.len() as u32,
-                    Vec2::new(frame.0 as f32, frame.1 as f32),
-                )
-                .in_room(&name),
-            );
+            let mut cut = Animation::new(
+                &id,
+                &rel,
+                group.len() as u32,
+                Vec2::new(frame.0 as f32, frame.1 as f32),
+            )
+            .in_room(&name);
+            // Cutscene pieces play once and hold; the ambient loops
+            // come from the room scripts, which say so themselves.
+            cut.looping = false;
+            animations.insert(cut);
             report.images += 1;
             report.animations += 1;
             report.frames += group.len();
@@ -929,6 +931,10 @@ fn export_animations(
             Vec2::new(animation.width as f32, animation.height as f32),
         );
         entry.columns = animation.sheet_columns();
+        // A film strip from the original plays start to end, once. What
+        // should repeat is marked so by whoever plays it, not by the
+        // file.
+        entry.looping = false;
         animations.insert(entry);
         report.images += 1;
         report.animations += 1;
