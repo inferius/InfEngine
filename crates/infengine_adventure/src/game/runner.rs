@@ -240,7 +240,7 @@ impl Runner {
                 });
             }
             Action::Walk { to } => {
-                if state.actor.walk_to(&room.walk, *to) {
+                if state.actor.walk_to(&state.walk_area(room), *to) {
                     self.block = Some(Block::Walking);
                 }
             }
@@ -329,6 +329,16 @@ impl Runner {
                 }
             }
             Action::SetHand { item } => state.hand = item.clone(),
+            Action::OpenFloor { min, max, open } => {
+                let room = state.room.clone();
+                state.floor.entry(room).or_default().push(
+                    crate::game::state::FloorChange {
+                        min: *min,
+                        max: *max,
+                        open: *open,
+                    },
+                );
+            }
             Action::PlaceItem { item, at } => {
                 let room = state.room.clone();
                 state.place(room, item.clone(), *at);

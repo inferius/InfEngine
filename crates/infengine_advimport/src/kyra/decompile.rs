@@ -63,6 +63,9 @@ const FN_SET_HAND: i32 = 14;
 /// Lay an item on this room's floor at a point.
 const FN_ITEM_APPEARS: i32 = 124;
 const FN_DROP_ITEM: i32 = 12;
+/// Open a rectangle of floor to walking, and block one off.
+const FN_FLOOR_OPEN: i32 = 9;
+const FN_FLOOR_BLOCK: i32 = 10;
 const FN_REMOVE_HAND: i32 = 20;
 /// The register scene scripts read the held item from.
 const REG_HAND: i32 = 4;
@@ -329,6 +332,19 @@ fn translate(
         FN_ADD_ITEM => site.args.first().copied().map(|item| Action::Give {
             item: format!("kyra.item{item}"),
         }),
+        // The drawbridge pair: a rectangle of floor opened to walking,
+        // or blocked off. Anything past the four corners is stack
+        // spillover from the surrounding expression, not geometry.
+        FN_FLOOR_OPEN | FN_FLOOR_BLOCK => {
+            match (point(&site.args, 0), point(&site.args, 2)) {
+                (Some(min), Some(max)) => Some(Action::OpenFloor {
+                    min,
+                    max,
+                    open: site.function == FN_FLOOR_OPEN,
+                }),
+                _ => None,
+            }
+        }
         // Both place an item on this room's floor at a point; they
         // differ upstream only in animation flourish.
         FN_ITEM_APPEARS | FN_DROP_ITEM => {
@@ -1338,6 +1354,25 @@ mod tests {
             }),
             "{:?}",
             out.scripts[0].actions
+        );
+    }
+
+    #[test]
+    fn the_drawbridge_pair_becomes_open_floor() {
+        // blockInWalkableRegion(x1, y1, x2, y2), pushed last first.
+        let mut code = push(119);
+        code.extend(push(106));
+        code.extend(push(108));
+        code.extend(push(70));
+        code.extend(call(FN_FLOOR_OPEN as u16));
+        let out = decompile("cgate", &script_with(code, 4, vec![0]));
+        assert_eq!(
+            out.scripts[0].actions.first(),
+            Some(&Action::OpenFloor {
+                min: Vec2::new(70.0, 108.0),
+                max: Vec2::new(106.0, 119.0),
+                open: true,
+            })
         );
     }
 

@@ -167,6 +167,14 @@ pub const ADVENTURE_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        id: "adv_open_floor",
+        label: "Open/Block Floor",
+        category: "Adventure",
+        inputs: EXEC_IN,
+        outputs: EXEC_OUT,
+        contexts: &[],
+    },
+    NodeKindDef {
         id: "adv_place_item",
         label: "Place Item",
         category: "Adventure",
@@ -347,6 +355,7 @@ fn kind_of(action: &Action) -> &'static str {
         Action::Take { .. } => "adv_take",
         Action::SetHand { .. } => "adv_set_hand",
         Action::PlaceItem { .. } => "adv_place_item",
+        Action::OpenFloor { .. } => "adv_open_floor",
         Action::PickUp { .. } => "adv_pick_up",
         Action::EnableHotspot { .. } => "adv_enable_hotspot",
         Action::Branch { .. } => "adv_branch",
@@ -419,6 +428,13 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
             set("item", item.clone());
             set("x", at.x.to_string());
             set("y", at.y.to_string());
+        }
+        Action::OpenFloor { min, max, open } => {
+            set("x1", min.x.to_string());
+            set("y1", min.y.to_string());
+            set("x2", max.x.to_string());
+            set("y2", max.y.to_string());
+            set("open", open.to_string());
         }
         Action::PickUp { item } => set("item", item.clone()),
         // An empty hand is the absence of the parameter, the same way
@@ -509,6 +525,11 @@ fn read_action(node: &infengine_blueprint::Node) -> Option<Action> {
         },
         "adv_give" => Action::Give {
             item: param(node, "item"),
+        },
+        "adv_open_floor" => Action::OpenFloor {
+            min: glam::Vec2::new(number(node, "x1"), number(node, "y1")),
+            max: glam::Vec2::new(number(node, "x2"), number(node, "y2")),
+            open: param(node, "open") == "true",
         },
         "adv_place_item" => Action::PlaceItem {
             item: param(node, "item"),

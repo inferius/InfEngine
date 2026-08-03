@@ -122,6 +122,14 @@ pub enum Action {
     SetHand { item: Option<String> },
     /// Show or hide a hotspot.
     EnableHotspot { hotspot: String, enabled: bool },
+    /// Change this room's floor: open a rectangle up to walking, or
+    /// block one off.
+    ///
+    /// The drawbridge instruction. Floors are authored, but a story
+    /// lowers bridges and floods pits, and that has to be a step a
+    /// script can take - as world state, so it survives leaving the
+    /// room and loading a save.
+    OpenFloor { min: Vec2, max: Vec2, open: bool },
     /// Take one of two paths.
     Branch {
         on: Condition,
@@ -235,6 +243,8 @@ impl Action {
             Action::PickUp { item } => format!("pick up {item}"),
             Action::SetHand { item: Some(item) } => format!("hold {item}"),
             Action::SetHand { item: None } => "empty the hand".into(),
+            Action::OpenFloor { open: true, .. } => "open the floor".into(),
+            Action::OpenFloor { open: false, .. } => "block the floor".into(),
             Action::EnableHotspot { hotspot, enabled } => {
                 format!("{} {hotspot}", if *enabled { "enable" } else { "disable" })
             }

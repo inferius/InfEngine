@@ -29,6 +29,15 @@ pub struct GroundItem {
     pub at: Vec2,
 }
 
+/// One script-made change to a room's floor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FloorChange {
+    pub min: Vec2,
+    pub max: Vec2,
+    /// Opened up to walking, or blocked off.
+    pub open: bool,
+}
+
 /// The play state of a game in progress.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GameState {
@@ -63,6 +72,10 @@ pub struct GameState {
     /// they were left when the actor walks away and comes back.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ground: BTreeMap<String, Vec<GroundItem>>,
+    /// Floor changed by scripts, by room: bridges lowered, pits
+    /// flooded. Applied over the authored floor, in order.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub floor: BTreeMap<String, Vec<FloorChange>>,
     /// What the player carries, in the order it was picked up.
     #[serde(default)]
     pub inventory: Vec<String>,
@@ -187,6 +200,26 @@ impl GameState {
     /// What lies on a room's floor.
     pub fn ground_in(&self, room: &str) -> &[GroundItem] {
         self.ground.get(room).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// The room's floor with every script-made change applied.
+    ///
+    /// Borrowed untouched in the common case of no changes, so walking
+    /// costs nothing extra in rooms no script has remodelled.
+    pub fn walk_area<'a>(&self, room: &'a Room) -> std::borrow::Cow<'a, crate::walk::WalkArea> {
+        let Some(changes) = self.floor.get(&room.id).filter(|c| !c.is_empty()) else {
+            return std::borrow::Cow::Borrowed(&room.walk);
+        };
+        let mut walk = room.walk.clone();
+        for change in changes {
+            let rect = crate::walk::Polygon::rect(change.min, change.max);
+            if change.open {
+                walk.solids.push(rect);
+            } else {
+                walk.holes.push(rect);
+            }
+        }
+        std::borrow::Cow::Owned(walk)
     }
 
     pub fn has(&self, item: &str) -> bool {
@@ -429,5 +462,43 @@ mod tests {
         let text = ron::ser::to_string(&state).expect("serialise");
         let back: GameState = ron::from_str(&text).expect("deserialise");
         assert_eq!(back, state);
+    }
+}
+#[cfg(test)]
+mod floor_tests {
+    use super::*;
+
+    #[test]
+    fn a_script_made_bridge_is_walkable_and_a_blocked_pit_is_not() {
+        let mut room = Room::new("chasm", Vec2::new(320.0, 200.0));
+        room.walk.solids.push(crate::walk::Polygon::rect(
+            Vec2::new(0.0, 100.0),
+            Vec2::new(100.0, 200.0),
+        ));
+        let mut state = GameState::default();
+        state.enter(&room, None);
+
+        // Beyond the authored floor, until the bridge lowers.
+        assert!(!state.walk_area(&room).contains(Vec2::new(150.0, 150.0)));
+        state.floor.entry("chasm".into()).or_default().push(FloorChange {
+            min: Vec2::new(100.0, 140.0),
+            max: Vec2::new(200.0, 160.0),
+            open: true,
+        });
+        assert!(state.walk_area(&room).contains(Vec2::new(150.0, 150.0)));
+
+        // And the reverse: the authored floor, blocked off.
+        state.floor.entry("chasm".into()).or_default().push(FloorChange {
+            min: Vec2::new(20.0, 120.0),
+            max: Vec2::new(40.0, 140.0),
+            open: false,
+        });
+        assert!(!state.walk_area(&room).contains(Vec2::new(30.0, 130.0)));
+        // A room nothing touched borrows the floor as it was authored.
+        let other = Room::new("hall", Vec2::new(320.0, 200.0));
+        assert!(matches!(
+            state.walk_area(&other),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 }
