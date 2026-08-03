@@ -42,6 +42,14 @@ pub struct Animation {
     pub frames: u32,
     /// Size of one frame in pixels.
     pub frame_size: Vec2,
+    /// Pixels between neighbouring frames on the sheet, both axes.
+    ///
+    /// Zero for sheets whose frames touch, which is every sheet the
+    /// importer writes. Hand-authored sheets often space their frames
+    /// out for legibility, and without this the cut drifts by one gap
+    /// per frame and the animation slides sideways as it plays.
+    #[serde(default, skip_serializing_if = "vec2_is_zero")]
+    pub gap: Vec2,
     /// Frames across the sheet before it wraps to the next row.
     ///
     /// Zero means one long row, which is what every sheet written
@@ -87,6 +95,11 @@ fn default_true() -> bool {
     true
 }
 
+/// Serde helper: leave the gap out of files that do not use it.
+fn vec2_is_zero(v: &Vec2) -> bool {
+    *v == Vec2::ZERO
+}
+
 impl Animation {
     pub fn new(id: impl Into<String>, image: impl Into<String>, frames: u32, frame_size: Vec2) -> Self {
         Self {
@@ -97,6 +110,7 @@ impl Animation {
             // One row, which is what a sheet is until somebody lays it
             // out otherwise.
             columns: 0,
+            gap: Vec2::ZERO,
             fps: DEFAULT_FPS,
             looping: true,
             room: None,
@@ -161,8 +175,8 @@ impl Animation {
         let index = index.min(self.frames.saturating_sub(1));
         let columns = self.columns();
         let min = Vec2::new(
-            (index % columns) as f32 * self.frame_size.x,
-            (index / columns) as f32 * self.frame_size.y,
+            (index % columns) as f32 * (self.frame_size.x + self.gap.x),
+            (index / columns) as f32 * (self.frame_size.y + self.gap.y),
         );
         (min, min + self.frame_size)
     }
@@ -348,6 +362,20 @@ mod tests {
         assert_eq!(animation.columns(), 4);
         assert_eq!(animation.rows(), 1);
         assert_eq!(animation.frame_rect(3).0, Vec2::new(30.0, 0.0));
+    }
+
+    #[test]
+    fn a_gap_shifts_every_frame_by_its_spacing() {
+        let mut animation = Animation::new("x", "a.png", 4, Vec2::new(10.0, 20.0));
+        animation.columns = 2;
+        animation.gap = Vec2::new(2.0, 3.0);
+        let (min, max) = animation.frame_rect(3);
+        // Second column, second row: one gap each way.
+        assert_eq!(min, Vec2::new(12.0, 23.0));
+        assert_eq!(max, Vec2::new(22.0, 43.0));
+        // And a gapless sheet cuts exactly as before.
+        animation.gap = Vec2::ZERO;
+        assert_eq!(animation.frame_rect(3).0, Vec2::new(10.0, 20.0));
     }
 
     fn river() -> Animation {

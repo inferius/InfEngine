@@ -1446,6 +1446,12 @@ impl AppHandler for Editor {
         if let Some(id) = library_actions.preview {
             self.playback.select(id);
         }
+        if let Some(id) = library_actions.play {
+            match self.project.sounds.get(&id).map(str::to_string) {
+                Some(file) => self.play_file(&file),
+                None => self.status = format!("{id} has no file behind it"),
+            }
+        }
         self.apply_timeline(timeline_actions);
         self.apply_menu(menu_actions);
         self.apply_play_actions(play_actions);

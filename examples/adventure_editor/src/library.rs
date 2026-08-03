@@ -42,6 +42,8 @@ pub struct LibraryActions {
     pub add: Option<Action>,
     /// An animation to preview in the canvas.
     pub preview: Option<String>,
+    /// A sound or track to hear, by its id.
+    pub play: Option<String>,
 }
 
 /// Draw the window. Returns what was asked for.
@@ -232,6 +234,13 @@ fn sounds_shelf(
                     actions.add = Some(Action::PlaySound {
                         sound: name.to_string(),
                     });
+                }
+                if ui
+                    .small_button("Hear")
+                    .on_hover_text("Play it now, in the editor")
+                    .clicked()
+                {
+                    actions.play = Some(name.to_string());
                 }
             });
         });

@@ -21,6 +21,10 @@ pub struct SheetDraft {
     /// Id the animation will get.
     pub id: String,
     pub frame_size: Vec2,
+    /// Pixels between neighbouring frames, both axes.
+    pub gap: Vec2,
+    /// Frames per row; zero means one long row.
+    pub columns: u32,
     pub frames: u32,
     pub fps: f32,
     pub looping: bool,
@@ -38,6 +42,8 @@ impl SheetDraft {
             id: default_id(image),
             image: image.to_string(),
             frame_size,
+            gap: Vec2::ZERO,
+            columns: 0,
             frames,
             fps: 8.0,
             looping: true,
@@ -52,10 +58,21 @@ impl SheetDraft {
     /// frames that would sample past the right edge and come out as
     /// stretched garbage.
     pub fn max_frames(&self) -> u32 {
-        if self.frame_size.x <= 0.0 {
+        if self.frame_size.x <= 0.0 || self.frame_size.y <= 0.0 {
             return 1;
         }
-        ((self.sheet_size.x / self.frame_size.x).floor() as u32).max(1)
+        // With a gap, N frames span N sizes and N-1 gaps - the last
+        // frame does not need a gap after it.
+        let fit = |space: f32, size: f32, gap: f32| {
+            (((space + gap) / (size + gap)).floor() as u32).max(1)
+        };
+        let per_row = fit(self.sheet_size.x, self.frame_size.x, self.gap.x);
+        if self.columns == 0 {
+            return per_row;
+        }
+        let columns = self.columns.min(per_row);
+        let rows = fit(self.sheet_size.y, self.frame_size.y, self.gap.y);
+        (columns * rows).max(1)
     }
 
     /// The animation this draft describes.
@@ -66,6 +83,8 @@ impl SheetDraft {
             self.frames.clamp(1, self.max_frames()),
             self.frame_size,
         );
+        animation.gap = self.gap;
+        animation.columns = self.columns;
         animation.fps = self.fps;
         animation.looping = self.looping;
         animation.room = self.room.clone();
@@ -129,6 +148,21 @@ fn guess_frames(sheet: Vec2) -> (Vec2, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gap_and_a_grid_change_how_many_frames_fit() {
+        let mut draft = SheetDraft::guess("s.png", Vec2::new(100.0, 50.0));
+        draft.frame_size = Vec2::new(20.0, 20.0);
+        draft.gap = Vec2::new(5.0, 5.0);
+        // One row: 4 frames of 20 with 5 between span 95 <= 100.
+        assert_eq!(draft.max_frames(), 4);
+        draft.columns = 4;
+        // Two rows of 20 with 5 between span 45 <= 50.
+        assert_eq!(draft.max_frames(), 8);
+        let animation = draft.to_animation();
+        assert_eq!(animation.gap, Vec2::new(5.0, 5.0));
+        assert_eq!(animation.columns, 4);
+    }
 
     #[test]
     fn a_square_sheet_is_one_square_frame() {

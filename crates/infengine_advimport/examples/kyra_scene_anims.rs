@@ -193,6 +193,7 @@ fn sheet_of(
         frames,
         frame_size: glam::Vec2::new(cell_w as f32, cell_h as f32),
         columns,
+        gap: glam::Vec2::ZERO,
         fps: scene_anim::fps(&anim.frames),
         looping: anim.looping,
         room: Some(room.to_string()),
