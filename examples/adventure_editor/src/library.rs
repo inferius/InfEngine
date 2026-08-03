@@ -14,6 +14,8 @@ use std::collections::HashMap;
 
 use infengine_adventure::{Action, Project};
 
+use crate::timeline::DragAsset;
+
 /// Which shelf is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Shelf {
@@ -140,7 +142,7 @@ fn pictures_shelf(
                     ui.allocate_exact_size(egui::vec2(72.0, 32.0), egui::Sense::hover());
                 }
             }
-            ui.label(name);
+            draggable(ui, name, DragAsset::Image(name.to_string()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .small_button("Add to scene")
@@ -181,7 +183,7 @@ fn animations_shelf(
             continue;
         };
         ui.horizontal(|ui| {
-            ui.label(name);
+            draggable(ui, name, DragAsset::Animation(name.to_string()));
             ui.label(
                 egui::RichText::new(format!("{} frames", animation.frames))
                     .small()
@@ -220,7 +222,7 @@ fn sounds_shelf(
     let names: Vec<&str> = project.sounds.ids().collect();
     for name in shown(&state.filter, names.into_iter()) {
         ui.horizontal(|ui| {
-            ui.label(name);
+            draggable(ui, name, DragAsset::Sound(name.to_string()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .small_button("Add to scene")
@@ -234,6 +236,21 @@ fn sounds_shelf(
             });
         });
     }
+}
+
+/// An asset's name, draggable onto the timeline.
+///
+/// The label is the handle: picking a thing up by its name and putting
+/// it where it should happen is the whole gesture, and the button next
+/// to it stays for anyone who would rather press than drag.
+fn draggable(ui: &mut egui::Ui, name: &str, asset: DragAsset) {
+    let id = egui::Id::new(("library_drag", name));
+    ui.dnd_drag_source(id, asset, |ui| {
+        ui.label(name);
+    })
+    .response
+    .on_hover_cursor(egui::CursorIcon::Grab)
+    .on_hover_text("Drag onto the timeline to add it to the scene");
 }
 
 fn screens_shelf(ui: &mut egui::Ui, state: &LibraryUi, project: &Project) {

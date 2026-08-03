@@ -74,6 +74,10 @@ pub struct Editor {
     scene_script: Option<String>,
     /// How wide a second is drawn.
     timeline_zoom: f32,
+    /// What dragged edges land on.
+    timeline_snap: crate::timeline::Snap,
+    /// A step to scroll the strip to, once - the one just added.
+    timeline_reveal: Option<Vec<usize>>,
     /// The step the timeline has selected.
     timeline_selected: Option<Vec<usize>>,
     /// Scripts changed by dragging, which are saved with the room.
@@ -189,6 +193,11 @@ impl Editor {
             story_cache: None,
             scene_script: None,
             timeline_zoom: settings.timeline_zoom,
+            timeline_snap: crate::timeline::Snap {
+                parts: settings.timeline_snap_parts,
+                time: settings.timeline_snap_time,
+            },
+            timeline_reveal: None,
             timeline_selected: None,
             scripts_dirty: false,
             ui_scale: settings.ui_scale,
@@ -898,9 +907,37 @@ impl Editor {
                 .or_insert_with(|| infengine_adventure::Script::new(id.clone()));
             let landed =
                 crate::timeline::insert_after(&mut script.actions, after.as_deref(), action);
+            self.status = format!(
+                "added {} - it is selected on the timeline",
+                crate::timeline::action_at(&script.actions, &landed)
+                    .map(|a| a.label())
+                    .unwrap_or_default()
+            );
+            self.timeline_reveal = Some(landed.clone());
             self.timeline_selected = Some(landed);
             self.scripts_dirty = true;
             self.dirty = true;
+        }
+        if let Some((from, to)) = actions.reorder
+            && let Some(script) = self.project.scripts.get_mut(&id)
+            && let Some(landed) = crate::timeline::reorder(&mut script.actions, &from, to)
+        {
+            self.timeline_selected = Some(landed);
+            self.scripts_dirty = true;
+            self.dirty = true;
+            self.status = "step moved".into();
+        }
+        if actions.play {
+            let script = self.scene_script_id();
+            self.play.begin(&self.room);
+            if !self.play.game.run_script(&script) {
+                self.status = format!("{script} does not exist yet - add a step first");
+                self.play.end();
+            }
+        }
+        if actions.stop {
+            self.play.end();
+            self.status = "stopped".into();
         }
 
         let mut touched = false;
@@ -1070,6 +1107,8 @@ impl AppHandler for Editor {
         crate::settings::Settings {
             ui_scale: self.ui_scale,
             timeline_zoom: self.timeline_zoom,
+            timeline_snap_parts: self.timeline_snap.parts,
+            timeline_snap_time: self.timeline_snap.time,
         }
         .save();
     }
@@ -1311,6 +1350,8 @@ impl AppHandler for Editor {
             let help_ui = &mut self.help;
             let ui_scale = &mut self.ui_scale;
             let timeline_zoom = &mut self.timeline_zoom;
+            let timeline_snap = &mut self.timeline_snap;
+            let timeline_reveal = self.timeline_reveal.take();
             let story_ui = &mut self.story_ui;
             let library_ui = &mut self.library_ui;
             let story_cache = &self.story_cache;
@@ -1343,7 +1384,9 @@ impl AppHandler for Editor {
                         play.active,
                         play.elapsed,
                         timeline_zoom,
+                        timeline_snap,
                         timeline_selected,
+                        timeline_reveal.as_deref(),
                         scene_detail.as_ref(),
                         &crate::timeline::Pickers {
                             animations: &picker_animations,

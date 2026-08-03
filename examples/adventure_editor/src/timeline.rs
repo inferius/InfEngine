@@ -48,6 +48,56 @@ pub struct TimelineActions {
     pub edit: Option<(Vec<usize>, Action)>,
     /// The selected step, removed.
     pub remove: Option<Vec<usize>>,
+    /// A step dragged to a new place among its siblings.
+    pub reorder: Option<(Vec<usize>, usize)>,
+    /// The play button: run this scene, and stop it.
+    pub play: bool,
+    pub stop: bool,
+}
+
+/// What a dragged bar or edge snaps to. Both are the author's to turn
+/// off - snapping that cannot be escaped is a ruler taped to the hand.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Snap {
+    /// Other steps' starts and ends.
+    pub parts: bool,
+    /// The time grid: tenths when zoomed in, halves otherwise.
+    pub time: bool,
+}
+
+impl Default for Snap {
+    fn default() -> Self {
+        Self { parts: true, time: true }
+    }
+}
+
+/// An asset dragged out of the library, on its way to becoming a step.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DragAsset {
+    Image(String),
+    Sound(String),
+    Animation(String),
+}
+
+impl DragAsset {
+    /// The step dropping this creates, with a usable default.
+    pub fn action(&self) -> Action {
+        match self {
+            DragAsset::Image(image) => Action::ShowImage {
+                image: image.clone(),
+                seconds: 2.0,
+            },
+            DragAsset::Sound(sound) => Action::PlaySound {
+                sound: sound.clone(),
+            },
+            DragAsset::Animation(animation) => Action::PlayAnim {
+                animation: animation.clone(),
+                wait: true,
+                at: None,
+            },
+        }
+    }
+
 }
 
 /// The ids a detail field can offer instead of a blank box.
@@ -70,7 +120,9 @@ pub fn panel(
     playing: bool,
     elapsed: f32,
     zoom: &mut f32,
+    snap: &mut Snap,
     selected: &Option<Vec<usize>>,
+    reveal: Option<&[usize]>,
     detail: Option<&Action>,
     pickers: &Pickers<'_>,
 ) -> TimelineActions {
@@ -79,12 +131,12 @@ pub fn panel(
         .resizable(true)
         .default_height(200.0)
         .show(ctx, |ui| {
-            header(ui, line, playing, elapsed, zoom, selected, pickers, &mut actions);
+            header(ui, line, playing, elapsed, zoom, snap, selected, pickers, &mut actions);
             ui.separator();
             if line.slots.is_empty() {
                 ui.label(
                     egui::RichText::new(
-                        "Nothing to lay out. Play a scene, or Add a first step.",
+                        "Nothing to lay out. Play a scene, add a step, or drag                          something in from the Library.",
                     )
                     .weak(),
                 );
@@ -98,11 +150,20 @@ pub fn panel(
                 };
                 ui.scope(|ui| {
                     ui.set_max_width(strip_width);
+                    // The wheel belongs to zoom here, so the scroll area
+                    // keeps its bars and its drag and gives the wheel up.
                     egui::ScrollArea::both()
                         .id_salt("timeline_scroll")
                         .auto_shrink([false, false])
+                        .scroll_source(egui::containers::scroll_area::ScrollSource {
+                            mouse_wheel: false,
+                            ..Default::default()
+                        })
                         .show(ui, |ui| {
-                            strip(ui, line, playing, elapsed, *zoom, selected, &mut actions);
+                            strip(
+                                ui, line, playing, elapsed, zoom, *snap, selected, reveal,
+                                &mut actions,
+                            );
                         });
                 });
                 if let (Some(action), Some(path)) = (detail, selected.as_ref()) {
@@ -121,29 +182,51 @@ fn header(
     playing: bool,
     elapsed: f32,
     zoom: &mut f32,
+    snap: &mut Snap,
     selected: &Option<Vec<usize>>,
     pickers: &Pickers<'_>,
     actions: &mut TimelineActions,
 ) {
     ui.horizontal(|ui| {
         ui.heading("Timeline");
+        // The scene plays from here: the strip is where it is tuned,
+        // so the button that runs it lives on the strip.
+        if playing {
+            if ui.button("⏹ Stop").clicked() {
+                actions.stop = true;
+            }
+            ui.label(
+                egui::RichText::new(format!("{elapsed:.1}s"))
+                    .monospace()
+                    .strong(),
+            );
+        } else if ui
+            .button("▶ Play")
+            .on_hover_text("Run this scene from the start")
+            .clicked()
+        {
+            actions.play = true;
+        }
         ui.label(
             egui::RichText::new(format!("{:.1}s", line.seconds))
                 .monospace()
                 .weak(),
         );
-        if playing {
-            ui.label(
-                egui::RichText::new(format!("now {elapsed:.1}s"))
-                    .monospace()
-                    .strong(),
-            );
-        }
         add_menu(ui, selected, pickers, actions);
         ui.add(
             egui::Slider::new(zoom, 0.25..=4.0)
                 .show_value(false)
                 .text("zoom"),
+        );
+        ui.label(egui::RichText::new("snap").small().weak());
+        ui.checkbox(&mut snap.parts, "steps")
+            .on_hover_text("Dragged edges land on other steps' starts and ends");
+        ui.checkbox(&mut snap.time, "time")
+            .on_hover_text("Dragged edges land on the time grid");
+        ui.label(
+            egui::RichText::new("wheel zooms · drag a bar to move it · drag from the Library to add")
+                .small()
+                .weak(),
         );
     });
     if !line.untaken.is_empty() {
@@ -230,34 +313,55 @@ fn add_menu(
     .on_hover_text("Put a new step after the selected one");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn strip(
     ui: &mut egui::Ui,
     line: &Timeline,
     playing: bool,
     elapsed: f32,
-    zoom: f32,
+    zoom: &mut f32,
+    snap: Snap,
     selected: &Option<Vec<usize>>,
+    reveal: Option<&[usize]>,
     actions: &mut TimelineActions,
 ) {
     let scale = PER_SECOND * zoom.max(0.05);
-    let width = (line.seconds.max(1.0) * scale + 200.0).max(ui.available_width());
-    let height = ROW * line.slots.len() as f32 + ROW;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-    let painter = ui.painter_at(rect);
+    // Room past the end, so there is always future to scroll into and
+    // drop things onto - a strip exactly as long as its content says
+    // the scene is finished, and no scene is.
+    let width = ((line.seconds.max(1.0) + 30.0) * scale).max(ui.available_width());
+    let height = (ROW * line.slots.len() as f32 + ROW).max(ui.available_height());
+    let (rect, surface) =
+        ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click_and_drag());
+    let painter = ui.painter_at(ui.clip_rect().intersect(rect));
 
-    ruler(&painter, rect, line.seconds, scale, ui.visuals().weak_text_color());
-
-    // Row separators, so a bar and its neighbours read as rows rather
-    // than as marks floating in space.
-    let faint = egui::Color32::from_white_alpha(10);
-    for index in 0..=line.slots.len() {
-        let y = rect.min.y + ROW * (index as f32 + 1.0);
-        painter.line_segment(
-            [egui::pos2(rect.min.x, y), egui::pos2(rect.max.x, y)],
-            egui::Stroke::new(0.5, faint),
-        );
+    // The wheel is zoom, anchored under the pointer: the moment being
+    // looked at stays put while the scale changes around it.
+    if let Some(pointer) = surface.hover_pos() {
+        let scroll = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll != 0.0 {
+            let at = (pointer.x - rect.min.x) / scale;
+            let factor = (scroll * 0.002).exp();
+            let new_zoom = (*zoom * factor).clamp(0.25, 4.0);
+            let shift = at * (PER_SECOND * new_zoom - scale);
+            *zoom = new_zoom;
+            ui.scroll_with_delta(egui::vec2(-shift, 0.0));
+        }
     }
 
+    grid(&painter, rect, scale, line.slots.len());
+    ruler(&painter, rect, scale, ui.visuals().weak_text_color());
+
+    // Where a drag would land: between which rows, after which step.
+    let hover_asset = surface.dnd_hover_payload::<DragAsset>();
+    let dropped_asset = surface.dnd_release_payload::<DragAsset>();
+    let pointer_row = ui
+        .ctx()
+        .pointer_interact_pos()
+        .filter(|p| rect.contains(*p))
+        .map(|p| (((p.y - rect.min.y) / ROW) - 1.0).round().max(0.0) as usize);
+
+    let mut dragging: Option<(usize, &Slot)> = None;
     for (index, slot) in line.slots.iter().enumerate() {
         let top = rect.min.y + ROW * (index as f32 + 1.0);
         let left = rect.min.x + slot.at * scale + slot.depth as f32 * INDENT;
@@ -265,7 +369,58 @@ fn strip(
             egui::pos2(left, top + 2.0),
             egui::vec2((slot.seconds * scale).max(MIN_BAR), ROW - 5.0),
         );
-        draw_bar(ui, &painter, bar, slot, selected, actions);
+        if reveal == Some(slot.path.as_slice()) {
+            ui.scroll_to_rect(bar.expand(24.0), None);
+        }
+        if draw_bar(ui, &painter, bar, slot, scale, snap, line, selected, actions) {
+            dragging = Some((index, slot));
+        }
+    }
+
+    // A bar being dragged shows where it would go, and letting go asks
+    // for the move. Only among its own siblings: an if-branch is a
+    // drawer, and a step does not fall out of one by passing over it.
+    if let (Some((from_index, slot)), Some(row)) = (dragging, pointer_row) {
+        let siblings: Vec<usize> = line
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| parent_of(&s.path) == parent_of(&slot.path))
+            .map(|(i, _)| i)
+            .collect();
+        let mut to = siblings.iter().filter(|&&i| i < row).count();
+        let already = siblings.iter().position(|&i| i == from_index).unwrap_or(0);
+        to = to.min(siblings.len().saturating_sub(1));
+        let caret_row = siblings.get(to).copied().unwrap_or(from_index);
+        let y = rect.min.y
+            + ROW * (caret_row as f32 + 1.0)
+            + if to > already { ROW } else { 0.0 };
+        painter.line_segment(
+            [egui::pos2(rect.min.x, y), egui::pos2(rect.min.x + width, y)],
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 235, 140)),
+        );
+        if ui.input(|i| i.pointer.any_released()) && to != already {
+            actions.reorder = Some((slot.path.clone(), to));
+        }
+    }
+
+    // Something from the library, hovering or landing: a caret under
+    // the row it would follow, and the insertion on release.
+    if hover_asset.is_some() || dropped_asset.is_some() {
+        let after = pointer_row
+            .map(|row| row.min(line.slots.len().saturating_sub(1)))
+            .and_then(|row| line.slots.get(row))
+            .map(|slot| slot.path.clone());
+        if let Some(row) = pointer_row {
+            let y = rect.min.y + ROW * ((row.min(line.slots.len()) as f32) + 2.0);
+            painter.line_segment(
+                [egui::pos2(rect.min.x, y), egui::pos2(rect.min.x + width, y)],
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(150, 230, 150)),
+            );
+        }
+        if let Some(asset) = dropped_asset {
+            actions.insert = Some((after, asset.action()));
+        }
     }
 
     if playing {
@@ -279,17 +434,15 @@ fn strip(
     }
 }
 
-/// Second marks along the top.
-fn ruler(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    seconds: f32,
-    scale: f32,
-    colour: egui::Color32,
-) {
-    // One mark a second while they are far enough apart to read, then
-    // every five, then every ten. A ruler whose numbers overlap is a
-    // smear rather than a scale.
+/// A path is its parent and one more step.
+fn parent_of(path: &[usize]) -> &[usize] {
+    path.split_last().map(|(_, prefix)| prefix).unwrap_or(&[])
+}
+
+/// The faint lines that make the strip read as a grid: seconds down,
+/// rows across.
+fn grid(painter: &egui::Painter, rect: egui::Rect, scale: f32, rows: usize) {
+    let faint = egui::Color32::from_white_alpha(10);
     let step = if scale >= 30.0 {
         1.0
     } else if scale >= 8.0 {
@@ -298,16 +451,44 @@ fn ruler(
         10.0
     };
     let mut at = 0.0f32;
-    while at <= seconds.max(1.0) + step {
+    loop {
         let x = rect.min.x + at * scale;
         if x > rect.max.x {
             break;
         }
         painter.line_segment(
-            [
-                egui::pos2(x, rect.min.y),
-                egui::pos2(x, rect.min.y + ROW * 0.5),
-            ],
+            [egui::pos2(x, rect.min.y + ROW * 0.5), egui::pos2(x, rect.max.y)],
+            egui::Stroke::new(0.5, faint),
+        );
+        at += step;
+    }
+    for index in 0..=rows {
+        let y = rect.min.y + ROW * (index as f32 + 1.0);
+        painter.line_segment(
+            [egui::pos2(rect.min.x, y), egui::pos2(rect.max.x, y)],
+            egui::Stroke::new(0.5, faint),
+        );
+    }
+}
+
+/// Second marks along the top, to the full width - time does not stop
+/// where the content happens to.
+fn ruler(painter: &egui::Painter, rect: egui::Rect, scale: f32, colour: egui::Color32) {
+    let step = if scale >= 30.0 {
+        1.0
+    } else if scale >= 8.0 {
+        5.0
+    } else {
+        10.0
+    };
+    let mut at = 0.0f32;
+    loop {
+        let x = rect.min.x + at * scale;
+        if x > rect.max.x {
+            break;
+        }
+        painter.line_segment(
+            [egui::pos2(x, rect.min.y), egui::pos2(x, rect.min.y + ROW * 0.5)],
             egui::Stroke::new(1.0, colour),
         );
         painter.text(
@@ -321,22 +502,61 @@ fn ruler(
     }
 }
 
+/// Snap a dragged end-time to the strip's other steps, then the grid.
+fn snapped(seconds: f32, slot: &Slot, line: &Timeline, scale: f32, snap: Snap) -> f32 {
+    let end = slot.at + seconds;
+    let threshold = 8.0 / scale.max(0.01);
+    if snap.parts {
+        let mut best: Option<f32> = None;
+        for other in line.slots.iter().filter(|s| s.path != slot.path) {
+            for edge in [other.at, other.at + other.seconds] {
+                if (edge - end).abs() < threshold
+                    && edge > slot.at
+                    && best.is_none_or(|b| (edge - end).abs() < (b - end).abs())
+                {
+                    best = Some(edge);
+                }
+            }
+        }
+        if let Some(edge) = best {
+            return edge - slot.at;
+        }
+    }
+    if snap.time {
+        let step = if scale >= 80.0 { 0.1 } else { 0.5 };
+        let landed = (end / step).round() * step - slot.at;
+        if landed > 0.0 {
+            return landed;
+        }
+    }
+    seconds
+}
+
+/// One bar. Returns whether its body is being dragged to a new place.
+#[allow(clippy::too_many_arguments)]
 fn draw_bar(
     ui: &mut egui::Ui,
     painter: &egui::Painter,
     bar: egui::Rect,
     slot: &Slot,
+    scale: f32,
+    snap: Snap,
+    line: &Timeline,
     selected: &Option<Vec<usize>>,
     actions: &mut TimelineActions,
-) {
+) -> bool {
     let is_selected = selected.as_ref() == Some(&slot.path);
     let response = ui.interact(
         bar,
         egui::Id::new(("timeline_bar", &slot.path)),
-        egui::Sense::click(),
+        egui::Sense::click_and_drag(),
     );
-    if response.clicked() {
+    if response.clicked() || response.drag_started() {
         actions.selected = Some(slot.path.clone());
+    }
+    let moving = response.dragged();
+    if moving {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     }
 
     let fill = if is_selected {
@@ -348,6 +568,7 @@ fn draw_bar(
         // ones that can be dragged are the ones that look draggable.
         egui::Color32::from_rgb(70, 75, 90)
     };
+    let fill = if moving { fill.gamma_multiply(1.3) } else { fill };
     painter.rect_filled(bar, 3.0, fill);
     painter.text(
         bar.left_center() + egui::vec2(5.0, 0.0),
@@ -358,7 +579,7 @@ fn draw_bar(
     );
 
     if !slot.adjustable {
-        return;
+        return moving;
     }
     // The right edge is the handle, because what is being changed is
     // where the step ends rather than where it starts - a step's start
@@ -387,13 +608,11 @@ fn draw_bar(
             .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
     if drag.drag_delta().x != 0.0 {
-        // Whatever the bar's own scale is, which the caller knows and
-        // this does not - so the delta is turned back into seconds by
-        // the width the bar already has.
-        let per_second = (bar.width() / slot.seconds.max(0.01)).max(1.0);
-        let seconds = (slot.seconds + drag.drag_delta().x / per_second).max(0.0);
-        actions.set_seconds = Some((slot.path.clone(), seconds));
+        let seconds = (slot.seconds + drag.drag_delta().x / scale.max(0.01)).max(0.0);
+        actions.set_seconds =
+            Some((slot.path.clone(), snapped(seconds, slot, line, scale, snap)));
     }
+    moving && !drag.dragged()
 }
 
 /// The selected step, spelled out where it can be changed.
@@ -620,6 +839,22 @@ pub fn replace(actions: &mut Vec<Action>, path: &[usize], action: Action) -> boo
     }
 }
 
+/// Move a step to a new place among its siblings. Returns where it
+/// landed, so the caller can keep it selected.
+pub fn reorder(actions: &mut Vec<Action>, from: &[usize], to: usize) -> Option<Vec<usize>> {
+    let (&last, prefix) = from.split_last()?;
+    let list = list_mut(actions, prefix)?;
+    if last >= list.len() {
+        return None;
+    }
+    let step = list.remove(last);
+    let to = to.min(list.len());
+    list.insert(to, step);
+    let mut landed = prefix.to_vec();
+    landed.push(to);
+    Some(landed)
+}
+
 /// Set the length of the action a slot's path names.
 ///
 /// Returns whether anything changed, so the caller only marks the
@@ -652,6 +887,42 @@ pub fn set_seconds(actions: &mut Vec<Action>, path: &[usize], seconds: f32) -> b
 mod tests {
     use super::*;
     use infengine_adventure::action::Condition;
+
+    #[test]
+    fn a_dragged_step_lands_among_its_siblings() {
+        let mut actions = vec![
+            Action::Wait { seconds: 1.0 },
+            Action::Wait { seconds: 2.0 },
+            Action::Wait { seconds: 3.0 },
+        ];
+        let landed = reorder(&mut actions, &[0], 2).expect("moved");
+        assert_eq!(landed, vec![2]);
+        assert_eq!(
+            actions,
+            vec![
+                Action::Wait { seconds: 2.0 },
+                Action::Wait { seconds: 3.0 },
+                Action::Wait { seconds: 1.0 },
+            ]
+        );
+        // And a stale path refuses rather than moving the wrong step.
+        assert!(reorder(&mut actions, &[9], 0).is_none());
+    }
+
+    #[test]
+    fn a_dropped_asset_becomes_a_usable_step() {
+        assert_eq!(
+            DragAsset::Image("pictures/x.png".into()).action(),
+            Action::ShowImage {
+                image: "pictures/x.png".into(),
+                seconds: 2.0
+            }
+        );
+        assert!(matches!(
+            DragAsset::Sound("kyra.sfx1".into()).action(),
+            Action::PlaySound { .. }
+        ));
+    }
 
     #[test]
     fn dragging_a_wait_changes_its_seconds() {

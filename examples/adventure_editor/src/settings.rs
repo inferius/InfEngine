@@ -18,6 +18,8 @@ use std::path::PathBuf;
 pub struct Settings {
     pub ui_scale: f32,
     pub timeline_zoom: f32,
+    pub timeline_snap_parts: bool,
+    pub timeline_snap_time: bool,
 }
 
 impl Default for Settings {
@@ -25,6 +27,8 @@ impl Default for Settings {
         Self {
             ui_scale: 1.0,
             timeline_zoom: 1.0,
+            timeline_snap_parts: true,
+            timeline_snap_time: true,
         }
     }
 }
@@ -62,8 +66,11 @@ impl Settings {
 
     fn serialise(&self) -> String {
         format!(
-            "ui_scale {}\ntimeline_zoom {}\n",
-            self.ui_scale, self.timeline_zoom
+            "ui_scale {}\ntimeline_zoom {}\ntimeline_snap_parts {}\ntimeline_snap_time {}\n",
+            self.ui_scale,
+            self.timeline_zoom,
+            self.timeline_snap_parts as u8,
+            self.timeline_snap_time as u8,
         )
     }
 
@@ -83,6 +90,8 @@ impl Settings {
             match key {
                 "ui_scale" => out.ui_scale = value,
                 "timeline_zoom" => out.timeline_zoom = value,
+                "timeline_snap_parts" => out.timeline_snap_parts = value != 0.0,
+                "timeline_snap_time" => out.timeline_snap_time = value != 0.0,
                 // A newer editor's keys are not this one's problem.
                 _ => {}
             }
@@ -100,6 +109,8 @@ mod tests {
         let settings = Settings {
             ui_scale: 1.4,
             timeline_zoom: 0.5,
+            timeline_snap_parts: false,
+            timeline_snap_time: true,
         };
         assert_eq!(Settings::parse(&settings.serialise()), settings);
     }
