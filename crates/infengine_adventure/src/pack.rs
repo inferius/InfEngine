@@ -38,6 +38,9 @@ pub struct GameManifest {
     /// Entry point in that room. Empty means its first.
     #[serde(default)]
     pub start_entry: String,
+    /// Bitmap font subtitles draw with. None keeps the system font.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
     /// Screen shown before the game begins - a title menu. Empty means
     /// the game opens straight into its first room, which is what a
     /// project has before anyone draws a menu.
@@ -667,6 +670,7 @@ mod tests {
     fn a_manifest_round_trips() {
         let root = temp("manifest");
         let manifest = GameManifest {
+            font: None,
             title: "The Legend".into(),
             start_room: "hall".into(),
             start_entry: "door".into(),

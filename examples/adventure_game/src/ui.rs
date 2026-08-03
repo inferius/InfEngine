@@ -49,7 +49,7 @@ pub fn build(ctx: &egui::Context, host: &Host, status: &str, fx: &mut ScreenFx) 
     fx.seen.clear();
     fx.pops.clear();
     status_line(ctx, status);
-    subtitle(ctx, host);
+    subtitle(ctx, host, fx);
     events
 }
 
@@ -72,14 +72,89 @@ fn status_line(ctx: &egui::Context, status: &str) {
         });
 }
 
+/// The game's bitmap font, when the manifest names one it has.
+fn pix_font(host: &Host) -> Option<&infengine_adventure::pixfont::PixFont> {
+    let wanted = host
+        .project
+        .manifest
+        .as_ref()
+        .and_then(|m| m.font.as_deref())?;
+    host.project.fonts.iter().find(|f| f.id == wanted)
+}
+
+/// Paint text with a bitmap font, centred on `centre`.
+fn pix_text(
+    ctx: &egui::Context,
+    fx: &mut ScreenFx,
+    host: &Host,
+    font: &infengine_adventure::pixfont::PixFont,
+    centre: egui::Pos2,
+    text: &str,
+    tint: egui::Color32,
+) {
+    let Some(texture) = art_for(ctx, host, &mut fx.art, &font.image).clone() else {
+        return;
+    };
+    let atlas = texture.size_vec2();
+    // Whole multiples of the pixel keep the lettering crisp; the game
+    // was drawn for a screen a third this wide.
+    let area = ctx.content_rect();
+    let scale = (area.width() / 480.0).clamp(1.0, 4.0).floor();
+    let total = font.measure(text) * scale;
+    let origin = centre - egui::vec2(total.x * 0.5, total.y * 0.5);
+
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("pix_subtitle"),
+    ));
+    for placed in font.layout(text) {
+        let size = (placed.atlas_max - placed.atlas_min) * scale;
+        let at = origin + egui::vec2(placed.offset.x, placed.offset.y) * scale;
+        let rect = egui::Rect::from_min_size(at, egui::vec2(size.x, size.y));
+        let uv = egui::Rect::from_min_max(
+            egui::pos2(placed.atlas_min.x / atlas.x, placed.atlas_min.y / atlas.y),
+            egui::pos2(placed.atlas_max.x / atlas.x, placed.atlas_max.y / atlas.y),
+        );
+        painter.image(texture.id(), rect, uv, tint);
+    }
+}
+
 /// The line being spoken, across the bottom.
-fn subtitle(ctx: &egui::Context, host: &Host) {
+fn subtitle(ctx: &egui::Context, host: &Host, fx: &mut ScreenFx) {
     let Some(subtitle) = host.subtitle.as_ref() else {
         return;
     };
     // A line with no text shows as its own id, which is useful in an
     // editor and is a file name leaking onto the screen in a game.
     if subtitle.is_placeholder() {
+        return;
+    }
+    // The game's own lettering, when it has some: subtitles belong to
+    // the picture, and the picture has a typeface.
+    if let Some(font) = pix_font(host) {
+        let font = font.clone();
+        let area = ctx.content_rect();
+        let centre = egui::pos2(area.center().x, area.max.y - 70.0);
+        if let Some(speaker) = subtitle.speaker.clone() {
+            pix_text(
+                ctx,
+                fx,
+                host,
+                &font,
+                centre - egui::vec2(0.0, font.line_height as f32 * 2.5),
+                &speaker,
+                egui::Color32::from_rgb(220, 200, 120),
+            );
+        }
+        pix_text(
+            ctx,
+            fx,
+            host,
+            &font,
+            centre,
+            &subtitle.text,
+            egui::Color32::from_rgb(250, 245, 225),
+        );
         return;
     }
     let area = ctx.content_rect();

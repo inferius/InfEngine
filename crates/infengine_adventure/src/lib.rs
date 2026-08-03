@@ -44,6 +44,7 @@ pub mod mask;
 pub use infengine_loca as loca;
 
 pub mod pack;
+pub mod pixfont;
 pub mod path;
 pub mod project;
 pub mod room;

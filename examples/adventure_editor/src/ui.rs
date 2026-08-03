@@ -388,6 +388,7 @@ mod tests {
             scripts: Default::default(),
             script_errors: Vec::new(),
             screens: Vec::new(),
+            fonts: Vec::new(),
             sounds: Default::default(),
             manifest: None,
         }

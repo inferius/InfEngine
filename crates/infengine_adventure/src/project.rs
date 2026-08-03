@@ -53,6 +53,8 @@ pub struct Project {
     pub sheets: Vec<String>,
     /// Menus and other screens, sorted by id.
     pub screens: Vec<Screen>,
+    /// The project's bitmap fonts, sorted by id.
+    pub fonts: Vec<crate::pixfont::PixFont>,
     /// Sound and music ids, and the files they name.
     pub sounds: SoundSet,
     /// What the game is called and where it starts. Absent until
@@ -108,11 +110,13 @@ impl Project {
         let script_errors = errors.iter().map(ToString::to_string).collect();
         let sheets = list_sheets(&root);
         let (screens, _) = screen::load_dir(&root.join(screen::SCREEN_DIR));
+        let fonts = crate::pixfont::load_dir(&root.join(crate::pixfont::FONT_DIR));
         let sounds = sound::load_index(&root.join(sound::SOUND_DIR)).unwrap_or_default();
         let manifest = GameManifest::load(&root);
         Self {
             root,
             rooms,
+            fonts,
             animations,
             locales,
             scripts,
