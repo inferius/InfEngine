@@ -164,7 +164,7 @@ fn sheet_of(
             for dx in 0..shape.w {
                 let sx = shape.x + if frame.flipped { shape.w - 1 - dx } else { dx };
                 let sy = shape.y + dy;
-                if sx >= image.width as u32 || sy >= image.height as u32 {
+                if sx >= image.width || sy >= image.height {
                     continue;
                 }
                 let at = sy as usize * image.width as usize + sx as usize;

@@ -224,12 +224,12 @@ fn compile(index: usize, ops: &[u16]) -> SceneAnim {
                 i += 2;
             }
             0xFF8F => {
-                if let Some((back, left)) = loops.pop() {
-                    if left > 1 {
-                        loops.push((back, left - 1));
-                        i = back;
-                        continue;
-                    }
+                if let Some((back, left)) = loops.pop()
+                    && left > 1
+                {
+                    loops.push((back, left - 1));
+                    i = back;
+                    continue;
                 }
                 i += 1;
             }
