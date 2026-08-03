@@ -242,6 +242,7 @@ fn draw_screen(
                 egui::Color32::from_black_alpha(if screen.overlay { 160 } else { 240 }),
             );
 
+            let face = pix_font(host).cloned();
             for widget in shown {
                 let lo = widget.min.min(widget.max);
                 let hi = widget.min.max(widget.max);
@@ -259,9 +260,15 @@ fn draw_screen(
                         bounds.size() * boost,
                     );
                 }
-                if let Some(action) =
-                    widget_ui(ui, widget, bounds, scale * boost, host, &mut fx.art)
-                {
+                if let Some(action) = widget_ui(
+                    ui,
+                    widget,
+                    bounds,
+                    scale * boost,
+                    host,
+                    face.as_ref(),
+                    &mut fx.art,
+                ) {
                     fired = Some(action);
                 }
             }
@@ -293,12 +300,14 @@ fn art_for<'a>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn widget_ui(
     ui: &mut egui::Ui,
     widget: &infengine_adventure::screen::Widget,
     bounds: egui::Rect,
     scale: f32,
     host: &Host,
+    face: Option<&infengine_adventure::pixfont::PixFont>,
     art: &mut HashMap<String, Option<egui::TextureHandle>>,
 ) -> Option<ScreenAction> {
     match &widget.kind {
@@ -309,7 +318,17 @@ fn widget_ui(
             None
         }
         WidgetKind::Label { line, size, align } => {
-            paint(ui, bounds, &text_of(host, line), *size * scale, *align, egui::Color32::WHITE);
+            draw_widget_text(
+                ui,
+                bounds,
+                &text_of(host, line),
+                *size * scale,
+                *align,
+                egui::Color32::WHITE,
+                host,
+                face,
+                art,
+            );
             None
         }
         WidgetKind::Button {
@@ -328,7 +347,17 @@ fn widget_ui(
             } else {
                 egui::Color32::from_rgb(225, 220, 205)
             };
-            paint(ui, bounds, &text_of(host, line), *size * scale, *align, colour);
+            draw_widget_text(
+                ui,
+                bounds,
+                &text_of(host, line),
+                *size * scale,
+                *align,
+                colour,
+                host,
+                face,
+                art,
+            );
             response.clicked().then(|| action.clone())
         }
     }
@@ -344,6 +373,53 @@ fn text_of(host: &Host, line: &str) -> String {
         line.to_string()
     } else {
         text.to_string()
+    }
+}
+
+/// A widget's words: the game's own lettering when it has some, the
+/// system font otherwise.
+#[allow(clippy::too_many_arguments)]
+fn draw_widget_text(
+    ui: &mut egui::Ui,
+    bounds: egui::Rect,
+    text: &str,
+    size: f32,
+    align: Align,
+    colour: egui::Color32,
+    host: &Host,
+    face: Option<&infengine_adventure::pixfont::PixFont>,
+    art: &mut HashMap<String, Option<egui::TextureHandle>>,
+) {
+    let Some(font) = face else {
+        return paint(ui, bounds, text, size, align, colour);
+    };
+    let Some(texture) = art_for(ui.ctx(), host, art, &font.image).clone() else {
+        return paint(ui, bounds, text, size, align, colour);
+    };
+    let atlas = texture.size_vec2();
+    // Sized like the widget asked, in whole pixels of the face.
+    let scale = (size / font.line_height.max(1) as f32).floor().max(1.0);
+    let total = font.measure(text) * scale;
+    let origin = match align {
+        Align::Left => egui::pos2(bounds.left(), bounds.center().y - total.y * 0.5),
+        Align::Center => bounds.center() - egui::vec2(total.x * 0.5, total.y * 0.5),
+        Align::Right => {
+            egui::pos2(bounds.right() - total.x, bounds.center().y - total.y * 0.5)
+        }
+    };
+    for placed in font.layout(text) {
+        let cell = (placed.atlas_max - placed.atlas_min) * scale;
+        let at = origin + egui::vec2(placed.offset.x, placed.offset.y) * scale;
+        let uv = egui::Rect::from_min_max(
+            egui::pos2(placed.atlas_min.x / atlas.x, placed.atlas_min.y / atlas.y),
+            egui::pos2(placed.atlas_max.x / atlas.x, placed.atlas_max.y / atlas.y),
+        );
+        ui.painter().image(
+            texture.id(),
+            egui::Rect::from_min_size(at, egui::vec2(cell.x, cell.y)),
+            uv,
+            colour,
+        );
     }
 }
 

@@ -24,6 +24,7 @@ enum Shelf {
     Animations,
     Sounds,
     Screens,
+    Fonts,
 }
 
 /// The window's own state.
@@ -68,6 +69,7 @@ pub fn window(
                     Shelf::Animations => animations_shelf(ui, state, project, &mut actions),
                     Shelf::Sounds => sounds_shelf(ui, state, project, &mut actions),
                     Shelf::Screens => screens_shelf(ui, state, project),
+                    Shelf::Fonts => fonts_shelf(ui, state, project),
                 });
         });
     state.open = open;
@@ -87,6 +89,7 @@ fn header(ui: &mut egui::Ui, state: &mut LibraryUi, project: &Project, pictures:
                 format!("Sounds ({})", project.sounds.ids().count()),
             ),
             (Shelf::Screens, format!("Screens ({})", project.screens.len())),
+            (Shelf::Fonts, format!("Fonts ({})", project.fonts.len())),
         ];
         for (shelf, label) in shelves {
             ui.selectable_value(&mut state.shelf, shelf, label);
@@ -243,6 +246,49 @@ fn sounds_shelf(
                     actions.play = Some(name.to_string());
                 }
             });
+        });
+    }
+}
+
+fn fonts_shelf(ui: &mut egui::Ui, state: &mut LibraryUi, project: &Project) {
+    ui.label(
+        egui::RichText::new(
+            "The game's lettering. The manifest picks which one subtitles and menus draw with.",
+        )
+        .small()
+        .weak(),
+    );
+    ui.add_space(4.0);
+    let names: Vec<String> = project.fonts.iter().map(|f| f.id.clone()).collect();
+    for name in shown(&state.filter, names.iter().map(String::as_str)) {
+        let Some(font) = project.fonts.iter().find(|f| f.id == name) else {
+            continue;
+        };
+        // The atlas itself is the best preview a font has.
+        let thumb = match state.thumbs.get(&font.image) {
+            Some(loaded) => loaded.clone(),
+            None => {
+                let loaded = read_thumb(ui.ctx(), project, &font.image);
+                state.thumbs.insert(font.image.clone(), loaded.clone());
+                loaded
+            }
+        };
+        ui.horizontal(|ui| {
+            if let Some(texture) = thumb {
+                let size = texture.size_vec2();
+                let scale = (120.0 / size.x.max(1.0)).min(2.0);
+                ui.image((texture.id(), size * scale));
+            }
+            ui.label(name);
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} glyphs · line {}px",
+                    font.glyphs.len(),
+                    font.line_height
+                ))
+                .small()
+                .weak(),
+            );
         });
     }
 }
