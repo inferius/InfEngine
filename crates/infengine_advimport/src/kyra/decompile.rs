@@ -154,8 +154,13 @@ struct WsaSlots {
 impl WsaSlots {
     /// Slots seeded with every binding the whole script ever makes.
     fn with_fallback(sites: &[CallSite], texts: &[String]) -> Self {
+        // Only the opens: the walk honours closes as it passes them,
+        // but the fallback asks a different question - which file did
+        // this script EVER put in that slot - and a close would erase
+        // exactly the answer. That is how every play sitting after its
+        // slot's close (most of them; scripts tidy up) went unnamed.
         let mut all = Self::default();
-        for site in sites {
+        for site in sites.iter().filter(|s| s.function == FN_OPEN_WSA) {
             all.observe(site, texts);
         }
         Self {
@@ -1242,6 +1247,62 @@ mod tests {
         code.extend(compare(2, -1));
         let (on, _, _) = first_branch(branch_around(code, set_flag(1), set_flag(2)));
         assert_eq!(on, Condition::Holding(None));
+    }
+
+    /// Push a constant too big for the byte form, as the word form.
+    fn push_word(value: u16) -> Vec<u8> {
+        let mut v = vec![0x20 | 4, 0];
+        v.extend_from_slice(&value.to_be_bytes());
+        v
+    }
+
+    #[test]
+    fn a_play_after_its_slots_close_still_resolves() {
+        // Scripts tidy up: open, play, close - and a later entry point
+        // plays from the slot again. The fallback must remember what
+        // the slot EVER held, or most of the game's animations go
+        // unnamed (which is exactly the bug this pins).
+        let mut code = open_wsa(1, 0);
+        code.extend(push(0));
+        code.extend(call(FN_CLOSE_WSA as u16));
+        code.extend(play_wsa(0));
+        let out = decompile("belroom", &script_saying(code, &["x", "RINGBELL.WSA"]));
+        assert_eq!(
+            out.scripts[0].actions.last(),
+            Some(&Action::PlayAnim {
+                animation: "belroom_ringbell".into(),
+                wait: true,
+                at: None,
+            }),
+            "{:?}",
+            out.scripts[0].actions
+        );
+    }
+
+    #[test]
+    fn a_seven_argument_sequential_play_resolves_through_the_slot() {
+        // The retail shape: [start, end, x, y, delay, slot, flag], with
+        // x past the byte range, after an open that bound slot 0.
+        let mut code = open_wsa(1, 0);
+        for value in [1i8, 0, 10] {
+            code.extend(push(value));
+        }
+        code.extend(push_word(64));
+        code.extend(push_word(184));
+        code.extend(push(13));
+        code.extend(push(9));
+        code.extend(call(FN_PLAY_WSA as u16));
+        let out = decompile("belroom", &script_saying(code, &["x", "RINGBELL.WSA"]));
+        assert_eq!(
+            out.scripts[0].actions.last(),
+            Some(&Action::PlayAnim {
+                animation: "belroom_ringbell".into(),
+                wait: true,
+                at: None,
+            }),
+            "{:?}",
+            out.scripts[0].actions
+        );
     }
 
     #[test]
