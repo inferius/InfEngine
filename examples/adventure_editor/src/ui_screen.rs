@@ -274,6 +274,11 @@ fn widget_editor(
                         .color(egui::Color32::from_rgb(255, 180, 100)),
                 );
             }
+            Some(other) => {
+                // Screens gate on flags; anything else reads but is
+                // authored elsewhere.
+                ui.label(egui::RichText::new(other.label()).small().weak());
+            }
             None => {}
         }
     });

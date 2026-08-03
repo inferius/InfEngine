@@ -41,6 +41,10 @@ pub struct GameState {
     /// stored and a saved game stays readable.
     #[serde(default)]
     pub flags: BTreeMap<String, bool>,
+    /// The one item held against the world - the thing on the cursor.
+    /// Not the inventory; scripts test it with `Condition::Holding`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hand: Option<String>,
     /// What the player carries, in the order it was picked up.
     #[serde(default)]
     pub inventory: Vec<String>,

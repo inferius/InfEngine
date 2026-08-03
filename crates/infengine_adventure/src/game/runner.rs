@@ -311,6 +311,7 @@ impl Runner {
                 // the importer not knowing.
                 let yes = match on {
                     crate::action::Condition::Flag(flag) => state.flag(flag),
+                    crate::action::Condition::Holding(item) => state.hand == *item,
                     crate::action::Condition::Unresolved { call, .. } => {
                         events.push(Event::Skipped { call: call.clone() });
                         false
@@ -324,6 +325,7 @@ impl Runner {
                     });
                 }
             }
+            Action::SetHand { item } => state.hand = item.clone(),
             Action::Unknown { call, .. } => events.push(Event::Skipped { call: call.clone() }),
         }
     }

@@ -102,6 +102,13 @@ pub enum Action {
     Give { item: String },
     /// Remove one.
     Take { item: String },
+    /// Put an item in the actor's hand, or empty it.
+    ///
+    /// The hand is not the inventory: it is the one item the player is
+    /// holding against the world, the way the classic adventures carry
+    /// a thing on the cursor. Scripts test it with
+    /// [`Condition::Holding`].
+    SetHand { item: Option<String> },
     /// Show or hide a hotspot.
     EnableHotspot { hotspot: String, enabled: bool },
     /// Take one of two paths.
@@ -138,6 +145,8 @@ pub enum Action {
 pub enum Condition {
     /// A story flag, true when it has been set.
     Flag(String),
+    /// What the actor's hand holds: a particular item, or nothing.
+    Holding(Option<String>),
     /// A test the import could not express.
     ///
     /// False at run time, so the branch takes its `otherwise` side, and
@@ -154,13 +163,15 @@ impl Condition {
     pub fn label(&self) -> String {
         match self {
             Condition::Flag(flag) => flag.clone(),
+            Condition::Holding(Some(item)) => format!("holding {item}"),
+            Condition::Holding(None) => "empty-handed".into(),
             Condition::Unresolved { call, .. } => format!("{call}?"),
         }
     }
 
     /// Is this a question we can actually answer?
     pub fn is_resolved(&self) -> bool {
-        matches!(self, Condition::Flag(_))
+        matches!(self, Condition::Flag(_) | Condition::Holding(_))
     }
 }
 
@@ -197,6 +208,8 @@ impl Action {
             Action::SetFlag { flag, value } => format!("set {flag} = {value}"),
             Action::Give { item } => format!("give {item}"),
             Action::Take { item } => format!("take {item}"),
+            Action::SetHand { item: Some(item) } => format!("hold {item}"),
+            Action::SetHand { item: None } => "empty the hand".into(),
             Action::EnableHotspot { hotspot, enabled } => {
                 format!("{} {hotspot}", if *enabled { "enable" } else { "disable" })
             }

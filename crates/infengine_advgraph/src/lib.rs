@@ -167,6 +167,14 @@ pub const ADVENTURE_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        id: "adv_set_hand",
+        label: "Hold Item",
+        category: "Adventure",
+        inputs: EXEC_IN,
+        outputs: EXEC_OUT,
+        contexts: &[],
+    },
+    NodeKindDef {
         id: "adv_enable_hotspot",
         label: "Enable Hotspot",
         category: "Adventure",
@@ -321,6 +329,7 @@ fn kind_of(action: &Action) -> &'static str {
         Action::SetFlag { .. } => "adv_set_flag",
         Action::Give { .. } => "adv_give",
         Action::Take { .. } => "adv_take",
+        Action::SetHand { .. } => "adv_set_hand",
         Action::EnableHotspot { .. } => "adv_enable_hotspot",
         Action::Branch { .. } => "adv_branch",
         Action::Unknown { .. } => "adv_unknown",
@@ -388,6 +397,13 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
             set("value", value.to_string());
         }
         Action::Give { item } | Action::Take { item } => set("item", item.clone()),
+        // An empty hand is the absence of the parameter, the same way
+        // every other optional field works here.
+        Action::SetHand { item } => {
+            if let Some(item) = item {
+                set("item", item.clone());
+            }
+        }
         Action::EnableHotspot { hotspot, enabled } => {
             set("hotspot", hotspot.clone());
             set("enabled", enabled.to_string());
@@ -397,6 +413,10 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
         // import could not read this" rather than two.
         Action::Branch { on, .. } => match on {
             Condition::Flag(flag) => set("flag", flag.clone()),
+            // The marker parameter keeps "holding nothing" distinct
+            // from "no condition written yet".
+            Condition::Holding(Some(item)) => set("held", item.clone()),
+            Condition::Holding(None) => set("empty_hand", "true".into()),
             Condition::Unresolved { call, args } => {
                 set("call", call.clone());
                 if !args.is_empty() {
@@ -465,6 +485,9 @@ fn read_action(node: &infengine_blueprint::Node) -> Option<Action> {
         "adv_give" => Action::Give {
             item: param(node, "item"),
         },
+        "adv_set_hand" => Action::SetHand {
+            item: optional(node, "item"),
+        },
         "adv_take" => Action::Take {
             item: param(node, "item"),
         },
@@ -508,6 +531,12 @@ fn split_args(value: &str) -> Vec<i32> {
 /// phrase; otherwise it tests a flag. A branch nobody has filled in yet
 /// has neither, and an empty flag is the friendlier of the two readings.
 fn condition_of(node: &infengine_blueprint::Node) -> Condition {
+    if let Some(held) = optional(node, "held") {
+        return Condition::Holding(Some(held));
+    }
+    if node.params.contains_key("empty_hand") {
+        return Condition::Holding(None);
+    }
     let call = param(node, "call");
     if call.is_empty() {
         Condition::Flag(param(node, "flag"))

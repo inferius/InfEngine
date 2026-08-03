@@ -58,6 +58,11 @@ const FN_DELAY_SECS: i32 = 33;
 const FN_DELAY_TICKS: i32 = 2;
 /// Puts an item in the inventory.
 const FN_ADD_ITEM: i32 = 105;
+/// Puts an item in the hand, and empties it.
+const FN_SET_HAND: i32 = 14;
+const FN_REMOVE_HAND: i32 = 20;
+/// The register scene scripts read the held item from.
+const REG_HAND: i32 = 4;
 /// Asks whether a story flag is set. A condition, not a step.
 const FN_QUERY_FLAG: i32 = 4;
 /// Turns a character to face a direction.
@@ -314,6 +319,10 @@ fn translate(
         FN_ADD_ITEM => site.args.first().copied().map(|item| Action::Give {
             item: format!("kyra.item{item}"),
         }),
+        FN_SET_HAND => site.args.first().copied().map(|item| Action::SetHand {
+            item: (item >= 0).then(|| format!("kyra.item{item}")),
+        }),
+        FN_REMOVE_HAND => Some(Action::SetHand { item: None }),
         FN_SET_FACING => site
             .args
             .get(FACING_ARG)
@@ -492,9 +501,11 @@ impl Pass<'_> {
     /// editor shows a branch on something a reader can act on, and the
     /// runtime takes the else side, a decision it can explain.
     fn condition(&self, at: usize) -> (Condition, bool) {
-        // Back to the call whose answer is being tested.
+        // Back to the source of the value being tested: a call's
+        // answer, or a register the engine filled before the script
+        // ran - the held item travels in register 4.
         let mut back = at;
-        let call = loop {
+        let source = loop {
             if back == 0 {
                 return (unresolved_condition(None), false);
             }
@@ -511,16 +522,25 @@ impl Pass<'_> {
                 | Op::PopFrameNeg
                 | Op::PushFrameNeg
                 | Op::PopReturn => continue,
-                Op::Call => break back,
+                Op::Call => break None,
+                Op::PushReg => match previous.operand {
+                    Some(register) => break Some(register),
+                    None => return (unresolved_condition(None), false),
+                },
                 _ => return (unresolved_condition(None), false),
             }
         };
-        let Some(site) = vm::call_at(self.instructions, call) else {
-            return (unresolved_condition(None), false);
+        let call = back;
+        let site = match source {
+            None => match vm::call_at(self.instructions, call) {
+                Some(site) => Some(site),
+                None => return (unresolved_condition(None), false),
+            },
+            Some(_) => None,
         };
 
         // Forward over what happens to the answer.
-        let mut answered = false;
+        let mut answered = source.is_some();
         let mut flip = false;
         let mut constant: Option<i32> = None;
         let mut compare: Option<(i32, i32)> = None;
@@ -541,27 +561,54 @@ impl Pass<'_> {
                         // Arithmetic negation, or a negation between
                         // the comparison's parts: shapes this does not
                         // read.
-                        return (unresolved_condition(Some(&site)), false);
+                        return (unresolved_condition(site.as_ref()), false);
                     }
                 }
                 Op::Push | Op::PushAlt | Op::JumpOrConst => match previous.operand {
                     Some(value) if constant.is_none() => constant = Some(value),
-                    _ => return (unresolved_condition(Some(&site)), false),
+                    _ => return (unresolved_condition(site.as_ref()), false),
                 },
                 Op::Eval => match (previous.operand, constant.take(), compare) {
                     (Some(op), Some(value), None) => compare = Some((op, value)),
                     // An Eval with no constant of its own is joining
                     // conditions (and/or); one question at a time is
                     // as far as this reads.
-                    _ => return (unresolved_condition(Some(&site)), false),
+                    _ => return (unresolved_condition(site.as_ref()), false),
                 },
-                _ => return (unresolved_condition(Some(&site)), false),
+                _ => return (unresolved_condition(site.as_ref()), false),
             }
         }
         if !answered {
             // Whatever is being tested, it is not this call's answer.
             return (unresolved_condition(None), false);
         }
+
+        // A register condition: the held item, or a register we can
+        // only name.
+        if let Some(register) = source {
+            let held = |value: i32| {
+                Condition::Holding((value >= 0).then(|| format!("kyra.item{value}")))
+            };
+            return match compare {
+                Some((EVAL_EQ, value)) if register == REG_HAND => (held(value), flip),
+                Some((EVAL_NE, value)) if register == REG_HAND => (held(value), !flip),
+                Some((op, value)) => (
+                    Condition::Unresolved {
+                        call: format!("kyra:reg{register} {} {}", sign(op), value),
+                        args: Vec::new(),
+                    },
+                    flip,
+                ),
+                None => (
+                    Condition::Unresolved {
+                        call: format!("kyra:reg{register}"),
+                        args: Vec::new(),
+                    },
+                    flip,
+                ),
+            };
+        }
+        let site = site.expect("a call site when no register was the source");
 
         let flag = (site.function == FN_QUERY_FLAG)
             .then(|| site.args.first().map(|flag| format!("kyra.flag{flag}")))
@@ -1161,6 +1208,42 @@ mod tests {
                 call: "kyra:getCharacterScene == -1".into(),
                 args: vec![],
             }
+        );
+    }
+
+    #[test]
+    fn the_held_item_register_reads_as_holding() {
+        // Scene scripts get the held item in register 4; comparing it
+        // with an item number is the game's "using X on this?".
+        let mut code = vec![0x40 | 5, 4];
+        code.extend(compare(2, 23));
+        let (on, then, otherwise) = first_branch(branch_around(code, set_flag(1), set_flag(2)));
+        assert_eq!(on, Condition::Holding(Some("kyra.item23".into())));
+        assert_eq!((then, otherwise), (1, 2));
+    }
+
+    #[test]
+    fn comparing_the_hand_with_minus_one_means_empty_handed() {
+        let mut code = vec![0x40 | 5, 4];
+        code.extend(compare(2, -1));
+        let (on, _, _) = first_branch(branch_around(code, set_flag(1), set_flag(2)));
+        assert_eq!(on, Condition::Holding(None));
+    }
+
+    #[test]
+    fn hand_calls_become_set_hand_steps() {
+        let mut code = push(23);
+        code.extend(call(FN_SET_HAND as u16));
+        code.extend(call(FN_REMOVE_HAND as u16));
+        let out = decompile("x", &script_with(code, 4, vec![0]));
+        assert_eq!(
+            out.scripts[0].actions,
+            vec![
+                Action::SetHand {
+                    item: Some("kyra.item23".into())
+                },
+                Action::SetHand { item: None },
+            ]
         );
     }
 

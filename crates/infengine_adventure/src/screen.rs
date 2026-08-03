@@ -188,7 +188,9 @@ impl Widget {
         match &self.shown_if {
             None => true,
             Some(Condition::Flag(flag)) => flag_holds(flag),
-            Some(Condition::Unresolved { .. }) => false,
+            // A screen only sees the flags; a condition it cannot ask
+            // holds never, the same reading a branch gives it.
+            Some(Condition::Holding(_)) | Some(Condition::Unresolved { .. }) => false,
         }
     }
 }
