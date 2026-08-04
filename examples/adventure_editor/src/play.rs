@@ -49,6 +49,8 @@ pub struct Request {
     pub music: Option<Option<String>>,
     /// Animation to show in the room.
     pub animation: Option<String>,
+    /// Where the script placed it, when it said.
+    pub animation_at: Option<glam::Vec2>,
     /// Image whose texture the host should load for the still.
     pub still: Option<String>,
     /// Room to load, and where to put the actor.
@@ -283,7 +285,8 @@ fn apply(
             });
             request.music = Some(music);
         }
-        Event::PlayAnim { animation, wait, .. } => {
+        Event::PlayAnim { animation, wait, at } => {
+            request.animation_at = at;
             if wait {
                 // An animation the index does not describe still has
                 // to end, or the script waits for ever on a typo.

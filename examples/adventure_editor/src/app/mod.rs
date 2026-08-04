@@ -414,6 +414,17 @@ impl Editor {
             self.play_voice(&id);
         }
         if let Some(animation) = request.animation {
+            // Placed exactly as the game would place it: where the
+            // script said, or where the animation says about itself -
+            // so the preview is the scene, not an approximation of it.
+            let fallback = self
+                .project
+                .animations
+                .get(&animation)
+                .map(|a| a.position_in(self.room.size));
+            if let Some(at) = request.animation_at.or(fallback) {
+                self.playback.position = at;
+            }
             self.playback.select(animation);
         }
         if let Some(sound) = request.sound {
