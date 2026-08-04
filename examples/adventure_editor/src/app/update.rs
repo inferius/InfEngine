@@ -46,15 +46,24 @@ impl Editor {
 
         // Advance the preview before anything is drawn, so the frame
         // shown is the one for this instant.
+        //
+        // Only where previews belong: the canvas in Room mode is the
+        // authored room and nothing else - a stage with a clear frame,
+        // not a place things land on because a button was pressed.
+        // Animate composes on it and Test plays on it; those two show
+        // guests.
+        let preview_allowed = matches!(self.mode, Mode::Animate | Mode::Test) || self.play.active;
         let current = match self.sheet.as_ref() {
             // While a sheet is being cut, the cut is what plays: the
             // whole point is to see the frames land.
-            Some(draft) => Some(draft.to_animation()),
-            None => self
+            Some(draft) if preview_allowed => Some(draft.to_animation()),
+            Some(_) => None,
+            None if preview_allowed => self
                 .playback
                 .selected
                 .clone()
                 .and_then(|id| self.room_animations.iter().find(|a| a.id == id).cloned()),
+            None => None,
         };
         self.playback.tick(ctx.delta_time, current.as_ref());
         let preview = current.and_then(|animation| {
@@ -175,6 +184,7 @@ impl Editor {
         let picker_images = self.pictures.clone();
         let mode = self.mode;
         let cursor_room = self.view.window_to_room(self.cursor);
+        let scene_id = self.scene_script_id();
         let mut content = None;
         if let Some(ui) = self.ui.as_mut() {
             let mut state = UiState {
@@ -324,6 +334,7 @@ impl Editor {
                 let rect = ctx.content_rect();
                 state.content_min = egui::vec2(rect.left(), rect.top());
                 state.content_max = egui::vec2(rect.right(), rect.bottom());
+                ui::stage_chips(ctx, &mut state, &scene_id);
                 if mode == Mode::Script {
                     graph_actions = ui_graph::panel(ctx, graph_ui, &script_ids);
                 }
@@ -371,9 +382,6 @@ impl Editor {
                 ..Default::default()
             });
             self.status = "step added - it is on the scene's timeline".into();
-        }
-        if let Some(id) = library_actions.preview {
-            self.playback.select(id);
         }
         if let Some(id) = library_actions.play {
             match self.project.sounds.get(&id).map(str::to_string) {

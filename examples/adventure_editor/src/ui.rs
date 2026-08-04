@@ -102,6 +102,95 @@ impl std::fmt::Debug for UiState<'_> {
     }
 }
 
+/// The chips drawn on the canvas itself: what the centre is showing.
+///
+/// The canvas means a different thing in each mode - the authored room,
+/// the scene's stage, the running game - and nothing said which. These
+/// chips are the frame: the top-left one names what you are looking at,
+/// and when an animation is being previewed over the stage, a second
+/// chip names it and carries the one control it needs, the stop.
+pub fn stage_chips(ctx: &egui::Context, state: &mut UiState<'_>, scene_id: &str) {
+    use crate::lang::t;
+    if state.mode == Mode::Script || state.current_room.is_none() {
+        return;
+    }
+    egui::Area::new("stage_chips".into())
+        .fixed_pos(egui::pos2(
+            state.content_min.x + 10.0,
+            state.content_min.y + 10.0,
+        ))
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                let what = match state.mode {
+                    Mode::Room => format!(
+                        "{} · {} × {}",
+                        state.room.id,
+                        state.room.size.x as i32,
+                        state.room.size.y as i32
+                    ),
+                    Mode::Animate => {
+                        if state.playing {
+                            if crate::lang::is_czech() {
+                                format!("scéna {scene_id} · běží")
+                            } else {
+                                format!("scene {scene_id} · running")
+                            }
+                        } else if crate::lang::is_czech() {
+                            format!("scéna {scene_id}")
+                        } else {
+                            format!("scene {scene_id}")
+                        }
+                    }
+                    Mode::Test => {
+                        if crate::lang::is_czech() {
+                            format!("hraje se {}", state.room.id)
+                        } else {
+                            format!("playing {}", state.room.id)
+                        }
+                    }
+                    Mode::Script => unreachable!("no canvas in Script mode"),
+                };
+                chip(ui, |ui| {
+                    ui.label(egui::RichText::new(what).small());
+                });
+
+                // A previewed animation is a guest on the stage; the
+                // chip says so and shows it out.
+                if state.mode == Mode::Animate
+                    && !state.playing
+                    && let Some(id) = state.playback.selected.clone()
+                {
+                    chip(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(if crate::lang::is_czech() {
+                                format!("náhled: {id}")
+                            } else {
+                                format!("preview: {id}")
+                            })
+                            .small(),
+                        );
+                        if ui
+                            .small_button("⏹")
+                            .on_hover_text(t("Stop the preview", "Zastavit náhled"))
+                            .clicked()
+                        {
+                            state.playback.clear();
+                        }
+                    });
+                }
+            });
+        });
+}
+
+/// One dark pill over the picture.
+fn chip(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::popup(ui.style())
+        .fill(egui::Color32::from_black_alpha(180))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| body(ui));
+        });
+}
+
 /// The bottom row: what just happened, and what to do next.
 ///
 /// It used to hold one label that was empty most of the time. A row that

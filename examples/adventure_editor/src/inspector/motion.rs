@@ -122,9 +122,10 @@ fn sheets(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions) {
 /// The sheet as an interface texture, cached per image.
 ///
 /// The canvas has its own copy for drawing the room; this one exists
-/// so the cutter can show the animation playing right in the panel,
-/// which is the only way to tune a cut by eye.
-fn sheet_texture(
+/// so the cutter - and the library's inline preview - can show an
+/// animation playing right in the panel, which is the only way to
+/// judge one by eye without sending it anywhere.
+pub fn sheet_texture(
     ui: &egui::Ui,
     project: &infengine_adventure::Project,
     image: &str,

@@ -66,6 +66,13 @@ pub struct LibraryUi {
     filter: String,
     shelf: Shelf,
     thumbs: HashMap<String, Option<egui::TextureHandle>>,
+    /// The animation playing inline in its row, if any.
+    ///
+    /// Inline on purpose: previewing from the shelf used to select the
+    /// animation into the canvas, where it looped over the room with
+    /// nothing saying what it was or how to stop it. Browsing happens
+    /// on the shelf; the canvas belongs to the room and the scene.
+    previewing: Option<String>,
 }
 
 /// What the library asked for.
@@ -73,8 +80,6 @@ pub struct LibraryUi {
 pub struct LibraryActions {
     /// A step to add to the open scene's timeline.
     pub add: Option<Action>,
-    /// An animation to preview in the canvas.
-    pub preview: Option<String>,
     /// A sound or track to hear, by its id.
     pub play: Option<String>,
     /// A script to put on the graph canvas, in Script mode.
@@ -410,26 +415,35 @@ fn read_thumb(
 
 fn animations_shelf(
     ui: &mut egui::Ui,
-    state: &LibraryUi,
+    state: &mut LibraryUi,
     project: &Project,
     actions: &mut LibraryActions,
 ) {
-    let names: Vec<&str> = project.animations.iter().map(|a| a.id.as_str()).collect();
-    for name in shown(&state.filter, names.into_iter()) {
+    use crate::lang::t;
+    let names: Vec<String> = project.animations.iter().map(|a| a.id.clone()).collect();
+    for name in shown(&state.filter, names.iter().map(String::as_str)) {
         let Some(animation) = project.animations.iter().find(|a| a.id == name) else {
             continue;
         };
+        let playing_here = state.previewing.as_deref() == Some(name);
         ui.horizontal(|ui| {
             draggable(ui, name, DragAsset::Animation(name.to_string()));
             ui.label(
-                egui::RichText::new(format!("{} frames", animation.frames))
-                    .small()
-                    .weak(),
+                egui::RichText::new(if crate::lang::is_czech() {
+                    format!("{} snímků", animation.frames)
+                } else {
+                    format!("{} frames", animation.frames)
+                })
+                .small()
+                .weak(),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .small_button("+")
-                    .on_hover_text("Play this animation, as a timeline step")
+                    .on_hover_text(t(
+                        "Play this animation, as a timeline step",
+                        "Přehraj tuhle animaci, jako krok na časové ose",
+                    ))
                     .clicked()
                 {
                     actions.add = Some(Action::PlayAnim {
@@ -438,16 +452,83 @@ fn animations_shelf(
                         at: None,
                     });
                 }
+                let toggle = if playing_here { "⏹" } else { "▶" };
                 if ui
-                    .small_button("▶")
-                    .on_hover_text("Play it in the canvas")
+                    .small_button(toggle)
+                    .on_hover_text(t(
+                        "Play it here, on the shelf",
+                        "Přehraj ji tady, na polici",
+                    ))
                     .clicked()
                 {
-                    actions.preview = Some(name.to_string());
+                    state.previewing =
+                        (!playing_here).then(|| name.to_string());
                 }
             });
         });
+        if playing_here {
+            inline_preview(ui, project, animation);
+        }
     }
+}
+
+/// The animation playing right under its row, sized like a thumbnail.
+///
+/// The same drawing the sheet cutter uses: the full sheet as a texture,
+/// one frame of it shown by UV. Browsing stays browsing - nothing here
+/// touches the canvas or the scene.
+fn inline_preview(
+    ui: &mut egui::Ui,
+    project: &Project,
+    animation: &infengine_adventure::Animation,
+) {
+    let Some(texture) = crate::inspector::motion::sheet_texture(ui, project, &animation.image)
+    else {
+        ui.label(
+            egui::RichText::new(crate::lang::t(
+                "its sheet did not load",
+                "jeho arch se nenačetl",
+            ))
+            .small()
+            .weak(),
+        );
+        return;
+    };
+    let now = ui.input(|i| i.time) as f32;
+    let frame = animation.frame_at(now);
+    let sheet = texture.size_vec2();
+    let (uv_min, uv_max) =
+        animation.frame_uv(frame, glam::Vec2::new(sheet.x, sheet.y));
+
+    let scale = (72.0 / animation.frame_size.x.max(1.0))
+        .min(72.0 / animation.frame_size.y.max(1.0))
+        .clamp(0.25, 4.0);
+    let shown = egui::vec2(
+        animation.frame_size.x * scale,
+        animation.frame_size.y * scale,
+    );
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        let (rect, _) = ui.allocate_exact_size(shown, egui::Sense::hover());
+        ui.painter().rect_filled(rect, 2.0, egui::Color32::from_gray(25));
+        egui::Image::new((texture.id(), shown))
+            .uv(egui::Rect::from_min_max(
+                egui::pos2(uv_min.x, uv_min.y),
+                egui::pos2(uv_max.x, uv_max.y),
+            ))
+            .paint_at(ui, rect);
+        ui.label(
+            egui::RichText::new(if crate::lang::is_czech() {
+                format!("snímek {} z {}", frame + 1, animation.frames)
+            } else {
+                format!("frame {} of {}", frame + 1, animation.frames)
+            })
+            .small()
+            .weak(),
+        );
+    });
+    // Keep it moving even while the mouse rests.
+    ui.ctx().request_repaint();
 }
 
 fn sounds_shelf(
@@ -691,7 +772,7 @@ mod tests {
     #[test]
     fn actions_default_to_doing_nothing() {
         let actions = LibraryActions::default();
-        assert!(actions.add.is_none() && actions.preview.is_none());
+        assert!(actions.add.is_none() && actions.play.is_none());
         assert!(actions.open_script.is_none() && !actions.edit_screens);
     }
 }

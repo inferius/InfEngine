@@ -1108,6 +1108,17 @@ impl Editor {
             self.status = "stopped".into();
         }
         if let Some(id) = actions.play_animation {
+            // Where the animation says it belongs, not a magic corner:
+            // the preview is a rehearsal of the scene, so it stands
+            // where the scene would stand it.
+            if let Some(at) = self
+                .project
+                .animations
+                .get(&id)
+                .map(|a| a.position_in(self.room.size))
+            {
+                self.playback.position = at;
+            }
             self.playback.select(id);
         }
         if let Some(id) = actions.play_line {
