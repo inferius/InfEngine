@@ -53,6 +53,10 @@ pub struct TimelineActions {
     /// The play button: run this scene, and stop it.
     pub play: bool,
     pub stop: bool,
+    /// A sound or track the details column asked to hear.
+    pub hear: Option<String>,
+    /// The Library button: open the asset browser.
+    pub library: bool,
 }
 
 /// What a dragged bar or edge snaps to. Both are the author's to turn
@@ -213,6 +217,13 @@ fn header(
                 .weak(),
         );
         add_menu(ui, selected, pickers, actions);
+        if ui
+            .button("Library")
+            .on_hover_text("Everything the project holds: pictures, sounds, animations - drag them onto the strip")
+            .clicked()
+        {
+            actions.library = true;
+        }
         ui.add(
             egui::Slider::new(zoom, 0.25..=4.0)
                 .show_value(false)
@@ -334,6 +345,12 @@ fn strip(
     let (rect, surface) =
         ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click_and_drag());
     let painter = ui.painter_at(ui.clip_rect().intersect(rect));
+
+    // The middle button drags the strip around, the way every video
+    // editor pans.
+    if surface.dragged_by(egui::PointerButton::Middle) {
+        ui.scroll_with_delta(surface.drag_delta());
+    }
 
     // The wheel is zoom, anchored under the pointer: the moment being
     // looked at stays put while the scale changes around it.
@@ -660,12 +677,27 @@ fn details(
             }
             Action::PlaySound { sound } => {
                 changed |= pick(ui, "sound", sound, pickers.sounds);
+                if ui
+                    .small_button("▶ Hear")
+                    .on_hover_text("Play it now, so the pick can be made by ear")
+                    .clicked()
+                {
+                    actions.hear = Some(sound.clone());
+                }
             }
             Action::PlayMusic { music } => {
                 let mut id = music.clone().unwrap_or_default();
                 if pick(ui, "music", &mut id, pickers.sounds) {
                     *music = (!id.is_empty()).then_some(id);
                     changed = true;
+                }
+                if let Some(id) = music.as_ref()
+                    && ui
+                        .small_button("▶ Hear")
+                        .on_hover_text("Play it now, so the pick can be made by ear")
+                        .clicked()
+                {
+                    actions.hear = Some(id.clone());
                 }
             }
             Action::PlayAnim { animation, wait, at } => {

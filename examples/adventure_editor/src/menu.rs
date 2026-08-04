@@ -39,6 +39,8 @@ pub struct MenuActions {
     pub open_graph: bool,
     pub open_story: bool,
     pub open_library: bool,
+    /// Take the last canvas edit back.
+    pub undo: bool,
     pub open_help: bool,
     /// Switch the inspector to a job.
     pub task: Option<Task>,
@@ -127,6 +129,11 @@ pub fn bar(
 ) -> MenuActions {
     let mut actions = MenuActions::default();
     scale_shortcuts(ctx, ui_scale);
+    // The undo chord, read here because this is the one place with the
+    // frame's input and the actions in the same hands.
+    if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z)) {
+        actions.undo = true;
+    }
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             project_menu(ui, menu, &mut actions);

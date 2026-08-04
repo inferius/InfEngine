@@ -40,9 +40,11 @@ impl Editor {
         match self.tool {
             Tool::Select => {
                 if let Some(at) = edit::vertex_at(&self.room, p, self.grab_radius()) {
+                    self.remember();
                     self.selection = Selection::Vertex(at);
                     self.drag = Drag::Vertex(at);
                 } else if let Some(index) = edit::hotspot_at(&self.room, p) {
+                    self.remember();
                     self.selection = Selection::Hotspot(index);
                     self.drag = Drag::Hotspot(index);
                 } else {
@@ -51,10 +53,14 @@ impl Editor {
                 }
             }
             Tool::DrawFloor => {
+                self.remember();
                 edit::extend_floor(&mut self.room, &mut self.floor_draft, p);
                 self.dirty = true;
             }
-            Tool::DrawHotspot => self.drag = Drag::HotspotRect(p),
+            Tool::DrawHotspot => {
+                self.remember();
+                self.drag = Drag::HotspotRect(p)
+            }
             Tool::WalkPreview => self.preview_walk(p),
         }
     }

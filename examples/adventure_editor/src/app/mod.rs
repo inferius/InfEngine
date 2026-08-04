@@ -100,6 +100,8 @@ pub struct Editor {
     ui_scale: f32,
     tool: Tool,
     selection: Selection,
+    /// Rooms as they were before each canvas edit, newest last.
+    undo: Vec<Room>,
 
     cursor: Vec2,
     last_cursor: Vec2,
@@ -203,6 +205,7 @@ impl Editor {
             ui_scale: settings.ui_scale,
             tool: Tool::default(),
             selection: Selection::None,
+            undo: Vec::new(),
             cursor: Vec2::ZERO,
             last_cursor: Vec2::ZERO,
             drag: Drag::None,
@@ -414,11 +417,11 @@ impl Editor {
             self.playback.select(animation);
         }
         if let Some(sound) = request.sound {
-            self.play_file(&sound);
+            self.play_sound_id(&sound);
         }
         if let Some(music) = request.music {
             match music {
-                Some(track) => self.play_file(&track),
+                Some(track) => self.play_sound_id(&track),
                 // Nothing to stop yet: music is one-shot playback until
                 // the audio system grows a handle to hold on to.
                 None => self.status = "music off".into(),
@@ -470,9 +473,51 @@ impl Editor {
     /// Play a file given as a project-relative path, noting failures in
     /// the play log rather than the status line - during a test run the
     /// log is the thing being read.
+    /// Keep the room as it is now, so the next edit can be taken back.
+    pub(super) fn remember(&mut self) {
+        if self.undo.last() == Some(&self.room) {
+            return;
+        }
+        self.undo.push(self.room.clone());
+        if self.undo.len() > 64 {
+            self.undo.remove(0);
+        }
+    }
+
+    /// Take the last canvas edit back.
+    fn undo(&mut self) {
+        let Some(room) = self.undo.pop() else {
+            self.status = "nothing to undo".into();
+            return;
+        };
+        self.room = room;
+        self.selection = Selection::None;
+        self.floor_draft.clear();
+        self.dirty = true;
+        self.status = "undone".into();
+    }
+
     fn play_file(&mut self, relative: &str) {
         if let Err(message) = assets::play_file(self.audio.as_mut(), &self.project, relative) {
+            // Where the author is looking, not just in the log: a
+            // silent play with the reason buried is a bug report
+            // waiting to be written.
+            self.status = format!("{relative}: {message}");
             self.play.note(message);
+        }
+    }
+
+    /// Play something a script named: a sound id first, a project
+    /// path as the fallback.
+    ///
+    /// Scripts speak in ids - music.intro_0, kyra.sfx7 - and handing
+    /// an id to the file player made the editor silent with a
+    /// file-not-found buried in the log, which is exactly how the
+    /// missing-music report happened.
+    fn play_sound_id(&mut self, id: &str) {
+        match self.project.sounds.get(id).map(str::to_string) {
+            Some(file) => self.play_file(&file),
+            None => self.play_file(id),
         }
     }
 
@@ -793,6 +838,9 @@ impl Editor {
         if actions.open_graph {
             self.graph_ui.open = true;
         }
+        if actions.undo {
+            self.undo();
+        }
         if actions.open_library {
             self.refresh_pictures();
             self.library_ui.open = true;
@@ -927,6 +975,13 @@ impl Editor {
             self.dirty = true;
             self.status = "step moved".into();
         }
+        if let Some(id) = actions.hear {
+            self.play_sound_id(&id);
+        }
+        if actions.library {
+            self.refresh_pictures();
+            self.library_ui.open = true;
+        }
         if actions.play {
             let script = self.scene_script_id();
             self.play.begin(&self.room);
@@ -975,6 +1030,7 @@ impl Editor {
             self.view.fit();
         }
         if actions.delete_selection {
+            self.remember();
             self.delete_selection();
         }
         if let Some(id) = actions.run_script {
