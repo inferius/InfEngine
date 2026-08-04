@@ -78,6 +78,8 @@ pub struct Editor {
     timeline_zoom: f32,
     /// What dragged edges land on.
     timeline_snap: crate::timeline::Snap,
+    /// Whether Animate mode shows the timeline at all.
+    timeline_open: bool,
     /// A step to scroll the strip to, once - the one just added.
     timeline_reveal: Option<Vec<usize>>,
     /// The step the timeline has selected.
@@ -200,6 +202,7 @@ impl Editor {
                 parts: settings.timeline_snap_parts,
                 time: settings.timeline_snap_time,
             },
+            timeline_open: settings.timeline_open,
             timeline_reveal: None,
             timeline_selected: None,
             scripts_dirty: false,
@@ -1199,6 +1202,7 @@ impl AppHandler for Editor {
             timeline_zoom: self.timeline_zoom,
             timeline_snap_parts: self.timeline_snap.parts,
             timeline_snap_time: self.timeline_snap.time,
+            timeline_open: self.timeline_open,
         }
         .save();
     }

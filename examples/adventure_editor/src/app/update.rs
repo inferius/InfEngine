@@ -148,9 +148,10 @@ impl Editor {
             .as_ref()
             .map(|manifest| manifest.start_room.clone())
             .unwrap_or_default();
-        // Only laid out in Animate mode: the timeline is a mode's worth
-        // of screen, and a room being traced does not want one.
-        let scene_line = (self.mode == Mode::Animate)
+        // Only laid out in Animate mode with the panel open: the
+        // timeline is a mode's worth of screen, and a room being traced
+        // does not want one.
+        let scene_line = (self.mode == Mode::Animate && self.timeline_open)
             .then(|| self.scene_timeline())
             .flatten();
         // The selected step's current values, for the details column.
@@ -167,6 +168,7 @@ impl Editor {
         let picker_rooms: Vec<String> = self.project.room_ids();
         let picker_images = self.pictures.clone();
         let mode = self.mode;
+        let cursor_room = self.view.window_to_room(self.cursor);
         let mut content = None;
         if let Some(ui) = self.ui.as_mut() {
             let mut state = UiState {
@@ -194,10 +196,13 @@ impl Editor {
                     String::new()
                 },
                 camera: self.play.game.state.camera,
+                cursor_room,
+                timeline_open: &mut self.timeline_open,
                 content_min: egui::Vec2::ZERO,
                 content_max: egui::Vec2::ZERO,
                 cards: &mut self.cards,
             };
+            let view = &mut self.view;
             let play = &mut self.play;
             let play_draft = &mut self.play_draft;
             let room_id = state.room.id.clone();
@@ -286,6 +291,7 @@ impl Editor {
                 };
                 play_actions =
                     crate::inspector::panel(ctx, &mut state, &mut actions, &mut extras);
+                crate::toolbar::panel(ctx, &mut state, view);
                 if let Some(line) = scene_line.as_ref() {
                     timeline_actions = crate::timeline::panel(
                         ctx,
@@ -305,7 +311,7 @@ impl Editor {
                         },
                     );
                 }
-                ui::status_bar(ctx, &state);
+                ui::status_bar(ctx, &mut state);
                 // What is left between the panels is the canvas; the
                 // view frames the room against it.
                 let rect = ctx.content_rect();

@@ -83,6 +83,12 @@ pub struct UiState<'a> {
     pub now: String,
     /// Where the view is, while one runs.
     pub camera: glam::Vec2,
+    /// Where the cursor is, in room pixels.
+    pub cursor_room: glam::Vec2,
+    /// Whether Animate mode shows the timeline. The status bar's
+    /// toggle; the panel is worth a third of the window and a way to
+    /// give it back.
+    pub timeline_open: &'a mut bool,
     /// Thumbnails and summaries for the room list.
     pub cards: &'a mut crate::cards::Cards,
 }
@@ -101,7 +107,7 @@ impl std::fmt::Debug for UiState<'_> {
 /// It used to hold one label that was empty most of the time. A row that
 /// is usually blank teaches the reader not to look at it, which wastes
 /// the one place in the window that can answer "now what".
-pub fn status_bar(ctx: &egui::Context, state: &UiState<'_>) {
+pub fn status_bar(ctx: &egui::Context, state: &mut UiState<'_>) {
     egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
         ui.horizontal(|ui| {
             ui.label(
@@ -109,6 +115,30 @@ pub fn status_bar(ctx: &egui::Context, state: &UiState<'_>) {
                     .small()
                     .weak(),
             );
+            if state.current_room.is_some() {
+                // Where the cursor is, in the room's own pixels: the
+                // number a hand-placed thing is placed by.
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "x {} · y {}",
+                        state.cursor_room.x.round() as i32,
+                        state.cursor_room.y.round() as i32
+                    ))
+                    .small()
+                    .monospace()
+                    .weak(),
+                );
+                let corners: usize =
+                    state.room.walk.solids.iter().map(|p| p.points.len()).sum();
+                if corners > 0 {
+                    ui.label(
+                        egui::RichText::new(format!("floor: {corners} corners"))
+                            .small()
+                            .weak(),
+                    );
+                }
+            }
             ui.separator();
             if state.playing && !state.now.is_empty() {
                 // While a scene runs, the most useful thing the bar can
@@ -120,20 +150,15 @@ pub fn status_bar(ctx: &egui::Context, state: &UiState<'_>) {
                 ui.label(state.status);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // The tool in force and what it does, so the mouse is
-                // never a mystery. Room mode is the only one whose
-                // tools draw; elsewhere the hint would be noise.
-                if state.mode == Mode::Room {
-                    ui.label(
-                        egui::RichText::new(crate::inspector::tool_hint(*state.tool))
-                            .small()
-                            .weak(),
-                    );
-                    ui.label(
-                        egui::RichText::new(crate::inspector::tool_label(*state.tool))
-                            .small()
-                            .strong(),
-                    );
+                if state.mode == Mode::Animate {
+                    let label = if *state.timeline_open {
+                        "Hide timeline"
+                    } else {
+                        "Show timeline"
+                    };
+                    if ui.small_button(label).clicked() {
+                        *state.timeline_open = !*state.timeline_open;
+                    }
                 }
             });
         });
