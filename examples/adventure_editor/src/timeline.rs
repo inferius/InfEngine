@@ -60,6 +60,10 @@ pub struct TimelineActions {
     /// The play button: run this scene, and stop it.
     pub play: bool,
     pub stop: bool,
+    /// Freeze the scene mid-run, and let it go again.
+    pub pause: Option<bool>,
+    /// The scrubber: put the scene at this many seconds, sight only.
+    pub seek: Option<f32>,
     /// A sound or track the details column asked to hear.
     pub hear: Option<String>,
 }
@@ -128,6 +132,7 @@ pub fn panel(
     line: &Timeline,
     tracks: &[Track],
     playing: bool,
+    paused: bool,
     elapsed: f32,
     zoom: &mut f32,
     snap: &mut Snap,
@@ -141,7 +146,10 @@ pub fn panel(
         .resizable(true)
         .default_height(200.0)
         .show(ctx, |ui| {
-            header(ui, line, playing, elapsed, zoom, snap, selected, pickers, &mut actions);
+            header(
+                ui, line, playing, paused, elapsed, zoom, snap, selected, pickers,
+                &mut actions,
+            );
             ui.separator();
             if line.slots.is_empty() {
                 ui.label(
@@ -227,6 +235,7 @@ fn header(
     ui: &mut egui::Ui,
     line: &Timeline,
     playing: bool,
+    paused: bool,
     elapsed: f32,
     zoom: &mut f32,
     snap: &mut Snap,
@@ -238,16 +247,27 @@ fn header(
     ui.horizontal(|ui| {
         ui.heading(t("Timeline", "Časová osa"));
         // The scene plays from here: the strip is where it is tuned,
-        // so the button that runs it lives on the strip.
+        // so the transport lives on the strip - play, pause, stop, and
+        // the scrubber that goes anywhere.
         if playing {
-            if ui.button(t("⏹ Stop", "⏹ Zastavit")).clicked() {
+            if paused {
+                if ui
+                    .button("▶")
+                    .on_hover_text(t("Let the scene run on", "Nech scénu běžet dál"))
+                    .clicked()
+                {
+                    actions.pause = Some(false);
+                }
+            } else if ui
+                .button("⏸")
+                .on_hover_text(t("Freeze the scene here", "Zmraz scénu tady"))
+                .clicked()
+            {
+                actions.pause = Some(true);
+            }
+            if ui.button("⏹").on_hover_text(t("Stop", "Zastavit")).clicked() {
                 actions.stop = true;
             }
-            ui.label(
-                egui::RichText::new(format!("{elapsed:.1}s"))
-                    .monospace()
-                    .strong(),
-            );
         } else if ui
             .button(t("▶ Play", "▶ Přehrát"))
             .on_hover_text(t("Run this scene from the start", "Spusť scénu od začátku"))
@@ -255,8 +275,33 @@ fn header(
         {
             actions.play = true;
         }
+
+        // The scrubber. Dragging it puts the scene at that moment,
+        // silently; with nothing running it starts the scene paused
+        // there, so a scene can be inspected without pressing play.
+        // While the hand is on it the knob follows the hand, not the
+        // clock - the dragged value is parked in temp data and the
+        // seek fires once, on release.
+        let drag_id = egui::Id::new("timeline_scrub");
+        let held = ui.ctx().data(|d| d.get_temp::<f32>(drag_id));
+        let mut at = held.unwrap_or(if playing { elapsed } else { 0.0 });
+        let end = line.seconds.max(0.1);
+        let scrub = ui.add(
+            egui::Slider::new(&mut at, 0.0..=end)
+                .show_value(false)
+                .trailing_fill(true),
+        );
+        if scrub.drag_stopped() {
+            ui.ctx().data_mut(|d| d.remove::<f32>(drag_id));
+            actions.seek = Some(at.min(line.seconds));
+        } else if scrub.dragged() {
+            ui.ctx().data_mut(|d| d.insert_temp(drag_id, at));
+        } else if scrub.changed() {
+            // A click on the rail rather than a drag of the knob.
+            actions.seek = Some(at.min(line.seconds));
+        }
         ui.label(
-            egui::RichText::new(format!("{:.1}s", line.seconds))
+            egui::RichText::new(format!("{elapsed:.1}s / {:.1}s", line.seconds))
                 .monospace()
                 .weak(),
         );

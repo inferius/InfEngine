@@ -314,6 +314,7 @@ impl Editor {
                         line,
                         &scene_tracks,
                         extras.play.active,
+                        extras.play.paused,
                         extras.play.elapsed,
                         timeline_zoom,
                         timeline_snap,

@@ -66,6 +66,12 @@ impl Request {
 /// The editor's play state.
 pub struct PlayMode {
     pub active: bool,
+    /// Frozen mid-scene: the clock holds, the picture stays.
+    ///
+    /// A separate flag rather than `active = false` because pausing
+    /// keeps everything - the still, the subtitle, the waits - exactly
+    /// where it stands, which is the whole point of pausing.
+    pub paused: bool,
     pub game: Game,
     pub subtitle: Option<Subtitle>,
     /// What the last click resolved to, for the status line.
@@ -100,6 +106,7 @@ impl Default for PlayMode {
     fn default() -> Self {
         Self {
             active: false,
+            paused: false,
             game: Game::default(),
             subtitle: None,
             hover: Click::Nothing,
@@ -128,6 +135,9 @@ impl PlayMode {
     /// Resetting is a separate, deliberate button.
     /// What the scene is doing right now, for the editor to show.
     pub fn doing(&self) -> String {
+        if self.paused {
+            return format!("paused at {:.1}s", self.elapsed);
+        }
         if let Some(subtitle) = self.subtitle.as_ref() {
             return format!("saying {}", subtitle.text);
         }
@@ -145,6 +155,7 @@ impl PlayMode {
 
     pub fn begin(&mut self, room: &Room) {
         self.active = true;
+        self.paused = false;
         self.subtitle = None;
         self.anim_wait = None;
         self.still = None;
@@ -156,6 +167,7 @@ impl PlayMode {
     /// Stop playing and leave the state where it stands.
     pub fn end(&mut self) {
         self.active = false;
+        self.paused = false;
         self.subtitle = None;
         self.anim_wait = None;
         self.still = None;
@@ -208,7 +220,7 @@ pub fn tick(
     dt: f32,
 ) -> Request {
     let mut request = Request::default();
-    if !play.active {
+    if !play.active || play.paused {
         return request;
     }
     play.elapsed += dt.max(0.0);

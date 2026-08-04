@@ -490,6 +490,88 @@ impl Editor {
         }
     }
 
+    /// Everything a scene tick asked for except the audible part.
+    ///
+    /// Seeking replays the scene faster than real time; the picture
+    /// must land where it would have been, but a burst of every sound
+    /// on the way there would be noise pretending to be playback.
+    fn perform_silent(&mut self, mut request: play::Request) {
+        request.speak = None;
+        request.sound = None;
+        request.music = None;
+        self.perform(request);
+    }
+
+    /// Put the scene at `to` seconds, sight only.
+    ///
+    /// Scripts cannot run backwards, so a rewind is a replay: start the
+    /// scene over and tick it forward silently to the target. Seeking
+    /// forward just fast-forwards from where it stands. With nothing
+    /// running, dragging the slider starts the scene paused at that
+    /// moment - scrubbing through a scene to inspect it should not
+    /// require pressing play first.
+    fn seek_scene(&mut self, to: f32) {
+        let script = self.scene_script_id();
+        let fresh = !self.play.active || to < self.play.elapsed;
+        if fresh {
+            let paused = if self.play.active {
+                self.play.paused
+            } else {
+                // Started by the slider: hold at the target rather
+                // than running off from it.
+                true
+            };
+            self.scene_script = Some(script.clone());
+            self.play.begin(&self.room);
+            if !self.play.game.run_script(&script) {
+                self.status = format!("{script} does not exist yet - add a step first");
+                self.play.end();
+                return;
+            }
+            self.play.paused = paused;
+        }
+
+        // The burst: fixed steps, audio dropped, capped so a script
+        // that never ends cannot hold the frame hostage.
+        const STEP: f32 = 0.05;
+        const MOST: usize = 4000;
+        let paused = self.play.paused;
+        self.play.paused = false;
+        let mut steps = 0;
+        while self.play.active && self.play.elapsed + STEP <= to && steps < MOST {
+            let request = play::tick(
+                &mut self.play,
+                &self.room,
+                &self.project.animations,
+                &self.project.locales,
+                &self.language,
+                STEP,
+            );
+            if !request.is_empty() {
+                self.perform_silent(request);
+            }
+            steps += 1;
+        }
+        let rest = to - self.play.elapsed;
+        if self.play.active && rest > 0.0 {
+            let request = play::tick(
+                &mut self.play,
+                &self.room,
+                &self.project.animations,
+                &self.project.locales,
+                &self.language,
+                rest,
+            );
+            if !request.is_empty() {
+                self.perform_silent(request);
+            }
+        }
+        if self.play.active {
+            self.play.paused = paused;
+        }
+        self.status = format!("at {:.1}s", self.play.elapsed);
+    }
+
     /// Load the room a script asked for and hand it back to the game.
     fn enter_room_by_id(&mut self, id: &str, entry: Option<&str>) {
         let target = self
@@ -1041,6 +1123,19 @@ impl Editor {
         if actions.stop {
             self.play.end();
             self.status = "stopped".into();
+        }
+        if let Some(paused) = actions.pause
+            && self.play.active
+        {
+            self.play.paused = paused;
+            self.status = if paused {
+                format!("paused at {:.1}s", self.play.elapsed)
+            } else {
+                "running".into()
+            };
+        }
+        if let Some(to) = actions.seek {
+            self.seek_scene(to.max(0.0));
         }
 
         let mut touched = false;
