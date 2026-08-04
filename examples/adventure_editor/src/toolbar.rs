@@ -49,9 +49,10 @@ pub fn panel(ctx: &egui::Context, state: &mut UiState<'_>, view: &mut View) {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                use crate::lang::t;
                 if ui
-                    .button("Fit")
-                    .on_hover_text("Frame the whole room (F)")
+                    .button(t("Fit", "Zarámovat"))
+                    .on_hover_text(t("Frame the whole room (F)", "Ukázat celou místnost (F)"))
                     .clicked()
                 {
                     view.fit();
@@ -60,7 +61,10 @@ pub fn panel(ctx: &egui::Context, state: &mut UiState<'_>, view: &mut View) {
                     let on = (view.zoom - zoom).abs() < 0.005;
                     if ui
                         .selectable_label(on, label)
-                        .on_hover_text("Pixels of screen per pixel of room")
+                        .on_hover_text(t(
+                            "Pixels of screen per pixel of room",
+                            "Pixely obrazovky na pixel místnosti",
+                        ))
                         .clicked()
                     {
                         view.zoom = zoom;

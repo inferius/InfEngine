@@ -53,22 +53,31 @@ pub enum Addable {
 
 impl Addable {
     pub fn label(self) -> &'static str {
+        use crate::lang::t;
         match self {
-            Addable::Hotspot => "Clickable thing",
-            Addable::Exit => "Way out",
-            Addable::Entry => "Arrival point",
+            Addable::Hotspot => t("Clickable thing", "Klikací věc"),
+            Addable::Exit => t("Way out", "Východ"),
+            Addable::Entry => t("Arrival point", "Místo příchodu"),
         }
     }
 
     /// What it is for, on hover. Adding something you cannot name is how
     /// a room fills up with `hotspot_4`.
     pub fn hint(self) -> &'static str {
+        use crate::lang::t;
         match self {
-            Addable::Hotspot => {
-                "A region the player can click - scenery to look at, an object to take."
-            }
-            Addable::Exit => "A region that sends the player to another room.",
-            Addable::Entry => "Where the actor stands when a door leads into this room.",
+            Addable::Hotspot => t(
+                "A region the player can click - scenery to look at, an object to take.",
+                "Oblast, na kterou jde kliknout - kulisa k prohlédnutí, předmět k sebrání.",
+            ),
+            Addable::Exit => t(
+                "A region that sends the player to another room.",
+                "Oblast, která pošle hráče do jiné místnosti.",
+            ),
+            Addable::Entry => t(
+                "Where the actor stands when a door leads into this room.",
+                "Kde postava stojí, když sem vedou dveře.",
+            ),
         }
     }
 }
@@ -148,36 +157,43 @@ pub fn bar(
             // The right-hand cluster: saved-or-not, Save, Play. Laid
             // right-to-left, so the first added is the rightmost.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                use crate::lang::t;
                 if menu.playing {
-                    if ui.button("⏹ Stop").clicked() {
+                    if ui.button(t("⏹ Stop", "⏹ Zastavit")).clicked() {
                         actions.stop_play = true;
                     }
                 } else if ui
-                    .add_enabled(menu.has_room, egui::Button::new("▶ Play game"))
-                    .on_hover_text("Run the game from this room")
-                    .on_disabled_hover_text("Open a room first")
+                    .add_enabled(
+                        menu.has_room,
+                        egui::Button::new(t("▶ Play game", "▶ Spustit hru")),
+                    )
+                    .on_hover_text(t("Run the game from this room", "Spusť hru od této místnosti"))
+                    .on_disabled_hover_text(t("Open a room first", "Nejdřív otevři místnost"))
                     .clicked()
                 {
                     actions.start_play = true;
                 }
                 if ui
-                    .add_enabled(menu.dirty, egui::Button::new("Save"))
-                    .on_hover_text("Write this room and its scripts back to their files")
-                    .on_disabled_hover_text("Nothing has changed")
+                    .add_enabled(menu.dirty, egui::Button::new(t("Save", "Uložit")))
+                    .on_hover_text(t(
+                        "Write this room and its scripts back to their files",
+                        "Zapiš místnost a její skripty zpět do souborů",
+                    ))
+                    .on_disabled_hover_text(t("Nothing has changed", "Nic se nezměnilo"))
                     .clicked()
                 {
                     actions.save = true;
                 }
                 if menu.dirty {
                     ui.label(
-                        egui::RichText::new("● unsaved")
+                        egui::RichText::new(t("● unsaved", "● neuloženo"))
                             .small()
                             .color(egui::Color32::from_rgb(255, 200, 120)),
                     );
                 }
                 if ui
                     .button("?")
-                    .on_hover_text("How this editor works")
+                    .on_hover_text(t("How this editor works", "Jak tento editor funguje"))
                     .clicked()
                 {
                     actions.open_help = true;
@@ -215,18 +231,25 @@ fn scale_shortcuts(ctx: &egui::Context, ui_scale: &mut f32) {
 }
 
 fn project_menu(ui: &mut egui::Ui, menu: &MenuContext, actions: &mut MenuActions) {
-    ui.menu_button("Project", |ui| {
+    use crate::lang::t;
+    ui.menu_button(t("Project", "Projekt"), |ui| {
         if ui
-            .add_enabled(menu.dirty, egui::Button::new("Save room"))
-            .on_disabled_hover_text("Nothing has changed")
+            .add_enabled(menu.dirty, egui::Button::new(t("Save room", "Uložit místnost")))
+            .on_disabled_hover_text(t("Nothing has changed", "Nic se nezměnilo"))
             .clicked()
         {
             actions.save = true;
             ui.close();
         }
         if ui
-            .add_enabled(menu.has_room, egui::Button::new("Reload room"))
-            .on_hover_text("Throw away unsaved changes and read the file again")
+            .add_enabled(
+                menu.has_room,
+                egui::Button::new(t("Reload room", "Znovu načíst místnost")),
+            )
+            .on_hover_text(t(
+                "Throw away unsaved changes and read the file again",
+                "Zahoď neuložené změny a načti soubor znovu",
+            ))
             .clicked()
         {
             actions.reload = true;
@@ -234,24 +257,33 @@ fn project_menu(ui: &mut egui::Ui, menu: &MenuContext, actions: &mut MenuActions
         }
         ui.separator();
         if ui
-            .button("Game settings...")
-            .on_hover_text("Title, which room the game starts in, languages, export")
+            .button(t("Game settings...", "Nastavení hry..."))
+            .on_hover_text(t(
+                "Title, which room the game starts in, languages, export",
+                "Název, startovní místnost, jazyky, export",
+            ))
             .clicked()
         {
             actions.open_game = true;
             ui.close();
         }
         if ui
-            .button("Screens...")
-            .on_hover_text("Menus and title cards: the parts of the game that are not rooms")
+            .button(t("Screens...", "Obrazovky..."))
+            .on_hover_text(t(
+                "Menus and title cards: the parts of the game that are not rooms",
+                "Menu a titulky: části hry, které nejsou místnosti",
+            ))
             .clicked()
         {
             actions.open_screens = true;
             ui.close();
         }
         if ui
-            .button("Story map...")
-            .on_hover_text("Every place in the game and the ways between them")
+            .button(t("Story map...", "Mapa příběhu..."))
+            .on_hover_text(t(
+                "Every place in the game and the ways between them",
+                "Všechna místa ve hře a cesty mezi nimi",
+            ))
             .clicked()
         {
             actions.open_story = true;
@@ -261,12 +293,13 @@ fn project_menu(ui: &mut egui::Ui, menu: &MenuContext, actions: &mut MenuActions
 }
 
 fn room_menu(ui: &mut egui::Ui, menu: &MenuContext, actions: &mut MenuActions) {
-    ui.menu_button("Room", |ui| {
+    use crate::lang::t;
+    ui.menu_button(t("Room", "Místnost"), |ui| {
         if !menu.has_room {
-            ui.label(egui::RichText::new("No room open.").weak());
+            ui.label(egui::RichText::new(t("No room open.", "Žádná místnost.")).weak());
             return;
         }
-        ui.label(egui::RichText::new("Add").small().weak());
+        ui.label(egui::RichText::new(t("Add", "Přidat")).small().weak());
         for what in [Addable::Hotspot, Addable::Exit, Addable::Entry] {
             if ui
                 .button(what.label())
@@ -279,8 +312,8 @@ fn room_menu(ui: &mut egui::Ui, menu: &MenuContext, actions: &mut MenuActions) {
         }
         ui.separator();
         if ui
-            .button("Fit in view")
-            .on_hover_text("Frame the whole room")
+            .button(t("Fit in view", "Zarámovat do okna"))
+            .on_hover_text(t("Frame the whole room", "Ukázat celou místnost"))
             .clicked()
         {
             actions.fit_view = true;
@@ -290,16 +323,39 @@ fn room_menu(ui: &mut egui::Ui, menu: &MenuContext, actions: &mut MenuActions) {
 }
 
 fn view_menu(ui: &mut egui::Ui, overlays: &mut Overlays, ui_scale: &mut f32) {
-    ui.menu_button("View", |ui| {
-        ui.label(egui::RichText::new("Show over the picture").small().weak());
-        ui.checkbox(&mut overlays.floor, "Walkable floor");
-        ui.checkbox(&mut overlays.hotspots, "Clickable things");
-        ui.checkbox(&mut overlays.exits, "Ways out");
-        ui.checkbox(&mut overlays.entries, "Arrival points");
-        ui.checkbox(&mut overlays.bounds, "Room edge");
-        ui.checkbox(&mut overlays.camera, "Camera frame");
+    use crate::lang::t;
+    ui.menu_button(t("View", "Zobrazení"), |ui| {
+        ui.label(
+            egui::RichText::new(t("Show over the picture", "Ukázat přes obrázek"))
+                .small()
+                .weak(),
+        );
+        ui.checkbox(&mut overlays.floor, t("Walkable floor", "Pochozí podlaha"));
+        ui.checkbox(&mut overlays.hotspots, t("Clickable things", "Klikací věci"));
+        ui.checkbox(&mut overlays.exits, t("Ways out", "Východy"));
+        ui.checkbox(&mut overlays.entries, t("Arrival points", "Místa příchodu"));
+        ui.checkbox(&mut overlays.bounds, t("Room edge", "Okraj místnosti"));
+        ui.checkbox(&mut overlays.camera, t("Camera frame", "Rám kamery"));
         ui.separator();
-        ui.label(egui::RichText::new("Interface size").small().weak());
+        // The editor's own language, apart from the game's: what the
+        // panels say, not what the characters do.
+        ui.label(egui::RichText::new(t("Language", "Jazyk")).small().weak());
+        ui.horizontal(|ui| {
+            let mut czech = crate::lang::is_czech();
+            if ui.selectable_label(!czech, "English").clicked() {
+                czech = false;
+            }
+            if ui.selectable_label(czech, "Čeština").clicked() {
+                czech = true;
+            }
+            crate::lang::set_czech(czech);
+        });
+        ui.separator();
+        ui.label(
+            egui::RichText::new(t("Interface size", "Velikost rozhraní"))
+                .small()
+                .weak(),
+        );
         ui.horizontal(|ui| {
             if ui.small_button("-").clicked() {
                 *ui_scale = clamp_ui_scale(*ui_scale - UI_SCALE_STEP);
@@ -309,7 +365,7 @@ fn view_menu(ui: &mut egui::Ui, overlays: &mut Overlays, ui_scale: &mut f32) {
             if ui.small_button("+").clicked() {
                 *ui_scale = clamp_ui_scale(*ui_scale + UI_SCALE_STEP);
             }
-            if ui.small_button("reset").clicked() {
+            if ui.small_button(t("reset", "výchozí")).clicked() {
                 *ui_scale = 1.0;
             }
         });
@@ -319,7 +375,10 @@ fn view_menu(ui: &mut egui::Ui, overlays: &mut Overlays, ui_scale: &mut f32) {
                 egui::Slider::new(&mut slider, MIN_UI_SCALE..=MAX_UI_SCALE)
                     .show_value(false),
             )
-            .on_hover_text("Scales every panel, menu and label. Ctrl+ and Ctrl- do the same.")
+            .on_hover_text(t(
+                "Scales every panel, menu and label. Ctrl+ and Ctrl- do the same.",
+                "Zvětší každý panel, menu i popisek. Ctrl+ a Ctrl- dělají totéž.",
+            ))
             .changed()
         {
             *ui_scale = clamp_ui_scale(slider);
@@ -328,10 +387,14 @@ fn view_menu(ui: &mut egui::Ui, overlays: &mut Overlays, ui_scale: &mut f32) {
 }
 
 fn help_menu(ui: &mut egui::Ui, actions: &mut MenuActions) {
-    ui.menu_button("Help", |ui| {
+    use crate::lang::t;
+    ui.menu_button(t("Help", "Nápověda"), |ui| {
         if ui
-            .button("How this editor works")
-            .on_hover_text("What each part of the window is for")
+            .button(t("How this editor works", "Jak tento editor funguje"))
+            .on_hover_text(t(
+                "What each part of the window is for",
+                "K čemu je která část okna",
+            ))
             .clicked()
         {
             actions.open_help = true;

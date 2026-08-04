@@ -51,41 +51,75 @@ struct Part {
     what: &'static str,
 }
 
-const PARTS: &[Part] = &[
-    Part {
-        where_: "Left",
-        what: "Every room in the project. Click one to open it. \
-               The box at the top filters the list by name.",
-    },
-    Part {
-        where_: "Middle",
-        what: "The room itself, as the player will see it. \
-               Drag with the middle button to pan, scroll to zoom. \
-               What you draw with the current tool goes here.",
-    },
-    Part {
-        where_: "Right",
-        what: "The inspector. What it shows follows the mode: the room's \
-               parts in Room, animations in Animate, the script's steps \
-               in Script, the tester's controls in Test.",
-    },
-    Part {
-        where_: "Bottom",
-        what: "What is under the cursor, and what just happened. \
-               In Animate mode the timeline sits beneath it.",
-    },
-    Part {
-        where_: "Top",
-        what: "The menus, then the four mode pills - Room, Animate, \
-               Script, Test - then Save and Play. The pills are the \
-               spine of the editor: pick what you are doing and the \
-               tools, inspector and centre follow.",
-    },
-];
+/// The layout in the order a reader meets it, in the interface
+/// language. A function rather than a constant so the switch in the
+/// View menu takes effect on the next frame.
+fn parts() -> [Part; 5] {
+    use crate::lang::t;
+    [
+        Part {
+            where_: t("Left", "Vlevo"),
+            what: t(
+                "The library: everything the game is made of. Rooms, \
+                 pictures, animations, sounds, scripts, screens, fonts. \
+                 The box at the top searches the open shelf.",
+                "Knihovna: všechno, z čeho se hra skládá. Místnosti, \
+                 obrázky, animace, zvuky, skripty, obrazovky, písma. \
+                 Políčko nahoře prohledává otevřenou polici.",
+            ),
+        },
+        Part {
+            where_: t("Middle", "Uprostřed"),
+            what: t(
+                "The room itself, as the player will see it. \
+                 Drag with the middle button to pan, scroll to zoom. \
+                 What you draw with the current tool goes here.",
+                "Samotná místnost, jak ji uvidí hráč. Prostředním \
+                 tlačítkem posouváš, kolečkem přibližuješ. Sem se \
+                 kreslí to, co děláš aktivním nástrojem.",
+            ),
+        },
+        Part {
+            where_: t("Right", "Vpravo"),
+            what: t(
+                "The inspector. What it shows follows the mode: the room's \
+                 parts in Room, animations in Animate, the script's steps \
+                 in Script, the tester's controls in Test.",
+                "Inspektor. Co ukazuje, řídí režim: části místnosti v \
+                 režimu Místnost, animace v Animaci, kroky skriptu ve \
+                 Skriptu, ovládání testera v Testu.",
+            ),
+        },
+        Part {
+            where_: t("Bottom", "Dole"),
+            what: t(
+                "What is under the cursor, and what just happened. \
+                 In Animate mode the timeline sits beneath it.",
+                "Co je pod kurzorem a co se právě stalo. V režimu \
+                 Animace je pod tím časová osa.",
+            ),
+        },
+        Part {
+            where_: t("Top", "Nahoře"),
+            what: t(
+                "The menus, then the four mode pills - Room, Animate, \
+                 Script, Test - then Save and Play. The pills are the \
+                 spine of the editor: pick what you are doing and the \
+                 tools, inspector and centre follow.",
+                "Menu, pak čtyři přepínače režimů - Místnost, Animace, \
+                 Skript, Test - a Uložit s Přehrát. Přepínače jsou páteř \
+                 editoru: vyber, co děláš, a nástroje, inspektor i střed \
+                 se přizpůsobí.",
+            ),
+        },
+    ]
+}
 
 pub fn window(ctx: &egui::Context, state: &mut HelpUi) {
+    use crate::lang::t;
     let mut open = state.open;
-    egui::Window::new("How this editor works")
+    egui::Window::new(t("How this editor works", "Jak tento editor funguje"))
+        .id(egui::Id::new("help_window"))
         .open(&mut open)
         .default_width(460.0)
         .default_height(520.0)
@@ -94,27 +128,32 @@ pub fn window(ctx: &egui::Context, state: &mut HelpUi) {
             egui::ScrollArea::vertical()
                 .id_salt("help_scroll")
                 .show(ui, |ui| {
-                    ui.label(
+                    ui.label(t(
                         "This is an editor for point-and-click adventures. \
                          A game is a set of rooms; a room is one screen the \
                          player looks at and clicks on.",
-                    );
+                        "Tohle je editor point-and-click adventur. Hra je \
+                         sada místností; místnost je jedna obrazovka, na \
+                         kterou se hráč dívá a kliká.",
+                    ));
                     ui.add_space(10.0);
 
-                    ui.heading("The window");
-                    for part in PARTS {
+                    ui.heading(t("The window", "Okno"));
+                    for part in parts() {
                         ui.add_space(4.0);
                         ui.label(egui::RichText::new(part.where_).strong());
                         ui.label(egui::RichText::new(part.what).small());
                     }
 
                     ui.add_space(12.0);
-                    ui.heading("The four modes");
+                    ui.heading(t("The four modes", "Čtyři režimy"));
                     ui.label(
-                        egui::RichText::new(
+                        egui::RichText::new(t(
                             "The pills at the top. Each answers one question \
                              about the game you are making.",
-                        )
+                            "Přepínače nahoře. Každý odpovídá na jednu otázku \
+                             o hře, kterou tvoříš.",
+                        ))
                         .small()
                         .weak(),
                     );
@@ -125,67 +164,101 @@ pub fn window(ctx: &egui::Context, state: &mut HelpUi) {
                     }
 
                     ui.add_space(12.0);
-                    ui.heading("Adding things");
-                    ui.label(
+                    ui.heading(t("Adding things", "Přidávání věcí"));
+                    ui.label(t(
                         "Everything a room can hold is added from the Room menu. \
                          What you add appears in the middle of the view, and the \
                          editor switches to Room mode to edit it.",
-                    );
+                        "Všechno, co místnost může obsahovat, se přidává z menu \
+                         Místnost. Přidané se objeví uprostřed pohledu a editor \
+                         se přepne do režimu Místnost, kde se to upravuje.",
+                    ));
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new(
+                        egui::RichText::new(t(
                             "You can also draw one directly: in Room mode the Outline \
                              tool traces the walkable area, and the Box out tool drags \
                              a rectangle over something clickable.",
-                        )
+                            "Jde to i kreslením: v režimu Místnost nástroj Obrys \
+                             obtáhne pochozí plochu a nástroj Vyznačit natáhne \
+                             obdélník přes něco klikacího.",
+                        ))
                         .small(),
                     );
 
                     ui.add_space(12.0);
-                    ui.heading("The words");
-                    for (term, meaning) in TERMS {
+                    ui.heading(t("The words", "Pojmy"));
+                    for (term, meaning) in terms() {
                         ui.add_space(4.0);
-                        ui.label(egui::RichText::new(*term).strong());
-                        ui.label(egui::RichText::new(*meaning).small());
+                        ui.label(egui::RichText::new(term).strong());
+                        ui.label(egui::RichText::new(meaning).small());
                     }
                 });
         });
     state.open = open;
 }
 
-/// Terms the rest of the interface uses without explaining.
-const TERMS: &[(&str, &str)] = &[
-    (
-        "Floor",
-        "The part of the picture the actor may stand on. Without one \
-         the actor cannot move at all.",
-    ),
-    (
-        "Clickable thing",
-        "A region of the picture the player can click, with a name they \
-         read and a script that runs.",
-    ),
-    (
-        "Way out",
-        "A region that sends the player to another room. It names the \
-         room and, optionally, which arrival point to use there.",
-    ),
-    (
-        "Arrival point",
-        "Where the actor stands on entering. A room reached from three \
-         directions wants three of them.",
-    ),
-    (
-        "Sheet",
-        "One image holding a row of frames. Cutting it up turns it into \
-         an animation.",
-    ),
-    (
-        "Screen",
-        "A part of the game that is not a room: a title card, a menu, \
-         the end credits.",
-    ),
-];
+/// Terms the rest of the interface uses without explaining, in the
+/// interface language.
+fn terms() -> [(&'static str, &'static str); 6] {
+    use crate::lang::t;
+    [
+        (
+            t("Floor", "Podlaha"),
+            t(
+                "The part of the picture the actor may stand on. Without one \
+                 the actor cannot move at all.",
+                "Část obrázku, na které smí postava stát. Bez ní se postava \
+                 vůbec nepohne.",
+            ),
+        ),
+        (
+            t("Clickable thing", "Klikací věc"),
+            t(
+                "A region of the picture the player can click, with a name they \
+                 read and a script that runs.",
+                "Oblast obrázku, na kterou hráč může kliknout - má jméno, \
+                 které si přečte, a skript, který se spustí.",
+            ),
+        ),
+        (
+            t("Way out", "Východ"),
+            t(
+                "A region that sends the player to another room. It names the \
+                 room and, optionally, which arrival point to use there.",
+                "Oblast, která pošle hráče do jiné místnosti. Říká kam a \
+                 případně na které místo příchodu.",
+            ),
+        ),
+        (
+            t("Arrival point", "Místo příchodu"),
+            t(
+                "Where the actor stands on entering. A room reached from three \
+                 directions wants three of them.",
+                "Kde postava stojí po příchodu. Místnost přístupná ze tří \
+                 stran jich chce mít tři.",
+            ),
+        ),
+        (
+            t("Sheet", "Arch"),
+            t(
+                "One image holding a row of frames. Cutting it up turns it into \
+                 an animation.",
+                "Jeden obrázek s řadou snímků. Rozřezáním z něj vznikne \
+                 animace.",
+            ),
+        ),
+        (
+            t("Screen", "Obrazovka"),
+            t(
+                "A part of the game that is not a room: a title card, a menu, \
+                 the end credits.",
+                "Část hry, která není místnost: titulek, menu, závěrečné \
+                 titulky.",
+            ),
+        ),
+    ]
+}
 
 #[cfg(test)]
 mod tests {
@@ -206,24 +279,35 @@ mod tests {
 
     #[test]
     fn every_part_of_the_window_is_described() {
-        // Four edges and the middle: a reader must not find a region of
-        // the window this page failed to mention.
-        assert_eq!(PARTS.len(), 5);
-        for part in PARTS {
-            assert!(!part.where_.is_empty());
-            assert!(
-                part.what.len() > 40,
-                "{} needs more than a phrase",
-                part.where_
-            );
+        let _guard = crate::lang::test_lock();
+        // Four edges and the middle, in both languages: a reader must
+        // not find a region of the window this page failed to mention.
+        for czech in [false, true] {
+            crate::lang::set_czech(czech);
+            let parts = parts();
+            assert_eq!(parts.len(), 5);
+            for part in parts {
+                assert!(!part.where_.is_empty());
+                assert!(
+                    part.what.len() > 40,
+                    "{} needs more than a phrase",
+                    part.where_
+                );
+            }
         }
+        crate::lang::set_czech(false);
     }
 
     #[test]
     fn every_term_the_interface_uses_is_defined() {
-        for (term, meaning) in TERMS {
-            assert!(!term.is_empty());
-            assert!(meaning.len() > 30, "{term} is not really explained");
+        let _guard = crate::lang::test_lock();
+        for czech in [false, true] {
+            crate::lang::set_czech(czech);
+            for (term, meaning) in terms() {
+                assert!(!term.is_empty());
+                assert!(meaning.len() > 30, "{term} is not really explained");
+            }
         }
+        crate::lang::set_czech(false);
     }
 }

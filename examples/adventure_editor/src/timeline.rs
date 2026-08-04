@@ -234,12 +234,13 @@ fn header(
     pickers: &Pickers<'_>,
     actions: &mut TimelineActions,
 ) {
+    use crate::lang::t;
     ui.horizontal(|ui| {
-        ui.heading("Timeline");
+        ui.heading(t("Timeline", "Časová osa"));
         // The scene plays from here: the strip is where it is tuned,
         // so the button that runs it lives on the strip.
         if playing {
-            if ui.button("⏹ Stop").clicked() {
+            if ui.button(t("⏹ Stop", "⏹ Zastavit")).clicked() {
                 actions.stop = true;
             }
             ui.label(
@@ -248,8 +249,8 @@ fn header(
                     .strong(),
             );
         } else if ui
-            .button("▶ Play")
-            .on_hover_text("Run this scene from the start")
+            .button(t("▶ Play", "▶ Přehrát"))
+            .on_hover_text(t("Run this scene from the start", "Spusť scénu od začátku"))
             .clicked()
         {
             actions.play = true;
@@ -263,17 +264,26 @@ fn header(
         ui.add(
             egui::Slider::new(zoom, 0.25..=4.0)
                 .show_value(false)
-                .text("zoom"),
+                .text(t("zoom", "lupa")),
         );
-        ui.label(egui::RichText::new("snap").small().weak());
-        ui.checkbox(&mut snap.parts, "steps")
-            .on_hover_text("Dragged edges land on other steps' starts and ends");
-        ui.checkbox(&mut snap.time, "time")
-            .on_hover_text("Dragged edges land on the time grid");
+        ui.label(egui::RichText::new(t("snap", "přichytávat")).small().weak());
+        ui.checkbox(&mut snap.parts, t("steps", "ke krokům"))
+            .on_hover_text(t(
+                "Dragged edges land on other steps' starts and ends",
+                "Tažené hrany dosednou na začátky a konce jiných kroků",
+            ));
+        ui.checkbox(&mut snap.time, t("time", "k času"))
+            .on_hover_text(t(
+                "Dragged edges land on the time grid",
+                "Tažené hrany dosednou na časovou mřížku",
+            ));
         ui.label(
-            egui::RichText::new("wheel zooms · drag a bar to move it · drag from the Library to add")
-                .small()
-                .weak(),
+            egui::RichText::new(t(
+                "wheel zooms · drag a clip to move it · drag from the Library to add",
+                "kolečko přibližuje · klip přesuneš tažením · z Knihovny přidáš přetažením",
+            ))
+            .small()
+            .weak(),
         );
     });
     if !line.untaken.is_empty() {
@@ -281,11 +291,18 @@ fn header(
         // choice is half the story, and tuning the half the player may
         // not see is worse than knowing you cannot see it.
         ui.label(
-            egui::RichText::new(format!(
-                "{} branch{} not shown: only the taken side is laid out",
-                line.untaken.len(),
-                if line.untaken.len() == 1 { "" } else { "es" }
-            ))
+            egui::RichText::new(if crate::lang::is_czech() {
+                format!(
+                    "{} větví nevykresleno: osa ukazuje jen zvolenou stranu",
+                    line.untaken.len()
+                )
+            } else {
+                format!(
+                    "{} branch{} not shown: only the taken side is laid out",
+                    line.untaken.len(),
+                    if line.untaken.len() == 1 { "" } else { "es" }
+                )
+            })
             .small()
             .color(egui::Color32::from_rgb(255, 200, 120)),
         );
@@ -304,28 +321,33 @@ fn add_menu(
     pickers: &Pickers<'_>,
     actions: &mut TimelineActions,
 ) {
-    ui.menu_button("Add step", |ui| {
+    use crate::lang::t;
+    ui.menu_button(t("Add step", "Přidat krok"), |ui| {
         let first = |list: &[String]| list.first().cloned().unwrap_or_default();
         let entries: [(&str, &str, Action); 6] = [
-            ("Wait", "A pause of so many seconds", Action::Wait { seconds: 1.0 }),
             (
-                "Image",
-                "Show a picture for a while",
+                t("Wait", "Čekání"),
+                t("A pause of so many seconds", "Pauza na daný počet sekund"),
+                Action::Wait { seconds: 1.0 },
+            ),
+            (
+                t("Image", "Obrázek"),
+                t("Show a picture for a while", "Ukaž na chvíli obrázek"),
                 Action::ShowImage {
                     image: first(pickers.images),
                     seconds: 2.0,
                 },
             ),
             (
-                "Sound",
-                "Play a sound once",
+                t("Sound", "Zvuk"),
+                t("Play a sound once", "Přehraj zvuk jednou"),
                 Action::PlaySound {
                     sound: first(pickers.sounds),
                 },
             ),
             (
-                "Animation",
-                "Play an animation and wait for it",
+                t("Animation", "Animace"),
+                t("Play an animation and wait for it", "Přehraj animaci a počkej na ni"),
                 Action::PlayAnim {
                     animation: first(pickers.animations),
                     wait: true,
@@ -333,16 +355,16 @@ fn add_menu(
                 },
             ),
             (
-                "Camera move",
-                "Pan the view somewhere",
+                t("Camera move", "Pohyb kamery"),
+                t("Pan the view somewhere", "Přejeď pohledem jinam"),
                 Action::MoveCamera {
                     to: Vec2::ZERO,
                     seconds: 1.0,
                 },
             ),
             (
-                "Line",
-                "Someone says something",
+                t("Line", "Replika"),
+                t("Someone says something", "Někdo něco řekne"),
                 Action::Say {
                     line: String::new(),
                     speaker: None,
@@ -357,7 +379,10 @@ fn add_menu(
         }
     })
     .response
-    .on_hover_text("Put a new step after the selected one");
+    .on_hover_text(t(
+        "Put a new step after the selected one",
+        "Vlož nový krok za vybraný",
+    ));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -698,13 +723,14 @@ fn details(
 ) {
     ui.vertical(|ui| {
         ui.set_width(DETAILS - 16.0);
-        ui.strong("Step");
+        ui.strong(crate::lang::t("Step", "Krok"));
         if let Some(slot) = line.slots.iter().find(|slot| slot.path == path) {
             ui.label(
-                egui::RichText::new(format!(
-                    "starts {:.1}s, runs {:.1}s",
-                    slot.at, slot.seconds
-                ))
+                egui::RichText::new(if crate::lang::is_czech() {
+                    format!("začíná {:.1}s, trvá {:.1}s", slot.at, slot.seconds)
+                } else {
+                    format!("starts {:.1}s, runs {:.1}s", slot.at, slot.seconds)
+                })
                 .small()
                 .monospace()
                 .weak(),
@@ -794,7 +820,10 @@ fn details(
         }
 
         ui.add_space(8.0);
-        if ui.button("Remove step").clicked() {
+        if ui
+            .button(crate::lang::t("Remove step", "Odebrat krok"))
+            .clicked()
+        {
             actions.remove = Some(path.to_vec());
         }
     });

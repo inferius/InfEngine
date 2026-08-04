@@ -21,6 +21,8 @@ pub struct Settings {
     pub timeline_snap_parts: bool,
     pub timeline_snap_time: bool,
     pub timeline_open: bool,
+    /// The interface language: "en" or "cs".
+    pub language: String,
 }
 
 impl Default for Settings {
@@ -31,6 +33,7 @@ impl Default for Settings {
             timeline_snap_parts: true,
             timeline_snap_time: true,
             timeline_open: true,
+            language: "en".into(),
         }
     }
 }
@@ -68,12 +71,13 @@ impl Settings {
 
     fn serialise(&self) -> String {
         format!(
-            "ui_scale {}\ntimeline_zoom {}\ntimeline_snap_parts {}\ntimeline_snap_time {}\ntimeline_open {}\n",
+            "ui_scale {}\ntimeline_zoom {}\ntimeline_snap_parts {}\ntimeline_snap_time {}\ntimeline_open {}\nlanguage {}\n",
             self.ui_scale,
             self.timeline_zoom,
             self.timeline_snap_parts as u8,
             self.timeline_snap_time as u8,
             self.timeline_open as u8,
+            self.language,
         )
     }
 
@@ -84,6 +88,14 @@ impl Settings {
             let (Some(key), Some(value)) = (parts.next(), parts.next()) else {
                 continue;
             };
+            // The one key whose value is a word, read before the number
+            // parse can throw it away.
+            if key == "language" {
+                if matches!(value, "en" | "cs") {
+                    out.language = value.to_string();
+                }
+                continue;
+            }
             let Ok(value) = value.parse::<f32>() else {
                 continue;
             };
@@ -116,8 +128,15 @@ mod tests {
             timeline_snap_parts: false,
             timeline_snap_time: true,
             timeline_open: false,
+            language: "cs".into(),
         };
         assert_eq!(Settings::parse(&settings.serialise()), settings);
+    }
+
+    #[test]
+    fn an_unknown_language_keeps_the_default() {
+        assert_eq!(Settings::parse("language xx").language, "en");
+        assert_eq!(Settings::parse("language cs").language, "cs");
     }
 
     #[test]

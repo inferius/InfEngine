@@ -47,14 +47,15 @@ impl Shelf {
     ];
 
     fn label(self) -> &'static str {
+        use crate::lang::t;
         match self {
-            Shelf::Rooms => "Rooms",
-            Shelf::Pictures => "Pictures",
-            Shelf::Animations => "Animations",
-            Shelf::Sounds => "Sounds",
-            Shelf::Scripts => "Scripts",
-            Shelf::Screens => "Screens",
-            Shelf::Fonts => "Fonts",
+            Shelf::Rooms => t("Rooms", "Místnosti"),
+            Shelf::Pictures => t("Pictures", "Obrázky"),
+            Shelf::Animations => t("Animations", "Animace"),
+            Shelf::Sounds => t("Sounds", "Zvuky"),
+            Shelf::Scripts => t("Scripts", "Skripty"),
+            Shelf::Screens => t("Screens", "Obrazovky"),
+            Shelf::Fonts => t("Fonts", "Písma"),
         }
     }
 }
@@ -120,17 +121,21 @@ pub fn panel(
                 });
             ui.separator();
             ui.label(
-                egui::RichText::new("Drag an asset onto the timeline to put it in the scene.")
-                    .small()
-                    .weak(),
+                egui::RichText::new(crate::lang::t(
+                    "Drag an asset onto the timeline to put it in the scene.",
+                    "Přetáhni asset na časovou osu a je ve scéně.",
+                ))
+                .small()
+                .weak(),
             );
         });
     asked
 }
 
 fn header(ui: &mut egui::Ui, state: &mut LibraryUi, project: &Project, pictures: &[String]) {
+    use crate::lang::t;
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("LIBRARY").small().weak());
+        ui.label(egui::RichText::new(t("LIBRARY", "KNIHOVNA")).small().weak());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let count = match state.shelf {
                 Shelf::Rooms => project.rooms.len(),
@@ -147,7 +152,7 @@ fn header(ui: &mut egui::Ui, state: &mut LibraryUi, project: &Project, pictures:
     ui.horizontal(|ui| {
         ui.add(
             egui::TextEdit::singleline(&mut state.filter)
-                .hint_text("Search assets")
+                .hint_text(t("Search assets", "Hledat assety"))
                 .desired_width(f32::INFINITY),
         );
     });
@@ -182,11 +187,14 @@ fn rooms_shelf(
     actions: &mut UiActions,
 ) {
     if ui_state.project.is_empty() {
-        ui.label("No rooms found.");
+        ui.label(crate::lang::t("No rooms found.", "Žádné místnosti."));
         ui.label(
-            egui::RichText::new("Point the editor at a folder containing rooms/.")
-                .small()
-                .weak(),
+            egui::RichText::new(crate::lang::t(
+                "Point the editor at a folder containing rooms/.",
+                "Spusť editor nad složkou obsahující rooms/.",
+            ))
+            .small()
+            .weak(),
         );
         return;
     }

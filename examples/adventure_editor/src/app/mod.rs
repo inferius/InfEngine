@@ -150,6 +150,7 @@ impl std::fmt::Debug for Editor {
 impl Editor {
     pub fn new(root: PathBuf) -> Self {
         let settings = crate::settings::Settings::load();
+        crate::lang::set_czech(settings.language == "cs");
         let project = Project::open(&root);
         let play = PlayMode::with_scripts(project.scripts.clone());
         // A project with no manifest yet gets an empty one rather than
@@ -1216,6 +1217,7 @@ impl AppHandler for Editor {
             timeline_snap_parts: self.timeline_snap.parts,
             timeline_snap_time: self.timeline_snap.time,
             timeline_open: self.timeline_open,
+            language: if crate::lang::is_czech() { "cs" } else { "en" }.into(),
         }
         .save();
     }

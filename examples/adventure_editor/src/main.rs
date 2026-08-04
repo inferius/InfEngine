@@ -21,6 +21,7 @@ mod draw;
 mod edit;
 mod help;
 mod inspector;
+mod lang;
 mod library;
 mod menu;
 mod mode;

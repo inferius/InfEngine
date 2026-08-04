@@ -30,21 +30,35 @@ impl Mode {
 
     /// The pill's label.
     pub fn label(self) -> &'static str {
+        use crate::lang::t;
         match self {
-            Mode::Room => "Room",
-            Mode::Animate => "Animate",
-            Mode::Script => "Script",
-            Mode::Test => "Test",
+            Mode::Room => t("Room", "Místnost"),
+            Mode::Animate => t("Animate", "Animace"),
+            Mode::Script => t("Script", "Skript"),
+            Mode::Test => t("Test", "Test"),
         }
     }
 
     /// What switching here means, on hover.
     pub fn hint(self) -> &'static str {
+        use crate::lang::t;
         match self {
-            Mode::Room => "Build the room: its pictures, its floor, the things to click.",
-            Mode::Animate => "Compose the scene: animations, sounds and the timeline.",
-            Mode::Script => "Wire the logic: what happens when, as a graph.",
-            Mode::Test => "Play the game, with flags and the log at hand.",
+            Mode::Room => t(
+                "Build the room: its pictures, its floor, the things to click.",
+                "Postav místnost: její obrázky, podlahu a věci na klikání.",
+            ),
+            Mode::Animate => t(
+                "Compose the scene: animations, sounds and the timeline.",
+                "Slož scénu: animace, zvuky a časovou osu.",
+            ),
+            Mode::Script => t(
+                "Wire the logic: what happens when, as a graph.",
+                "Zapoj logiku: co se kdy stane, jako graf.",
+            ),
+            Mode::Test => t(
+                "Play the game, with flags and the log at hand.",
+                "Hraj hru, s přepínači a záznamem po ruce.",
+            ),
         }
     }
 

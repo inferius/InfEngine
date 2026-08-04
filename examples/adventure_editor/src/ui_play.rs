@@ -55,19 +55,23 @@ pub fn contents(
     room: &str,
     slots: &[SlotInfo],
 ) -> PlayActions {
+    use crate::lang::t;
     let mut actions = PlayActions::default();
 
     ui.horizontal(|ui| {
         if play.active {
-            if ui.button("⏹ Stop").clicked() {
+            if ui.button(t("⏹ Stop", "⏹ Zastavit")).clicked() {
                 actions.stop = true;
             }
-        } else if ui.button("▶ Run").clicked() {
+        } else if ui.button(t("▶ Run", "▶ Spustit")).clicked() {
             actions.start = true;
         }
         if ui
-            .button("reset")
-            .on_hover_text("Clear flags, inventory and log, then restart the room")
+            .button(t("reset", "vynulovat"))
+            .on_hover_text(t(
+                "Clear flags, inventory and log, then restart the room",
+                "Smaž přepínače, inventář i záznam a spusť místnost znovu",
+            ))
             .clicked()
         {
             actions.reset = true;
@@ -76,16 +80,17 @@ pub fn contents(
 
     if !play.active {
         ui.label(
-            egui::RichText::new(
+            egui::RichText::new(t(
                 "Not playing. Flags and inventory below are kept for the next run.",
-            )
+                "Nehraje se. Přepínače a inventář níže zůstávají pro příští běh.",
+            ))
             .weak(),
         );
     }
 
     ui.separator();
     ui.horizontal_wrapped(|ui| {
-        ui.label("verb");
+        ui.label(t("verb", "sloveso"));
         for verb in Verb::ALL {
             ui.selectable_value(&mut play.verb, verb, verb.name());
         }
@@ -127,9 +132,19 @@ fn scripts_section(
         .into_iter()
         .map(str::to_string)
         .collect();
-    ui.heading(format!("Scripts ({})", ids.len()));
+    ui.heading(if crate::lang::is_czech() {
+        format!("Skripty ({})", ids.len())
+    } else {
+        format!("Scripts ({})", ids.len())
+    });
     if ids.is_empty() {
-        ui.label(egui::RichText::new("This room has none.").weak());
+        ui.label(
+            egui::RichText::new(crate::lang::t(
+                "This room has none.",
+                "Tahle místnost žádné nemá.",
+            ))
+            .weak(),
+        );
         return;
     }
     egui::ScrollArea::vertical()
@@ -173,7 +188,11 @@ fn flags_section(
     draft: &mut PlayDraft,
     actions: &mut PlayActions,
 ) {
-    ui.heading(format!("Flags ({})", play.game.state.flags.len()));
+    ui.heading(if crate::lang::is_czech() {
+        format!("Přepínače ({})", play.game.state.flags.len())
+    } else {
+        format!("Flags ({})", play.game.state.flags.len())
+    });
     egui::ScrollArea::vertical()
         .id_salt("flag_list")
         .max_height(160.0)
@@ -216,7 +235,11 @@ fn inventory_section(
     draft: &mut PlayDraft,
     actions: &mut PlayActions,
 ) {
-    ui.heading(format!("Inventory ({})", play.game.state.inventory.len()));
+    ui.heading(if crate::lang::is_czech() {
+        format!("Inventář ({})", play.game.state.inventory.len())
+    } else {
+        format!("Inventory ({})", play.game.state.inventory.len())
+    });
     for item in play.game.state.inventory.clone() {
         ui.horizontal(|ui| {
             if ui.small_button("x").clicked() {
@@ -249,7 +272,11 @@ fn saves_section(
     slots: &[SlotInfo],
     actions: &mut PlayActions,
 ) {
-    ui.heading(format!("Saves ({})", slots.len()));
+    ui.heading(if crate::lang::is_czech() {
+        format!("Uložené pozice ({})", slots.len())
+    } else {
+        format!("Saves ({})", slots.len())
+    });
     egui::ScrollArea::vertical()
         .id_salt("save_list")
         .max_height(140.0)
@@ -293,7 +320,9 @@ fn log_section(ui: &mut egui::Ui, play: &PlayMode) {
         .filter(|line| line.starts_with("SKIPPED"))
         .count();
     ui.heading(if skipped == 0 {
-        "Log".to_string()
+        crate::lang::t("Log", "Záznam").to_string()
+    } else if crate::lang::is_czech() {
+        format!("Záznam (přeskočeno: {skipped})")
     } else {
         format!("Log ({skipped} skipped)")
     });

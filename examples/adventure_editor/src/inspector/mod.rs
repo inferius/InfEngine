@@ -80,37 +80,68 @@ pub fn panel(
 
 /// What the column is about right now: the mode, the thing, one fact.
 fn header(ui: &mut egui::Ui, state: &UiState<'_>, extras: &Extras<'_>) {
+    use crate::lang::t;
+    let cs = crate::lang::is_czech();
     let (title, sub) = match state.mode {
         Mode::Room => (
             state.room.id.clone(),
-            format!(
-                "{} x {} · {} picture{}",
-                state.room.size.x as i32,
-                state.room.size.y as i32,
-                state.room.layers.len(),
-                plural(state.room.layers.len()),
-            ),
+            if cs {
+                format!(
+                    "{} x {} · obrázků: {}",
+                    state.room.size.x as i32,
+                    state.room.size.y as i32,
+                    state.room.layers.len(),
+                )
+            } else {
+                format!(
+                    "{} x {} · {} picture{}",
+                    state.room.size.x as i32,
+                    state.room.size.y as i32,
+                    state.room.layers.len(),
+                    plural(state.room.layers.len()),
+                )
+            },
         ),
         Mode::Animate => (
             state.room.id.clone(),
-            format!(
-                "{} animation{} · {} line{}",
-                state.animations.len(),
-                plural(state.animations.len()),
-                state.lines.len(),
-                plural(state.lines.len()),
-            ),
+            if cs {
+                format!(
+                    "animací: {} · replik: {}",
+                    state.animations.len(),
+                    state.lines.len(),
+                )
+            } else {
+                format!(
+                    "{} animation{} · {} line{}",
+                    state.animations.len(),
+                    plural(state.animations.len()),
+                    state.lines.len(),
+                    plural(state.lines.len()),
+                )
+            },
         ),
         Mode::Script => (
             extras
                 .on_canvas
                 .clone()
-                .unwrap_or_else(|| "nothing on the canvas".into()),
-            "boxes and wires in the centre, the same steps as text below".into(),
+                .unwrap_or_else(|| t("nothing on the canvas", "na plátně nic není").into()),
+            t(
+                "boxes and wires in the centre, the same steps as text below",
+                "uzly a dráty uprostřed, tytéž kroky jako text níže",
+            )
+            .into(),
         ),
         Mode::Test => (
-            format!("running {}", extras.room_id),
-            "flags and inventory are kept between runs".into(),
+            if cs {
+                format!("běží {}", extras.room_id)
+            } else {
+                format!("running {}", extras.room_id)
+            },
+            t(
+                "flags and inventory are kept between runs",
+                "přepínače a inventář se mezi běhy zachovávají",
+            )
+            .into(),
         ),
     };
     ui.label(
@@ -128,18 +159,25 @@ fn room_mode(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions
         .id_salt("inspector_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            use crate::lang::t;
             // The selection first, always visible: clicking a thing on
             // the picture is the way this column is usually reached.
             things::selected(ui, state, actions);
 
-            section(ui, "Room", state.room.layers.len(), true, |ui| {
+            section(ui, "room", t("Room", "Místnost"), state.room.layers.len(), true, |ui| {
                 room::show(ui, state)
             });
             let floors = state.room.walk.solids.len() + state.room.entries.len();
-            section(ui, "Floor", floors, true, |ui| floor::show(ui, state));
+            section(ui, "floor", t("Floor", "Podlaha"), floors, true, |ui| {
+                floor::show(ui, state)
+            });
             let clickable = state.room.hotspots.len() + state.room.exits.len();
-            section(ui, "Things", clickable, true, |ui| things::show(ui, state));
-            section(ui, "Camera", 0, false, |ui| camera::show(ui, state));
+            section(ui, "things", t("Things", "Věci"), clickable, true, |ui| {
+                things::show(ui, state)
+            });
+            section(ui, "camera", t("Camera", "Kamera"), 0, false, |ui| {
+                camera::show(ui, state)
+            });
 
             ui.add_space(12.0);
             problems(ui, state);
@@ -154,17 +192,26 @@ fn animate_mode(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActi
         .show(ui, |ui| {
             motion::show(ui, state, actions);
             ui.add_space(10.0);
-            section(ui, "Talk", state.lines.len(), false, |ui| {
-                talk::show(ui, state, actions)
-            });
+            section(
+                ui,
+                "talk",
+                crate::lang::t("Talk", "Dialogy"),
+                state.lines.len(),
+                false,
+                |ui| talk::show(ui, state, actions),
+            );
             ui.add_space(12.0);
             problems(ui, state);
         });
 }
 
 /// One collapsible section, its count on the header.
+///
+/// The salt is a fixed word apart from the title, so switching the
+/// interface language does not fold every section shut.
 fn section(
     ui: &mut egui::Ui,
+    salt: &str,
     title: &str,
     count: usize,
     open: bool,
@@ -176,7 +223,7 @@ fn section(
         title.to_string()
     };
     egui::CollapsingHeader::new(label)
-        .id_salt(("inspector_section", title))
+        .id_salt(("inspector_section", salt))
         .default_open(open)
         .show(ui, body);
 }
@@ -188,20 +235,34 @@ fn plural(n: usize) -> &'static str {
 /// Tool names as a job describes them rather than as the enum spells
 /// them: you draw an outline, you do not "draw floor".
 pub fn tool_label(tool: Tool) -> &'static str {
+    use crate::lang::t;
     match tool {
-        Tool::Select => "Adjust",
-        Tool::DrawFloor => "Outline",
-        Tool::DrawHotspot => "Box out",
-        Tool::WalkPreview => "Test walk",
+        Tool::Select => t("Adjust", "Upravit"),
+        Tool::DrawFloor => t("Outline", "Obrys"),
+        Tool::DrawHotspot => t("Box out", "Vyznačit"),
+        Tool::WalkPreview => t("Test walk", "Zkouška chůze"),
     }
 }
 
 pub fn tool_hint(tool: Tool) -> &'static str {
+    use crate::lang::t;
     match tool {
-        Tool::Select => "Drag a corner or a box. Right-click an edge to add a corner.",
-        Tool::DrawFloor => "Click to place corners. Right-click to close the outline.",
-        Tool::DrawHotspot => "Drag a rectangle over the thing the player should be able to click.",
-        Tool::WalkPreview => "Click where the actor should go; the route is drawn to there.",
+        Tool::Select => t(
+            "Drag a corner or a box. Right-click an edge to add a corner.",
+            "Táhni roh nebo obdélník. Pravým tlačítkem přidáš roh na hraně.",
+        ),
+        Tool::DrawFloor => t(
+            "Click to place corners. Right-click to close the outline.",
+            "Klikáním pokládej rohy. Pravým tlačítkem obrys uzavřeš.",
+        ),
+        Tool::DrawHotspot => t(
+            "Drag a rectangle over the thing the player should be able to click.",
+            "Natáhni obdélník přes věc, na kterou má jít kliknout.",
+        ),
+        Tool::WalkPreview => t(
+            "Click where the actor should go; the route is drawn to there.",
+            "Klikni, kam má postava dojít; trasa se vykreslí.",
+        ),
     }
 }
 
@@ -213,11 +274,15 @@ fn problems(ui: &mut egui::Ui, state: &UiState<'_>) {
         return;
     }
     ui.separator();
-    ui.heading("Problems");
+    ui.heading(crate::lang::t("Problems", "Problémy"));
     for image in state.missing_images {
         ui.label(
-            egui::RichText::new(format!("image not found: {image}"))
-                .color(egui::Color32::from_rgb(255, 140, 120)),
+            egui::RichText::new(if crate::lang::is_czech() {
+                format!("obrázek nenalezen: {image}")
+            } else {
+                format!("image not found: {image}")
+            })
+            .color(egui::Color32::from_rgb(255, 140, 120)),
         );
     }
     for issue in issues {

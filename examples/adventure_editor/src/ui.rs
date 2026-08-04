@@ -108,12 +108,17 @@ impl std::fmt::Debug for UiState<'_> {
 /// is usually blank teaches the reader not to look at it, which wastes
 /// the one place in the window that can answer "now what".
 pub fn status_bar(ctx: &egui::Context, state: &mut UiState<'_>) {
+    use crate::lang::t;
     egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new(format!("{} mode", state.mode.label().to_lowercase()))
-                    .small()
-                    .weak(),
+                egui::RichText::new(if crate::lang::is_czech() {
+                    format!("režim {}", state.mode.label().to_lowercase())
+                } else {
+                    format!("{} mode", state.mode.label().to_lowercase())
+                })
+                .small()
+                .weak(),
             );
             if state.current_room.is_some() {
                 // Where the cursor is, in the room's own pixels: the
@@ -133,9 +138,13 @@ pub fn status_bar(ctx: &egui::Context, state: &mut UiState<'_>) {
                     state.room.walk.solids.iter().map(|p| p.points.len()).sum();
                 if corners > 0 {
                     ui.label(
-                        egui::RichText::new(format!("floor: {corners} corners"))
-                            .small()
-                            .weak(),
+                        egui::RichText::new(if crate::lang::is_czech() {
+                            format!("podlaha: {corners} rohů")
+                        } else {
+                            format!("floor: {corners} corners")
+                        })
+                        .small()
+                        .weak(),
                     );
                 }
             }
@@ -152,9 +161,9 @@ pub fn status_bar(ctx: &egui::Context, state: &mut UiState<'_>) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if state.mode == Mode::Animate {
                     let label = if *state.timeline_open {
-                        "Hide timeline"
+                        t("Hide timeline", "Skrýt časovou osu")
                     } else {
-                        "Show timeline"
+                        t("Show timeline", "Zobrazit časovou osu")
                     };
                     if ui.small_button(label).clicked() {
                         *state.timeline_open = !*state.timeline_open;
@@ -171,27 +180,53 @@ pub fn status_bar(ctx: &egui::Context, state: &mut UiState<'_>) {
 /// unplayable, one with no way out is a trap, one with nothing to click
 /// is scenery. Saying all three at once would say nothing.
 pub fn next_step(state: &UiState<'_>) -> String {
+    use crate::lang::t;
     if state.current_room.is_none() {
-        return "Pick a room on the left to start.".into();
+        return t(
+            "Pick a room on the left to start.",
+            "Začni výběrem místnosti vlevo.",
+        )
+        .into();
     }
     let room = &state.room;
     if room.walk.solids.is_empty() {
-        return "No floor here yet - the Outline tool draws one, and without it \
-                the actor cannot move."
-            .into();
+        return t(
+            "No floor here yet - the Outline tool draws one, and without it \
+             the actor cannot move.",
+            "Zatím žádná podlaha - nakresli ji nástrojem Obrys, jinak se \
+             postava nepohne.",
+        )
+        .into();
     }
     if room.exits.is_empty() {
-        return "Nothing leads out of this room - add a way out from the Room menu.".into();
+        return t(
+            "Nothing leads out of this room - add a way out from the Room menu.",
+            "Odsud nevede žádná cesta - přidej východ z menu Místnost.",
+        )
+        .into();
     }
     if room.hotspots.is_empty() {
-        return "Nothing here can be clicked - add one from the Room menu.".into();
+        return t(
+            "Nothing here can be clicked - add one from the Room menu.",
+            "Není tu nic na klikání - přidej věc z menu Místnost.",
+        )
+        .into();
     }
-    format!(
-        "{} - {} things, {} ways out. Help is under the ? at the top right.",
-        room.id,
-        room.hotspots.len(),
-        room.exits.len()
-    )
+    if crate::lang::is_czech() {
+        format!(
+            "{} - {} věcí, {} východů. Nápověda je pod ? vpravo nahoře.",
+            room.id,
+            room.hotspots.len(),
+            room.exits.len()
+        )
+    } else {
+        format!(
+            "{} - {} things, {} ways out. Help is under the ? at the top right.",
+            room.id,
+            room.hotspots.len(),
+            room.exits.len()
+        )
+    }
 }
 
 #[cfg(test)]
