@@ -55,8 +55,6 @@ pub struct TimelineActions {
     pub stop: bool,
     /// A sound or track the details column asked to hear.
     pub hear: Option<String>,
-    /// The Library button: open the asset browser.
-    pub library: bool,
 }
 
 /// What a dragged bar or edge snaps to. Both are the author's to turn
@@ -217,13 +215,6 @@ fn header(
                 .weak(),
         );
         add_menu(ui, selected, pickers, actions);
-        if ui
-            .button("Library")
-            .on_hover_text("Everything the project holds: pictures, sounds, animations - drag them onto the strip")
-            .clicked()
-        {
-            actions.library = true;
-        }
         ui.add(
             egui::Slider::new(zoom, 0.25..=4.0)
                 .show_value(false)

@@ -111,7 +111,6 @@ pub struct Editor {
     floor_draft: Vec<Vec2>,
     walk_from: Option<Vec2>,
     path: Vec<Vec2>,
-    room_filter: String,
     playback: Playback,
     /// Animations offered for this room: its own first, then the
     /// ones belonging to no room.
@@ -214,7 +213,6 @@ impl Editor {
             floor_draft: Vec::new(),
             walk_from: None,
             path: Vec::new(),
-            room_filter: String::new(),
             playback: Playback::default(),
             room_animations: Vec::new(),
             anim_textures: HashMap::new(),
@@ -879,10 +877,6 @@ impl Editor {
         if actions.undo {
             self.undo();
         }
-        if actions.open_library {
-            self.refresh_pictures();
-            self.library_ui.open = true;
-        }
         if actions.open_story {
             self.story_ui.open = true;
             // Fresh on every open: the map is cheap next to being wrong.
@@ -1018,10 +1012,6 @@ impl Editor {
         }
         if let Some(id) = actions.hear {
             self.play_sound_id(&id);
-        }
-        if actions.library {
-            self.refresh_pictures();
-            self.library_ui.open = true;
         }
         if actions.play {
             let script = self.scene_script_id();

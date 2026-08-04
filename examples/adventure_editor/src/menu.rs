@@ -33,7 +33,6 @@ pub struct MenuActions {
     pub open_game: bool,
     pub open_screens: bool,
     pub open_story: bool,
-    pub open_library: bool,
     /// Take the last canvas edit back.
     pub undo: bool,
     pub open_help: bool,
@@ -248,14 +247,6 @@ fn project_menu(ui: &mut egui::Ui, menu: &MenuContext, actions: &mut MenuActions
             .clicked()
         {
             actions.open_screens = true;
-            ui.close();
-        }
-        if ui
-            .button("Library...")
-            .on_hover_text("Every picture, animation, and sound the project holds")
-            .clicked()
-        {
-            actions.open_library = true;
             ui.close();
         }
         if ui

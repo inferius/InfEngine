@@ -180,7 +180,6 @@ impl Editor {
                 dirty: self.dirty,
                 missing_images: &self.missing_images,
                 status: &self.status,
-                room_filter: &mut self.room_filter,
                 playback: &mut self.playback,
                 animations: &self.room_animations,
                 languages: &self.languages,
@@ -262,10 +261,6 @@ impl Editor {
                     story_actions =
                         crate::ui_story::window(ctx, story_ui, story, &story_start);
                 }
-                if library_ui.open {
-                    library_actions =
-                        crate::library::window(ctx, library_ui, state.project, &picker_images);
-                }
                 if let Some(screen) = screen_ui.preview_screen() {
                     screen_actions.fired =
                         ui_screen::preview(ctx, screen, &locales, &language, &play_flags);
@@ -275,6 +270,13 @@ impl Editor {
                 // the bottom up: the timeline sits at the very bottom,
                 // the status strip above it, the way the design stacks
                 // them.
+                library_actions = crate::library::panel(
+                    ctx,
+                    library_ui,
+                    &mut state,
+                    &mut actions,
+                    &picker_images,
+                );
                 let mut extras = crate::inspector::Extras {
                     play,
                     play_draft,
@@ -282,9 +284,8 @@ impl Editor {
                     room_id: room_id.clone(),
                     on_canvas: graph_ui.script_id.clone(),
                 };
-                let (ui_actions, played) = ui::build(ctx, &mut state, &mut extras);
-                actions = ui_actions;
-                play_actions = played;
+                play_actions =
+                    crate::inspector::panel(ctx, &mut state, &mut actions, &mut extras);
                 if let Some(line) = scene_line.as_ref() {
                     timeline_actions = crate::timeline::panel(
                         ctx,
@@ -366,6 +367,14 @@ impl Editor {
                 Some(file) => self.play_file(&file),
                 None => self.status = format!("{id} has no file behind it"),
             }
+        }
+        if let Some(id) = library_actions.open_script {
+            // The canvas lives in Script mode; go where it is.
+            self.set_mode(Mode::Script);
+            self.open_graph(&id);
+        }
+        if library_actions.edit_screens {
+            self.screen_ui.open = true;
         }
         self.apply_timeline(timeline_actions);
         self.apply_menu(menu_actions);
