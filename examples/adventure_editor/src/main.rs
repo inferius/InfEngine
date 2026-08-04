@@ -30,6 +30,7 @@ mod settings;
 mod sheet;
 mod timeline;
 mod toolbar;
+mod tracks;
 mod ui;
 mod ui_game;
 mod ui_graph;

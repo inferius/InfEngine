@@ -1004,6 +1004,19 @@ impl Editor {
             self.scripts_dirty = true;
             self.dirty = true;
         }
+        if let Some(action) = actions.insert_first {
+            let script = self
+                .project
+                .scripts
+                .entry(id.clone())
+                .or_insert_with(|| infengine_adventure::Script::new(id.clone()));
+            let landed = crate::timeline::insert_front(&mut script.actions, action);
+            self.status = "added ahead of the scene - it is selected on the timeline".into();
+            self.timeline_reveal = Some(landed.clone());
+            self.timeline_selected = Some(landed);
+            self.scripts_dirty = true;
+            self.dirty = true;
+        }
         if let Some((from, to)) = actions.reorder
             && let Some(script) = self.project.scripts.get_mut(&id)
             && let Some(landed) = crate::timeline::reorder(&mut script.actions, &from, to)

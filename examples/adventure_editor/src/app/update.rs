@@ -154,6 +154,12 @@ impl Editor {
         let scene_line = (self.mode == Mode::Animate && self.timeline_open)
             .then(|| self.scene_timeline())
             .flatten();
+        // The same steps sorted onto tracks: who does what when.
+        let scene_tracks: Vec<crate::tracks::Track> = scene_line
+            .as_ref()
+            .zip(self.project.scripts.get(&self.scene_script_id()))
+            .map(|(line, script)| crate::tracks::assign(line, &script.actions))
+            .unwrap_or_default();
         // The selected step's current values, for the details column.
         let scene_detail: Option<infengine_adventure::Action> = self
             .timeline_selected
@@ -296,6 +302,7 @@ impl Editor {
                     timeline_actions = crate::timeline::panel(
                         ctx,
                         line,
+                        &scene_tracks,
                         extras.play.active,
                         extras.play.elapsed,
                         timeline_zoom,

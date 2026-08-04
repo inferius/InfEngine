@@ -1,39 +1,44 @@
-//! A59.2: the scene as a strip of time you can drag.
+//! A59.2 / A86: the scene as tracks of time you can drag.
 //!
-//! The Scene tab can run a script and show a clock. That answers "when
-//! does this happen" one moment at a time, which is not how anyone tunes
-//! a cutscene - you need the whole shape at once, and you need to change
-//! it where you can see it.
+//! The script stays a sequence with waits - the right model to run -
+//! and this panel is a view of it laid on a clock. Since A86 the view
+//! reads like a film sheet: each step is a clip on the track of the
+//! thing it drives - camera, pictures, each animation, each speaker,
+//! sounds, music, and a Steps row for the waits and branches that
+//! steer. Who does what when, in one glance.
 //!
-//! So the script is drawn as bars along a second-ruled strip: each step
-//! at the time it starts, as long as it lasts. A playhead runs across it
-//! while the scene plays. The bars whose length is a number in the
-//! script - a wait, a pan, a still - can be dragged by their right edge,
-//! and the rest cannot, because offering to stretch a line whose length
-//! comes from its own text would be offering an edit the editor cannot
-//! make.
+//! A playhead runs across it while the scene plays. Clips whose length
+//! is a number in the script - a wait, a pan, a still - can be dragged
+//! by their right edge, and the rest cannot, because offering to
+//! stretch a line whose length comes from its own text would be
+//! offering an edit the editor cannot make. Dragging a clip's body
+//! moves the step to the moment under the cursor - among its siblings,
+//! since order in the sequence is what "when" means here.
 //!
 //! It is also where steps are added. The Add menu drops a sound, an
 //! image with a duration, an animation, a wait or a camera move after
-//! whatever is selected, and the selected step's details sit in a column
-//! beside the strip where they can be changed and the step removed. The
-//! strip is the scene; the things in the scene should be put there.
+//! whatever is selected; dragging from the library lands the step at
+//! the moment it was dropped. The selected step's details sit in a
+//! column beside the tracks where they can be changed and the step
+//! removed.
 
 use glam::Vec2;
 use infengine_adventure::action::Action;
 use infengine_adventure::schedule::{Slot, Timeline};
 
-/// Height of one bar, in points.
+use crate::tracks::Track;
+
+/// Height of one track row, in points.
 const ROW: f32 = 22.0;
-/// How far a nested branch is stepped in.
-const INDENT: f32 = 14.0;
 /// Pixels a second takes, before zoom.
 const PER_SECOND: f32 = 40.0;
-/// Shortest a bar is drawn, so a step that takes no time is still a
+/// Shortest a clip is drawn, so a step that takes no time is still a
 /// thing you can see and click rather than a line of zero width.
 const MIN_BAR: f32 = 6.0;
 /// Width of the details column.
 const DETAILS: f32 = 250.0;
+/// Width of the track-name column.
+const NAMES: f32 = 130.0;
 
 /// What the timeline asked for.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -44,6 +49,8 @@ pub struct TimelineActions {
     pub selected: Option<Vec<usize>>,
     /// A new step, to go after the path - or at the end for `None`.
     pub insert: Option<(Option<Vec<usize>>, Action)>,
+    /// A new step to go before everything: a drop ahead of the scene.
+    pub insert_first: Option<Action>,
     /// The selected step, edited in the details column.
     pub edit: Option<(Vec<usize>, Action)>,
     /// The selected step, removed.
@@ -114,11 +121,12 @@ pub struct Pickers<'a> {
     pub images: &'a [String],
 }
 
-/// Draw the strip. Returns what was asked for.
+/// Draw the tracks. Returns what was asked for.
 #[allow(clippy::too_many_arguments)]
 pub fn panel(
     ctx: &egui::Context,
     line: &Timeline,
+    tracks: &[Track],
     playing: bool,
     elapsed: f32,
     zoom: &mut f32,
@@ -138,7 +146,8 @@ pub fn panel(
             if line.slots.is_empty() {
                 ui.label(
                     egui::RichText::new(
-                        "Nothing to lay out. Play a scene, add a step, or drag                          something in from the Library.",
+                        "Nothing to lay out. Play a scene, add a step, or drag \
+                         something in from the Library.",
                     )
                     .weak(),
                 );
@@ -152,21 +161,24 @@ pub fn panel(
                 };
                 ui.scope(|ui| {
                     ui.set_max_width(strip_width);
-                    // The wheel belongs to zoom here, so the scroll area
-                    // keeps its bars and its drag and gives the wheel up.
-                    egui::ScrollArea::both()
-                        .id_salt("timeline_scroll")
-                        .auto_shrink([false, false])
-                        .scroll_source(egui::containers::scroll_area::ScrollSource {
-                            mouse_wheel: false,
-                            ..Default::default()
-                        })
-                        .show(ui, |ui| {
-                            strip(
-                                ui, line, playing, elapsed, zoom, *snap, selected, reveal,
-                                &mut actions,
-                            );
-                        });
+                    ui.horizontal_top(|ui| {
+                        names_column(ui, tracks);
+                        // The wheel belongs to zoom here, so the scroll
+                        // area keeps its drag and gives the wheel up.
+                        egui::ScrollArea::horizontal()
+                            .id_salt("timeline_scroll")
+                            .auto_shrink([false, false])
+                            .scroll_source(egui::containers::scroll_area::ScrollSource {
+                                mouse_wheel: false,
+                                ..Default::default()
+                            })
+                            .show(ui, |ui| {
+                                strip(
+                                    ui, line, tracks, playing, elapsed, zoom, *snap,
+                                    selected, reveal, &mut actions,
+                                );
+                            });
+                    });
                 });
                 if let (Some(action), Some(path)) = (detail, selected.as_ref()) {
                     ui.separator();
@@ -175,6 +187,39 @@ pub fn panel(
             });
         });
     actions
+}
+
+/// The fixed column naming each track, aligned with the rows beside it.
+///
+/// Outside the horizontal scroll on purpose: the names are the map, and
+/// a map that scrolls away with the territory is no map.
+fn names_column(ui: &mut egui::Ui, tracks: &[Track]) {
+    ui.vertical(|ui| {
+        ui.set_width(NAMES);
+        ui.spacing_mut().item_spacing.y = 0.0;
+        // Under the ruler row, so name N sits beside track N.
+        ui.add_space(ROW);
+        for track in tracks {
+            ui.allocate_ui_with_layout(
+                egui::vec2(NAMES, ROW),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.add_space(4.0);
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 2.0, track.kind.fill());
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(&track.name)
+                            .small()
+                            .color(ui.visuals().strong_text_color()),
+                    )
+                    .on_hover_text(format!("{} step{}", track.slots.len(),
+                        if track.slots.len() == 1 { "" } else { "s" }));
+                },
+            );
+        }
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -319,6 +364,7 @@ fn add_menu(
 fn strip(
     ui: &mut egui::Ui,
     line: &Timeline,
+    tracks: &[Track],
     playing: bool,
     elapsed: f32,
     zoom: &mut f32,
@@ -332,7 +378,7 @@ fn strip(
     // drop things onto - a strip exactly as long as its content says
     // the scene is finished, and no scene is.
     let width = ((line.seconds.max(1.0) + 30.0) * scale).max(ui.available_width());
-    let height = (ROW * line.slots.len() as f32 + ROW).max(ui.available_height());
+    let height = (ROW * tracks.len() as f32 + ROW).max(ui.available_height());
     let (rect, surface) =
         ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click_and_drag());
     let painter = ui.painter_at(ui.clip_rect().intersect(rect));
@@ -357,77 +403,94 @@ fn strip(
         }
     }
 
-    grid(&painter, rect, scale, line.slots.len());
+    grid(&painter, rect, scale, tracks.len());
     ruler(&painter, rect, scale, ui.visuals().weak_text_color());
 
-    // Where a drag would land: between which rows, after which step.
+    // The moment under the pointer, for drops and body-drags: on a
+    // track view "where" means "when".
     let hover_asset = surface.dnd_hover_payload::<DragAsset>();
     let dropped_asset = surface.dnd_release_payload::<DragAsset>();
-    let pointer_row = ui
+    let pointer_time = ui
         .ctx()
         .pointer_interact_pos()
         .filter(|p| rect.contains(*p))
-        .map(|p| (((p.y - rect.min.y) / ROW) - 1.0).round().max(0.0) as usize);
+        .map(|p| ((p.x - rect.min.x) / scale).max(0.0));
 
-    let mut dragging: Option<(usize, &Slot)> = None;
-    for (index, slot) in line.slots.iter().enumerate() {
-        let top = rect.min.y + ROW * (index as f32 + 1.0);
-        let left = rect.min.x + slot.at * scale + slot.depth as f32 * INDENT;
-        let bar = egui::Rect::from_min_size(
-            egui::pos2(left, top + 2.0),
-            egui::vec2((slot.seconds * scale).max(MIN_BAR), ROW - 5.0),
-        );
-        if reveal == Some(slot.path.as_slice()) {
-            ui.scroll_to_rect(bar.expand(24.0), None);
-        }
-        if draw_bar(ui, &painter, bar, slot, scale, snap, line, selected, actions) {
-            dragging = Some((index, slot));
+    let mut dragging: Option<&Slot> = None;
+    for (row, track) in tracks.iter().enumerate() {
+        let top = rect.min.y + ROW * (row as f32 + 1.0);
+        for &index in &track.slots {
+            let Some(slot) = line.slots.get(index) else {
+                continue;
+            };
+            let left = rect.min.x + slot.at * scale;
+            let bar = egui::Rect::from_min_size(
+                egui::pos2(left, top + 2.0),
+                egui::vec2((slot.seconds * scale).max(MIN_BAR), ROW - 5.0),
+            );
+            if reveal == Some(slot.path.as_slice()) {
+                ui.scroll_to_rect(bar.expand(24.0), None);
+            }
+            if draw_bar(
+                ui, &painter, bar, slot, track.kind.fill(), scale, snap, line, selected,
+                actions,
+            ) {
+                dragging = Some(slot);
+            }
         }
     }
 
-    // A bar being dragged shows where it would go, and letting go asks
-    // for the move. Only among its own siblings: an if-branch is a
-    // drawer, and a step does not fall out of one by passing over it.
-    if let (Some((from_index, slot)), Some(row)) = (dragging, pointer_row) {
-        let siblings: Vec<usize> = line
-            .slots
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| parent_of(&s.path) == parent_of(&slot.path))
-            .map(|(i, _)| i)
-            .collect();
-        let mut to = siblings.iter().filter(|&&i| i < row).count();
-        let already = siblings.iter().position(|&i| i == from_index).unwrap_or(0);
-        to = to.min(siblings.len().saturating_sub(1));
-        let caret_row = siblings.get(to).copied().unwrap_or(from_index);
-        let y = rect.min.y
-            + ROW * (caret_row as f32 + 1.0)
-            + if to > already { ROW } else { 0.0 };
+    // A clip being dragged by its body moves to the moment under the
+    // cursor - among its own siblings, because an if-branch is a drawer
+    // and a step does not fall out of one by passing over it.
+    if let (Some(slot), Some(t)) = (dragging, pointer_time) {
+        let x = rect.min.x + t * scale;
         painter.line_segment(
-            [egui::pos2(rect.min.x, y), egui::pos2(rect.min.x + width, y)],
+            [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
             egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 235, 140)),
         );
-        if ui.input(|i| i.pointer.any_released()) && to != already {
-            actions.reorder = Some((slot.path.clone(), to));
+        if ui.input(|i| i.pointer.any_released()) {
+            let siblings: Vec<&Slot> = line
+                .slots
+                .iter()
+                .filter(|s| parent_of(&s.path) == parent_of(&slot.path))
+                .collect();
+            let already = siblings
+                .iter()
+                .position(|s| s.path == slot.path)
+                .unwrap_or(0);
+            let to = siblings
+                .iter()
+                .filter(|s| s.path != slot.path && s.at < t)
+                .count();
+            if to != already {
+                actions.reorder = Some((slot.path.clone(), to));
+            }
         }
     }
 
-    // Something from the library, hovering or landing: a caret under
-    // the row it would follow, and the insertion on release.
-    if hover_asset.is_some() || dropped_asset.is_some() {
-        let after = pointer_row
-            .map(|row| row.min(line.slots.len().saturating_sub(1)))
-            .and_then(|row| line.slots.get(row))
-            .map(|slot| slot.path.clone());
-        if let Some(row) = pointer_row {
-            let y = rect.min.y + ROW * ((row.min(line.slots.len()) as f32) + 2.0);
-            painter.line_segment(
-                [egui::pos2(rect.min.x, y), egui::pos2(rect.min.x + width, y)],
-                egui::Stroke::new(2.0, egui::Color32::from_rgb(150, 230, 150)),
-            );
-        }
+    // Something from the library, hovering or landing: a caret at the
+    // moment it would happen, and the insertion on release - after the
+    // last step already under way by then, or ahead of everything.
+    if (hover_asset.is_some() || dropped_asset.is_some())
+        && let Some(t) = pointer_time
+    {
+        let x = rect.min.x + t * scale;
+        painter.line_segment(
+            [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(150, 230, 150)),
+        );
         if let Some(asset) = dropped_asset {
-            actions.insert = Some((after, asset.action()));
+            let mut after: Option<Vec<usize>> = None;
+            for slot in &line.slots {
+                if slot.at <= t {
+                    after = Some(slot.path.clone());
+                }
+            }
+            match after {
+                Some(path) => actions.insert = Some((Some(path), asset.action())),
+                None => actions.insert_first = Some(asset.action()),
+            }
         }
     }
 
@@ -540,13 +603,14 @@ fn snapped(seconds: f32, slot: &Slot, line: &Timeline, scale: f32, snap: Snap) -
     seconds
 }
 
-/// One bar. Returns whether its body is being dragged to a new place.
+/// One clip. Returns whether its body is being dragged to a new place.
 #[allow(clippy::too_many_arguments)]
 fn draw_bar(
     ui: &mut egui::Ui,
     painter: &egui::Painter,
     bar: egui::Rect,
     slot: &Slot,
+    tint: egui::Color32,
     scale: f32,
     snap: Snap,
     line: &Timeline,
@@ -570,11 +634,11 @@ fn draw_bar(
     let fill = if is_selected {
         egui::Color32::from_rgb(90, 130, 190)
     } else if slot.adjustable {
-        egui::Color32::from_rgb(60, 95, 140)
+        tint
     } else {
         // A step whose length is not its own is drawn dimmer, so the
         // ones that can be dragged are the ones that look draggable.
-        egui::Color32::from_rgb(70, 75, 90)
+        tint.gamma_multiply(0.7)
     };
     let fill = if moving { fill.gamma_multiply(1.3) } else { fill };
     painter.rect_filled(bar, 3.0, fill);
@@ -804,6 +868,15 @@ fn list_mut<'a>(actions: &'a mut Vec<Action>, prefix: &[usize]) -> Option<&'a mu
         Action::Branch { then, .. } => list_mut(then, rest),
         _ => None,
     }
+}
+
+/// Put a step ahead of everything. Returns where it landed.
+///
+/// The one place `insert_after` cannot reach: a drop at a moment
+/// before any step has begun means "this happens first".
+pub fn insert_front(actions: &mut Vec<Action>, action: Action) -> Vec<usize> {
+    actions.insert(0, action);
+    vec![0]
 }
 
 /// Put a step after `after`, or at the end for `None`. Returns where it
@@ -1038,6 +1111,15 @@ mod tests {
         let mut actions = vec![Action::Wait { seconds: 1.0 }];
         let landed = insert_after(&mut actions, None, Action::Wait { seconds: 9.0 });
         assert_eq!(landed, vec![1]);
+    }
+
+    #[test]
+    fn a_drop_before_everything_lands_first() {
+        let mut actions = vec![Action::Wait { seconds: 1.0 }];
+        let landed = insert_front(&mut actions, Action::Wait { seconds: 9.0 });
+        assert_eq!(landed, vec![0]);
+        assert_eq!(actions[0], Action::Wait { seconds: 9.0 });
+        assert_eq!(actions.len(), 2);
     }
 
     #[test]
