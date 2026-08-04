@@ -45,6 +45,10 @@ pub struct Game {
     status: String,
     /// Screen art and appearance animation state.
     screen_fx: ui::ScreenFx,
+    /// How long the skip key has been held during the intro, and the
+    /// seconds the hint stays up after a tap.
+    skip_hold: Option<f32>,
+    skip_hint: f32,
     /// Set when a screen asks to quit; the window closes next frame.
     quit: bool,
 }
@@ -61,6 +65,8 @@ impl Game {
             renderer: None,
             ui: None,
             screen_fx: ui::ScreenFx::default(),
+            skip_hold: None,
+            skip_hint: 0.0,
             audio: AudioSystem::new().ok(),
             host: Host::new(project),
             view: View::default(),
@@ -294,14 +300,39 @@ impl AppHandler for Game {
                 button: MouseButton::Left,
                 ..
             } if !over_ui && self.view.contains(self.cursor) => {
-                let point = self.view.to_room(self.cursor);
-                self.host.click(point);
+                if self.host.intro {
+                    // Holding through the intro is the request to get
+                    // on with it; the corner notice fills as it holds.
+                    self.skip_hold = Some(0.0);
+                    self.skip_hint = 2.5;
+                } else {
+                    let point = self.view.to_room(self.cursor);
+                    self.host.click(point);
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                self.skip_hold = None;
             }
             _ => {}
         }
     }
 
     fn on_key(&mut self, key: Key, pressed: bool) {
+        if self.host.intro {
+            // Any key skips the intro - held, not tapped, so a stray
+            // press cannot cost the scene. The tap leaves a hint.
+            if pressed {
+                self.skip_hold = Some(0.0);
+                self.skip_hint = 2.5;
+            } else {
+                self.skip_hold = None;
+            }
+            return;
+        }
         if !pressed {
             return;
         }
@@ -339,6 +370,21 @@ impl AppHandler for Game {
         if self.quit {
             window.request_close();
             return;
+        }
+
+        // The skip hold: filled by keeping the key or button down
+        // through the intro, and completing it cuts to the title.
+        self.skip_hint = (self.skip_hint - ctx.delta_time).max(0.0);
+        if let Some(held) = self.skip_hold.as_mut() {
+            *held += ctx.delta_time;
+            if *held >= ui::SKIP_HOLD {
+                self.skip_hold = None;
+                let request = self.host.skip_intro();
+                self.perform(request);
+            }
+        }
+        if !self.host.intro {
+            self.skip_hold = None;
         }
 
         let request = self.host.tick(ctx.delta_time);
@@ -482,8 +528,13 @@ impl AppHandler for Game {
             let host = &self.host;
             let status = self.status.clone();
             let fx = &mut self.screen_fx;
+            let skip = ui::SkipNotice {
+                held: self.skip_hold,
+                hint: self.skip_hint,
+                showing: self.host.intro,
+            };
             ui_state.run(window.raw(), |ctx| {
-                events = ui::build(ctx, host, &status, fx);
+                events = ui::build(ctx, host, &status, fx, skip);
             });
         }
         if let Some(action) = events.fired {

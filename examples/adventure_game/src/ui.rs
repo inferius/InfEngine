@@ -11,6 +11,19 @@ use infengine_adventure::screen::{Align, Screen, ScreenAction, WidgetKind};
 
 /// How long a widget that just appeared pops for, in seconds.
 const POP: f32 = 0.45;
+/// Seconds the skip key must be held to cut the intro short.
+pub const SKIP_HOLD: f32 = 1.2;
+
+/// What the corner says about skipping the intro.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SkipNotice {
+    /// Seconds the key has been held, when it is down.
+    pub held: Option<f32>,
+    /// Seconds the tap hint stays up.
+    pub hint: f32,
+    /// Whether the intro is running at all.
+    pub showing: bool,
+}
 
 /// What the player pressed this frame.
 #[derive(Debug, Default)]
@@ -39,7 +52,13 @@ pub struct ScreenFx {
 }
 
 /// Draw the game's own interface.
-pub fn build(ctx: &egui::Context, host: &Host, status: &str, fx: &mut ScreenFx) -> UiEvents {
+pub fn build(
+    ctx: &egui::Context,
+    host: &Host,
+    status: &str,
+    fx: &mut ScreenFx,
+    skip: SkipNotice,
+) -> UiEvents {
     let mut events = UiEvents::default();
     if let Some(screen) = host.active_screen() {
         events.fired = draw_screen(ctx, screen, host, fx);
@@ -50,7 +69,56 @@ pub fn build(ctx: &egui::Context, host: &Host, status: &str, fx: &mut ScreenFx) 
     fx.pops.clear();
     status_line(ctx, status);
     subtitle(ctx, host, fx);
+    skip_notice(ctx, skip);
     events
+}
+
+/// The corner note during the intro: a tap leaves the hint, a hold
+/// fills the bar, and a full bar is the skip.
+fn skip_notice(ctx: &egui::Context, skip: SkipNotice) {
+    if !skip.showing || (skip.held.is_none() && skip.hint <= 0.0) {
+        return;
+    }
+    let area = ctx.content_rect();
+    egui::Area::new("skip_notice".into())
+        .fixed_pos(egui::pos2(area.max.x - 16.0, area.max.y - 16.0))
+        .pivot(egui::Align2::RIGHT_BOTTOM)
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style())
+                .fill(egui::Color32::from_black_alpha(170))
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("Hold to skip")
+                            .color(egui::Color32::from_rgb(235, 230, 210)),
+                    );
+                    let (bar, _) = ui.allocate_exact_size(
+                        egui::vec2(120.0, 6.0),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(
+                        bar,
+                        3.0,
+                        egui::Color32::from_white_alpha(20),
+                    );
+                    let filled = skip
+                        .held
+                        .map(|held| (held / SKIP_HOLD).clamp(0.0, 1.0))
+                        .unwrap_or(0.0);
+                    if filled > 0.0 {
+                        let mut lit = bar;
+                        lit.set_width(bar.width() * filled);
+                        ui.painter().rect_filled(
+                            lit,
+                            3.0,
+                            egui::Color32::from_rgb(255, 235, 140),
+                        );
+                    }
+                });
+        });
+    if skip.held.is_some() {
+        ctx.request_repaint();
+    }
 }
 
 /// The name of whatever is under the cursor, along the top.

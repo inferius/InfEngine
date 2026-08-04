@@ -67,12 +67,15 @@ fn main() {
                 if ink == 0 {
                     continue;
                 }
-                // White with the nibble as alpha: drawing tints it.
-                let alpha = (ink as u32 * 255 / 15) as u8;
+                // The nibble picks a palette slot, not an intensity -
+                // treating it as alpha made the lettering a ghost of
+                // itself. Ink is ink: opaque white, tinted at draw
+                // time.
+                let _ = ink;
                 sheet.put_pixel(
                     cx + x,
                     cy + glyph.top as u32 + y,
-                    image::Rgba([255, 255, 255, alpha]),
+                    image::Rgba([255, 255, 255, 255]),
                 );
             }
         }
@@ -97,7 +100,9 @@ fn main() {
         id: stem.clone(),
         image: format!("{}/{stem}.png", infengine_adventure::pixfont::FONT_DIR),
         line_height: cell_h,
-        letter_spacing: 1,
+        // The glyph widths carry their own breathing room already;
+        // adding more made every word read stretched.
+        letter_spacing: 0,
         space_width: 0,
         glyphs,
     };

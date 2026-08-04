@@ -132,6 +132,9 @@ pub struct Host {
     /// remember that, Close can only ever mean "put the player back in
     /// the room", and the way out of a submenu drops them two levels.
     beneath: Vec<String>,
+    /// Whether the launch intro is still running - the stretch the
+    /// player is allowed to skip with a click or Escape.
+    pub intro: bool,
     /// What happened, newest last.
     pub log: Vec<Note>,
     /// How much of the log to keep.
@@ -174,6 +177,7 @@ impl Host {
             verb: Verb::Walk,
             screen: None,
             beneath: Vec::new(),
+            intro: false,
             log: Vec::new(),
             log_limit: 200,
             anim_wait: None,
@@ -193,6 +197,7 @@ impl Host {
         if !manifest.intro_room.is_empty() {
             let intro = manifest.intro_room.clone();
             if self.project.load_room(&intro).is_some() {
+                self.intro = true;
                 return self.enter(&intro, None);
             }
         }
@@ -206,6 +211,7 @@ impl Host {
 
     /// Begin the story: the starting room, with a fresh state.
     pub fn new_game(&mut self) -> Request {
+        self.intro = false;
         let manifest = self.manifest();
         self.game.state = GameState::default();
         self.screen = None;
@@ -242,6 +248,28 @@ impl Host {
         self.screen
             .as_deref()
             .and_then(|id| self.project.screen(id))
+    }
+
+    /// Cut the launch intro short: stop everything it is doing and go
+    /// where it was heading - the title screen when there is one, the
+    /// first room otherwise. A no-op outside the intro, so the host
+    /// can be asked without checking first.
+    pub fn skip_intro(&mut self) -> Request {
+        if !self.intro {
+            return Request::default();
+        }
+        self.intro = false;
+        self.game.runner.stop();
+        self.subtitle = None;
+        let manifest = self.manifest();
+        if !manifest.start_screen.is_empty()
+            && self.project.screen(&manifest.start_screen).is_some()
+        {
+            self.screen = Some(manifest.start_screen);
+            self.beneath.clear();
+            return Request::default();
+        }
+        self.new_game()
     }
 
     /// What a click at `point` in the room would do.

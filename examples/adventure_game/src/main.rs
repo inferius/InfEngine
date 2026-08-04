@@ -47,6 +47,12 @@ struct Cli {
     #[arg(long)]
     walk: Option<usize>,
 
+    /// Initialise the audio device, resolve this sound or music id,
+    /// play it for a few seconds, and report every step - so a silent
+    /// game can say WHERE the silence begins.
+    #[arg(long)]
+    hear: Option<String>,
+
     /// Visit every room, run its entry script, click everything in it,
     /// and report what broke. The whole game, not a stroll through it.
     ///
@@ -63,6 +69,37 @@ fn dismiss_screens(host: &mut infengine_adventure::Host) {
     if host.screen.is_some() {
         host.fire(&ScreenAction::Resume);
     }
+}
+
+/// One sound, end to end, with every step reported.
+fn hear(project: Project, id: &str) {
+    let file = match project.sounds.get(id) {
+        Some(file) => file.to_string(),
+        None => {
+            tracing::error!(id, "no such id in sounds/index.ron");
+            return;
+        }
+    };
+    let path = project.resolve(&file);
+    tracing::info!(%file, path = %path.display(), exists = path.exists(), "resolved");
+
+    let mut audio = match infengine_audio::AudioSystem::new() {
+        Ok(audio) => audio,
+        Err(err) => {
+            tracing::error!(%err, "audio device did not open - this is the silence");
+            return;
+        }
+    };
+    tracing::info!("audio device open");
+    match audio.load_sound(&path).and_then(|s| audio.play_sound(&s)) {
+        Ok(()) => tracing::info!("playing for 4 seconds"),
+        Err(err) => {
+            tracing::error!(%err, "load or play failed - this is the silence");
+            return;
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    tracing::info!("done");
 }
 
 /// Everything wrong with a project, found by playing all of it.
@@ -412,6 +449,10 @@ fn main() {
     }
     if cli.audit {
         audit(project);
+        return;
+    }
+    if let Some(id) = cli.hear {
+        hear(project, &id);
         return;
     }
 
