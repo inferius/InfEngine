@@ -14,9 +14,7 @@ use infengine_adventure::{Project, Verb};
 use crate::edit::Selection;
 use crate::ui::{UiActions, UiState};
 
-pub fn show(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions) {
-    selected(ui, state, actions);
-
+pub fn show(ui: &mut egui::Ui, state: &mut UiState<'_>) {
     ui.heading(format!("Scenery ({})", state.room.hotspots.len()));
     if state.room.hotspots.is_empty() {
         super::nothing_yet(
@@ -114,8 +112,11 @@ fn exits(ui: &mut egui::Ui, state: &mut UiState<'_>) {
         });
 }
 
-/// The thing under the cursor's last click, in full.
-fn selected(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions) {
+/// The thing under the cursor's last click, in full. Drawn above the
+/// sections rather than inside one, because clicking a thing on the
+/// picture is the way the inspector is usually reached and the answer
+/// should not be behind a fold.
+pub fn selected(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions) {
     match state.selection {
         Selection::None => return,
         Selection::Vertex(at) => {

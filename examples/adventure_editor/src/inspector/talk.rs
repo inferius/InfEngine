@@ -47,9 +47,12 @@ pub fn show(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions)
         );
     }
 
+    // Bounded rather than filling: this list now sits stacked under
+    // the animations in Animate mode, and an unbounded scroll inside a
+    // scroll fights for the whole column.
     egui::ScrollArea::vertical()
         .id_salt("line_list")
-        .auto_shrink([false, false])
+        .max_height(260.0)
         .show(ui, |ui| {
             for (id, text, has_voice) in state.lines {
                 ui.horizontal_top(|ui| {

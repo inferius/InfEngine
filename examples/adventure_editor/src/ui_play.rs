@@ -24,17 +24,13 @@ pub struct PlayActions {
     pub take_item: Option<String>,
     /// A script the tester asked to run.
     pub run_script: Option<String>,
-    /// The game window was asked for.
-    pub open_game: bool,
-    /// The screen editor was asked for.
-    pub open_screens: bool,
     /// Write the play state to a slot.
     pub save_slot: Option<u32>,
     /// Read a slot back.
     pub load_slot: Option<u32>,
     /// Throw a slot away.
     pub delete_slot: Option<u32>,
-    /// The script graph was asked for, optionally on a script.
+    /// A script to open on the graph canvas, in Script mode.
     pub open_graph: Option<String>,
 }
 
@@ -46,9 +42,14 @@ pub struct PlayDraft {
     pub save_name: String,
 }
 
-/// The play-mode side panel and, while playing, the subtitle.
-pub fn panel(
-    ctx: &egui::Context,
+/// The tester's controls, laid into whatever column hosts them.
+///
+/// A panel of its own once; now the body of the inspector's Test mode.
+/// The subtitle is separate ([`subtitle`]) because a line being spoken
+/// belongs over the room in every mode, not only while this column is
+/// on screen.
+pub fn contents(
+    ui: &mut egui::Ui,
     play: &mut PlayMode,
     draft: &mut PlayDraft,
     room: &str,
@@ -56,77 +57,56 @@ pub fn panel(
 ) -> PlayActions {
     let mut actions = PlayActions::default();
 
-    egui::SidePanel::right("play_panel")
-        .default_width(260.0)
-        .show(ctx, |ui| {
-            ui.heading("Test");
-            ui.horizontal(|ui| {
-                if play.active {
-                    if ui.button("stop").clicked() {
-                        actions.stop = true;
-                    }
-                } else if ui.button("play").clicked() {
-                    actions.start = true;
-                }
-                if ui
-                    .button("game...")
-                    .on_hover_text("Title, starting room, languages, export")
-                    .clicked()
-                {
-                    actions.open_game = true;
-                }
-                if ui.button("screens...").clicked() {
-                    actions.open_screens = true;
-                }
-                if ui.button("graph...").clicked() {
-                    actions.open_graph = Some(String::new());
-                }
-                if ui
-                    .button("reset")
-                    .on_hover_text("Clear flags, inventory and log, then restart the room")
-                    .clicked()
-                {
-                    actions.reset = true;
-                }
-            });
-
-            if !play.active {
-                ui.label(
-                    egui::RichText::new(
-                        "Not playing. Flags and inventory below are kept for the next run.",
-                    )
-                    .weak(),
-                );
+    ui.horizontal(|ui| {
+        if play.active {
+            if ui.button("⏹ Stop").clicked() {
+                actions.stop = true;
             }
+        } else if ui.button("▶ Run").clicked() {
+            actions.start = true;
+        }
+        if ui
+            .button("reset")
+            .on_hover_text("Clear flags, inventory and log, then restart the room")
+            .clicked()
+        {
+            actions.reset = true;
+        }
+    });
 
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                ui.label("verb");
-                for verb in Verb::ALL {
-                    ui.selectable_value(&mut play.verb, verb, verb.name());
-                }
-            });
-            ui.label(
-                egui::RichText::new(format!("cursor: {}", play.hover.label()))
-                    .small()
-                    .weak(),
-            );
-
-            ui.separator();
-            scripts_section(ui, play, room, &mut actions);
-            ui.separator();
-            flags_section(ui, play, draft, &mut actions);
-            ui.separator();
-            inventory_section(ui, play, draft, &mut actions);
-            ui.separator();
-            saves_section(ui, draft, slots, &mut actions);
-            ui.separator();
-            log_section(ui, play);
-        });
-
-    if play.active {
-        subtitle(ctx, play);
+    if !play.active {
+        ui.label(
+            egui::RichText::new(
+                "Not playing. Flags and inventory below are kept for the next run.",
+            )
+            .weak(),
+        );
     }
+
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.label("verb");
+        for verb in Verb::ALL {
+            ui.selectable_value(&mut play.verb, verb, verb.name());
+        }
+    });
+    ui.label(
+        egui::RichText::new(format!("cursor: {}", play.hover.label()))
+            .small()
+            .weak(),
+    );
+
+    ui.separator();
+    scripts_section(ui, play, room, &mut actions);
+    ui.separator();
+    flags_section(ui, play, draft, &mut actions);
+    ui.separator();
+    inventory_section(ui, play, draft, &mut actions);
+    ui.separator();
+    saves_section(ui, draft, slots, &mut actions);
+    ui.separator();
+    log_section(ui, play);
+
     actions
 }
 
@@ -336,7 +316,7 @@ fn log_section(ui: &mut egui::Ui, play: &PlayMode) {
 }
 
 /// The line being spoken, across the bottom of the room.
-fn subtitle(ctx: &egui::Context, play: &PlayMode) {
+pub fn subtitle(ctx: &egui::Context, play: &PlayMode) {
     let Some(subtitle) = play.subtitle.as_ref() else {
         return;
     };

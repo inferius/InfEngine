@@ -1,265 +1,188 @@
-//! A41.1: the inspector, organised by what you are doing.
+//! A83: the inspector, driven by the mode.
 //!
-//! It used to be one column with nine headings stacked down it - tool,
-//! overlays, room, layers, animations, sheets, lines, selection,
-//! problems - all present at once whatever you were working on. Nothing
-//! said which parts went together, so the editor read as a list of
-//! fields rather than as a tool. The "Draw floor" button and the
-//! "Walkable floor" checkbox are two halves of one job and sat five
-//! sections apart.
+//! The right-hand column answers a different question in each mode:
 //!
-//! So the panel is split by job instead. Each [`Task`] answers one
-//! question about the room, and choosing it does the setting-up: it
-//! turns on the overlay that job needs and picks up the tool that job
-//! uses. That is the whole point - the connection between a tool and
-//! what it draws on is made by the editor rather than left to be
-//! learned.
+//! * **Room** - what this screen is: identity, pictures, floor, the
+//!   things to click, the shot. Everything about the room in one
+//!   scrollable column, sections with counts, problems at the foot.
+//! * **Animate** - what moves and what is said: animations, the sheet
+//!   cutter, the room's lines.
+//! * **Script** - the room's scripts and the one on the canvas spelled
+//!   out as readable steps.
+//! * **Test** - the tester's controls: verb, flags, inventory, saves,
+//!   and the log of what the scripts actually did.
 //!
-//! An empty tab says what to do about being empty. "This room has none"
-//! is a fact; "no floor yet - draw one with Outline, or the actor cannot
-//! walk here" is an instruction, and the difference is most of what
-//! makes a panel usable the first time.
+//! An empty section says what to do about being empty. "This room has
+//! none" is a fact; "no floor yet - draw one with Outline" is an
+//! instruction, and the difference is most of what makes a panel usable
+//! the first time.
 
+pub mod camera;
 pub mod floor;
 pub mod motion;
 pub mod room;
-pub mod scene;
+pub mod scripts;
 pub mod talk;
 pub mod things;
 
-use crate::draw::Overlays;
 use crate::edit::Tool;
+use crate::mode::Mode;
 use crate::ui::{UiActions, UiState};
 
-/// One job you can be doing in a room.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub enum Task {
-    /// What this screen is.
-    #[default]
-    Room,
-    /// Where the actor may stand.
-    Floor,
-    /// What the player can click.
-    Things,
-    /// What moves.
-    Motion,
-    /// What is said.
-    Talk,
-    /// What happens over time: a cutscene, and the shot it is filmed in.
-    Scene,
+/// State the inspector needs that lives outside [`UiState`]: the game
+/// being tested and the script on the graph canvas.
+pub struct Extras<'a> {
+    pub play: &'a mut crate::play::PlayMode,
+    pub play_draft: &'a mut crate::ui_play::PlayDraft,
+    pub slots: &'a [infengine_adventure::save::SlotInfo],
+    /// The open room's id, cloned so the panel can read it while the
+    /// room itself is borrowed elsewhere.
+    pub room_id: String,
+    /// The script on the graph canvas, if any.
+    pub on_canvas: Option<String>,
 }
 
-impl Task {
-    pub const ALL: [Task; 6] = [
-        Task::Room,
-        Task::Floor,
-        Task::Things,
-        Task::Motion,
-        Task::Talk,
-        Task::Scene,
-    ];
-
-    /// Tab label.
-    pub fn label(self) -> &'static str {
-        match self {
-            Task::Room => "Room",
-            Task::Floor => "Floor",
-            Task::Things => "Things",
-            Task::Motion => "Motion",
-            Task::Talk => "Talk",
-            Task::Scene => "Scene",
-        }
-    }
-
-    /// The question this tab answers, shown under the tabs.
-    ///
-    /// Phrased as what the job is rather than what the fields are: the
-    /// fields are visible already, and what is not visible is why they
-    /// are together.
-    pub fn question(self) -> &'static str {
-        match self {
-            Task::Room => "What this screen is - its name, its size, the pictures it is painted from.",
-            Task::Floor => "Where the actor may stand, and where they arrive from each door.",
-            Task::Things => "What the player can click - the scenery, and the ways out.",
-            Task::Motion => "What moves here, and the sheets the frames are cut from.",
-            Task::Talk => "What is said here, and how much of it has been recorded.",
-            Task::Scene => {
-                "What happens here over time, and the shot it is filmed in."
-            }
-        }
-    }
-
-    /// The tools this job uses. The first is picked when the tab opens.
-    ///
-    /// A tab with no tools of its own leaves the current one alone: the
-    /// dialogue list does not care what the mouse is doing.
-    pub fn tools(self) -> &'static [Tool] {
-        match self {
-            Task::Room => &[],
-            Task::Floor => &[Tool::DrawFloor, Tool::Select, Tool::WalkPreview],
-            Task::Things => &[Tool::DrawHotspot, Tool::Select],
-            Task::Motion | Task::Talk | Task::Scene => &[],
-        }
-    }
-
-    /// Turn on the overlays this job needs to see.
-    ///
-    /// Only applied when the tab changes, so a deliberate toggle
-    /// afterwards is not undone on the next frame.
-    pub fn reveal(self, overlays: &mut Overlays) {
-        match self {
-            Task::Room => overlays.bounds = true,
-            Task::Floor => {
-                overlays.floor = true;
-                overlays.entries = true;
-            }
-            Task::Things => {
-                overlays.hotspots = true;
-                overlays.exits = true;
-            }
-            Task::Motion | Task::Talk => {}
-            // The shot is what this tab is about, so the room's edge is
-            // the one overlay that says where it ends.
-            Task::Scene => {
-                overlays.bounds = true;
-                overlays.camera = true;
-            }
-        }
-    }
-
-    /// How many things this tab has to show, for the tab label.
-    ///
-    /// A count on the tab means you can tell an empty room from a full
-    /// one without opening all five.
-    pub fn count(self, state: &UiState<'_>) -> usize {
-        match self {
-            Task::Room => state.room.layers.len(),
-            Task::Floor => state.room.walk.solids.len() + state.room.entries.len(),
-            Task::Things => state.room.hotspots.len() + state.room.exits.len(),
-            Task::Motion => state.animations.len(),
-            Task::Talk => state.lines.len(),
-            Task::Scene => {
-                let prefix = format!("{}.", state.room.script_prefix());
-                state
-                    .project
-                    .scripts
-                    .keys()
-                    .filter(|id| id.starts_with(&prefix))
-                    .count()
-            }
-        }
-    }
-}
-
-/// Draw the right-hand panel. Returns where its left edge ended up.
-pub fn panel(ctx: &egui::Context, state: &mut UiState<'_>, actions: &mut UiActions) -> f32 {
-    let response = egui::SidePanel::right("inspector")
+/// Draw the right-hand panel. Returns what the Test controls asked for.
+pub fn panel(
+    ctx: &egui::Context,
+    state: &mut UiState<'_>,
+    actions: &mut UiActions,
+    extras: &mut Extras<'_>,
+) -> crate::ui_play::PlayActions {
+    let mut play_actions = crate::ui_play::PlayActions::default();
+    egui::SidePanel::right("inspector")
         .default_width(340.0)
         .show(ctx, |ui| {
-            toolbar(ui, state, actions);
+            header(ui, state, extras);
             ui.separator();
-            tabs(ui, state);
-            ui.label(
-                egui::RichText::new(state.task.question())
-                    .small()
-                    .weak(),
-            );
-            ui.separator();
-            tools(ui, state);
-
-            egui::ScrollArea::vertical()
-                .id_salt("inspector_scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    match *state.task {
-                        Task::Room => room::show(ui, state),
-                        Task::Floor => floor::show(ui, state),
-                        Task::Things => things::show(ui, state, actions),
-                        Task::Motion => motion::show(ui, state, actions),
-                        Task::Talk => talk::show(ui, state, actions),
-                        Task::Scene => scene::show(ui, state, actions),
-                    }
-                    ui.add_space(12.0);
-                    problems(ui, state);
-                });
-        });
-    response.response.rect.left()
-}
-
-fn toolbar(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions) {
-    ui.horizontal(|ui| {
-        let save = egui::Button::new(if state.dirty { "Save *" } else { "Save" });
-        if ui
-            .add_enabled(state.dirty, save)
-            .on_hover_text("Write this room back to its file")
-            .clicked()
-        {
-            actions.save = true;
-        }
-        if ui
-            .button("Reload")
-            .on_hover_text("Throw away unsaved changes and read the file again")
-            .clicked()
-        {
-            actions.reload = true;
-        }
-        if ui
-            .button("Fit")
-            .on_hover_text("Frame the whole room in the view")
-            .clicked()
-        {
-            actions.fit_view = true;
-        }
-    });
-}
-
-/// The tab strip. Switching tabs is what sets up the tool and overlays.
-fn tabs(ui: &mut egui::Ui, state: &mut UiState<'_>) {
-    ui.horizontal_wrapped(|ui| {
-        for task in Task::ALL {
-            let count = task.count(state);
-            let label = if count > 0 {
-                format!("{} {count}", task.label())
-            } else {
-                task.label().to_string()
-            };
-            let selected = *state.task == task;
-            if ui
-                .selectable_label(selected, label)
-                .on_hover_text(task.question())
-                .clicked()
-                && !selected
-            {
-                *state.task = task;
-                task.reveal(state.overlays);
-                if let Some(first) = task.tools().first() {
-                    *state.tool = *first;
+            match state.mode {
+                Mode::Room => room_mode(ui, state, actions),
+                Mode::Animate => animate_mode(ui, state, actions),
+                Mode::Script => scripts::show(ui, state, actions, extras.on_canvas.as_deref()),
+                Mode::Test => {
+                    egui::ScrollArea::vertical()
+                        .id_salt("inspector_scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            play_actions = crate::ui_play::contents(
+                                ui,
+                                extras.play,
+                                extras.play_draft,
+                                &extras.room_id,
+                                extras.slots,
+                            );
+                        });
                 }
             }
-        }
-    });
+        });
+    play_actions
 }
 
-/// Only the tools this job uses, with what they do written next to them.
-fn tools(ui: &mut egui::Ui, state: &mut UiState<'_>) {
-    let available = state.task.tools();
-    if available.is_empty() {
-        return;
-    }
-    ui.horizontal_wrapped(|ui| {
-        for tool in available {
-            if ui
-                .selectable_label(*state.tool == *tool, tool_label(*tool))
-                .clicked()
-            {
-                *state.tool = *tool;
-            }
-        }
-    });
-    // The hint describes the tool actually in force, which may be one
-    // this tab does not offer if another tab set it.
-    ui.label(egui::RichText::new(tool_hint(*state.tool)).small().weak());
-    ui.separator();
+/// What the column is about right now: the mode, the thing, one fact.
+fn header(ui: &mut egui::Ui, state: &UiState<'_>, extras: &Extras<'_>) {
+    let (title, sub) = match state.mode {
+        Mode::Room => (
+            state.room.id.clone(),
+            format!(
+                "{} x {} · {} picture{}",
+                state.room.size.x as i32,
+                state.room.size.y as i32,
+                state.room.layers.len(),
+                plural(state.room.layers.len()),
+            ),
+        ),
+        Mode::Animate => (
+            state.room.id.clone(),
+            format!(
+                "{} animation{} · {} line{}",
+                state.animations.len(),
+                plural(state.animations.len()),
+                state.lines.len(),
+                plural(state.lines.len()),
+            ),
+        ),
+        Mode::Script => (
+            extras
+                .on_canvas
+                .clone()
+                .unwrap_or_else(|| "nothing on the canvas".into()),
+            "boxes and wires in the centre, the same steps as text below".into(),
+        ),
+        Mode::Test => (
+            format!("running {}", extras.room_id),
+            "flags and inventory are kept between runs".into(),
+        ),
+    };
+    ui.label(
+        egui::RichText::new(state.mode.label().to_uppercase())
+            .small()
+            .weak(),
+    );
+    ui.heading(title);
+    ui.label(egui::RichText::new(sub).small().weak());
+}
+
+/// Everything about the room, in sections with counts.
+fn room_mode(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions) {
+    egui::ScrollArea::vertical()
+        .id_salt("inspector_scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            // The selection first, always visible: clicking a thing on
+            // the picture is the way this column is usually reached.
+            things::selected(ui, state, actions);
+
+            section(ui, "Room", state.room.layers.len(), true, |ui| {
+                room::show(ui, state)
+            });
+            let floors = state.room.walk.solids.len() + state.room.entries.len();
+            section(ui, "Floor", floors, true, |ui| floor::show(ui, state));
+            let clickable = state.room.hotspots.len() + state.room.exits.len();
+            section(ui, "Things", clickable, true, |ui| things::show(ui, state));
+            section(ui, "Camera", 0, false, |ui| camera::show(ui, state));
+
+            ui.add_space(12.0);
+            problems(ui, state);
+        });
+}
+
+/// What moves and what is said.
+fn animate_mode(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions) {
+    egui::ScrollArea::vertical()
+        .id_salt("inspector_scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            motion::show(ui, state, actions);
+            ui.add_space(10.0);
+            section(ui, "Talk", state.lines.len(), false, |ui| {
+                talk::show(ui, state, actions)
+            });
+            ui.add_space(12.0);
+            problems(ui, state);
+        });
+}
+
+/// One collapsible section, its count on the header.
+fn section(
+    ui: &mut egui::Ui,
+    title: &str,
+    count: usize,
+    open: bool,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    let label = if count > 0 {
+        format!("{title} · {count}")
+    } else {
+        title.to_string()
+    };
+    egui::CollapsingHeader::new(label)
+        .id_salt(("inspector_section", title))
+        .default_open(open)
+        .show(ui, body);
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
 }
 
 /// Tool names as a job describes them rather than as the enum spells
@@ -282,8 +205,8 @@ pub fn tool_hint(tool: Tool) -> &'static str {
     }
 }
 
-/// Shown at the foot of every tab, because a problem you cannot see is
-/// worse than one in the wrong place.
+/// Shown at the foot of Room and Animate, because a problem you cannot
+/// see is worse than one in the wrong place.
 fn problems(ui: &mut egui::Ui, state: &UiState<'_>) {
     let issues = state.room.validate();
     if issues.is_empty() && state.missing_images.is_empty() {
@@ -302,7 +225,8 @@ fn problems(ui: &mut egui::Ui, state: &UiState<'_>) {
     }
 }
 
-/// What a tab shows when it has nothing: what that means, and what to do.
+/// What a section shows when it has nothing: what that means, and what
+/// to do.
 pub fn nothing_yet(ui: &mut egui::Ui, meaning: &str, next: &str) {
     ui.label(egui::RichText::new(meaning).weak());
     ui.label(egui::RichText::new(next).small().weak());
@@ -313,17 +237,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_task_says_what_it_is_for() {
-        for task in Task::ALL {
-            assert!(!task.label().is_empty(), "{task:?} has no label");
-            assert!(
-                task.question().len() > 20,
-                "{task:?} needs a real sentence, not a word"
-            );
-        }
-    }
-
-    #[test]
     fn every_tool_has_a_name_and_a_hint() {
         for tool in Tool::ALL {
             assert!(!tool_label(tool).is_empty(), "{tool:?} has no name");
@@ -332,51 +245,9 @@ mod tests {
     }
 
     #[test]
-    fn a_tab_that_offers_a_tool_offers_it_first_by_default() {
-        // Opening Floor with Select in force would leave the user
-        // clicking on the picture and nothing happening.
-        assert_eq!(Task::Floor.tools().first(), Some(&Tool::DrawFloor));
-        assert_eq!(Task::Things.tools().first(), Some(&Tool::DrawHotspot));
-    }
-
-    #[test]
-    fn opening_a_tab_reveals_what_that_job_needs_to_see() {
-        let mut overlays = Overlays {
-            floor: false,
-            hotspots: false,
-            exits: false,
-            entries: false,
-            bounds: false,
-            camera: false,
-        };
-        Task::Floor.reveal(&mut overlays);
-        assert!(overlays.floor && overlays.entries);
-        assert!(!overlays.hotspots, "floor work does not need hotspots on");
-
-        Task::Things.reveal(&mut overlays);
-        assert!(overlays.hotspots && overlays.exits);
-    }
-
-    #[test]
-    fn revealing_never_turns_an_overlay_off() {
-        // Switching tabs must not undo a deliberate toggle, so reveal
-        // only ever sets.
-        let full = Overlays::default();
-        for task in Task::ALL {
-            let mut overlays = full;
-            task.reveal(&mut overlays);
-            assert_eq!(overlays, full, "{task:?} turned something off");
-        }
-    }
-
-    #[test]
-    fn every_tool_belongs_to_some_tab() {
-        // A tool no tab offers is a tool nobody can reach.
-        for tool in Tool::ALL {
-            assert!(
-                Task::ALL.iter().any(|t| t.tools().contains(&tool)),
-                "{tool:?} is offered by no tab"
-            );
-        }
+    fn plurals_read_naturally() {
+        assert_eq!(plural(1), "");
+        assert_eq!(plural(0), "s");
+        assert_eq!(plural(2), "s");
     }
 }

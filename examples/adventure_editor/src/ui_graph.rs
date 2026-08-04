@@ -12,9 +12,8 @@
 use infengine_adventure::action::Script;
 use infengine_blueprint::{Blueprint, BlueprintEditor, NodeKindRegistry};
 
-/// The script graph window's state.
+/// The script canvas's state.
 pub struct GraphUi {
-    pub open: bool,
     /// Script currently on the canvas.
     pub script_id: Option<String>,
     pub editor: BlueprintEditor,
@@ -26,7 +25,6 @@ pub struct GraphUi {
 impl std::fmt::Debug for GraphUi {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GraphUi")
-            .field("open", &self.open)
             .field("script", &self.script_id)
             .finish()
     }
@@ -35,7 +33,6 @@ impl std::fmt::Debug for GraphUi {
 impl Default for GraphUi {
     fn default() -> Self {
         Self {
-            open: false,
             script_id: None,
             editor: BlueprintEditor::new(),
             registry: infengine_advgraph::registry(),
@@ -76,20 +73,19 @@ pub struct GraphActions {
     pub run: bool,
 }
 
-/// The script graph window.
-pub fn window(
+/// The script canvas, filling the centre of the window in Script mode.
+///
+/// A floating window once; now the mode owns the middle of the screen,
+/// the way the graph in the design does. Must be added after every side
+/// and bottom panel, because a central panel takes whatever is left.
+pub fn panel(
     ctx: &egui::Context,
     state: &mut GraphUi,
     scripts: &[String],
 ) -> GraphActions {
     let mut actions = GraphActions::default();
-    let mut open = state.open;
 
-    egui::Window::new("Script graph")
-        .open(&mut open)
-        .default_width(900.0)
-        .default_height(600.0)
-        .show(ctx, |ui| {
+    egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 egui::ComboBox::from_id_salt("graph_script")
                     .selected_text(
@@ -155,6 +151,5 @@ pub fn window(
             state.dirty |= state.editor.show(ui, &state.registry);
         });
 
-    state.open = open;
     actions
 }

@@ -23,6 +23,7 @@ mod help;
 mod inspector;
 mod library;
 mod menu;
+mod mode;
 mod play;
 mod playback;
 mod settings;

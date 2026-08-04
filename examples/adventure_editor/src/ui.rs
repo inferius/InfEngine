@@ -13,7 +13,7 @@ use infengine_adventure::{Animation, Room};
 
 use crate::draw::Overlays;
 use crate::edit::{Selection, Tool};
-use crate::inspector::Task;
+use crate::mode::Mode;
 use crate::playback::Playback;
 use infengine_adventure::Project;
 
@@ -33,8 +33,10 @@ pub struct UiActions {
     pub save_sheet: bool,
     /// The draft was abandoned.
     pub close_sheet: bool,
-    /// A script the Scene tab asked to run. Empty means the room's own.
+    /// A script the inspector asked to run. Empty means the room's own.
     pub run_script: Option<String>,
+    /// A script to put on the graph canvas.
+    pub open_graph_script: Option<String>,
     /// It asked to stop instead.
     pub stop_play: bool,
     pub save: bool,
@@ -54,8 +56,8 @@ pub struct UiState<'a> {
     pub content_max: egui::Vec2,
     pub current_room: Option<usize>,
     pub room: &'a mut Room,
-    /// Which job the inspector is showing.
-    pub task: &'a mut Task,
+    /// What the editor is being used for; the pills at the top set it.
+    pub mode: Mode,
     pub tool: &'a mut Tool,
     pub overlays: &'a mut Overlays,
     pub selection: Selection,
@@ -77,9 +79,8 @@ pub struct UiState<'a> {
     pub lines: &'a [(String, String, bool)],
     /// The sheet being cut into frames, if any.
     pub sheet: &'a mut Option<crate::sheet::SheetDraft>,
-    /// Whether a scene is running, how far into it, and what it is doing.
+    /// Whether a scene is running, and what it is doing right now.
     pub playing: bool,
-    pub elapsed: f32,
     pub now: String,
     /// Where the view is, while one runs.
     pub camera: glam::Vec2,
@@ -96,23 +97,25 @@ impl std::fmt::Debug for UiState<'_> {
     }
 }
 
-/// Build every panel for one frame.
-pub fn build(ctx: &egui::Context, state: &mut UiState<'_>) -> UiActions {
+/// Build the side panels for one frame. The status bar, the timeline
+/// and the central canvas are the caller's, so they can be stacked in
+/// the order the design wants.
+pub fn build(
+    ctx: &egui::Context,
+    state: &mut UiState<'_>,
+    extras: &mut crate::inspector::Extras<'_>,
+) -> (UiActions, crate::ui_play::PlayActions) {
     let mut actions = UiActions::default();
-    let screen = ctx.content_rect();
-    state.content_min = egui::vec2(screen.left(), screen.top());
-    state.content_max = egui::vec2(screen.right(), screen.bottom());
     // Answer a few of the scene list's thumbnail requests from last
     // frame before drawing it again.
     state.cards.tick(ctx, state.project, 3);
     rooms_panel(ctx, state, &mut actions);
-    state.content_max.x = crate::inspector::panel(ctx, state, &mut actions);
-    status_bar(ctx, state);
-    actions
+    let play_actions = crate::inspector::panel(ctx, state, &mut actions, extras);
+    (actions, play_actions)
 }
 
 fn rooms_panel(ctx: &egui::Context, state: &mut UiState<'_>, actions: &mut UiActions) {
-    let response = egui::SidePanel::left("rooms")
+    egui::SidePanel::left("rooms")
         .default_width(230.0)
         .show(ctx, |ui| {
             ui.heading("Scenes");
@@ -159,7 +162,6 @@ fn rooms_panel(ctx: &egui::Context, state: &mut UiState<'_>, actions: &mut UiAct
                 .auto_shrink([false, false])
                 .show(ui, |ui| scene_list(ui, state, actions, &matches));
         });
-    state.content_min.x = response.response.rect.right();
 }
 
 /// The list body: scene cards, with same-background families folded.
@@ -324,20 +326,40 @@ pub fn matching_rooms(project: &Project, filter: &str) -> Vec<usize> {
 /// It used to hold one label that was empty most of the time. A row that
 /// is usually blank teaches the reader not to look at it, which wastes
 /// the one place in the window that can answer "now what".
-fn status_bar(ctx: &egui::Context, state: &UiState<'_>) {
+pub fn status_bar(ctx: &egui::Context, state: &UiState<'_>) {
     egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
         ui.horizontal(|ui| {
-            if state.status.is_empty() {
+            ui.label(
+                egui::RichText::new(format!("{} mode", state.mode.label().to_lowercase()))
+                    .small()
+                    .weak(),
+            );
+            ui.separator();
+            if state.playing && !state.now.is_empty() {
+                // While a scene runs, the most useful thing the bar can
+                // say is what the script is doing this instant.
+                ui.label(egui::RichText::new(format!("▶ {}", state.now)).strong());
+            } else if state.status.is_empty() {
                 ui.label(egui::RichText::new(next_step(state)).weak());
             } else {
                 ui.label(state.status);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new(crate::inspector::tool_hint(*state.tool))
-                        .small()
-                        .weak(),
-                );
+                // The tool in force and what it does, so the mouse is
+                // never a mystery. Room mode is the only one whose
+                // tools draw; elsewhere the hint would be noise.
+                if state.mode == Mode::Room {
+                    ui.label(
+                        egui::RichText::new(crate::inspector::tool_hint(*state.tool))
+                            .small()
+                            .weak(),
+                    );
+                    ui.label(
+                        egui::RichText::new(crate::inspector::tool_label(*state.tool))
+                            .small()
+                            .strong(),
+                    );
+                }
             });
         });
     });

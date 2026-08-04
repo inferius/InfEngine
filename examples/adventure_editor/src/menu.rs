@@ -1,16 +1,12 @@
-//! A42.1: the menu bar, which is where the editor says what it contains.
+//! A42.1 / A83: the top bar - menus, the mode pills, and the controls
+//! that never move.
 //!
-//! Before this there was no top-level anything. The game settings, the
-//! screen designer and the script graph were reached by three buttons
-//! labelled `game...`, `screens...` and `graph...`, sitting inside the
-//! play panel next to the verb picker - so the only way to find out the
-//! editor had a screen designer was to click a button that did not
-//! mention screens, in a panel about testing.
-//!
-//! A menu bar is not decoration here. It is the one place that lists the
-//! editor's parts by name, and the place a reader looks first when they
-//! do not know what a program can do. Everything reachable is named in
-//! it, including the things that also have a button elsewhere.
+//! The bar is where the editor says what it contains. The menus list
+//! every part by name; the four mode pills say what the editor is being
+//! used for right now; the right-hand cluster keeps the three things a
+//! session always needs - whether the room is saved, the button that
+//! saves it, and the button that plays the game - in the corner where
+//! every tool keeps them.
 //!
 //! Two rules it keeps:
 //!
@@ -20,7 +16,7 @@
 //!   hover, not hidden. Disappearing items make a menu unlearnable.
 
 use crate::draw::Overlays;
-use crate::inspector::Task;
+use crate::mode::Mode;
 
 /// What the menu bar asks the app to do.
 ///
@@ -36,14 +32,13 @@ pub struct MenuActions {
     pub add: Option<Addable>,
     pub open_game: bool,
     pub open_screens: bool,
-    pub open_graph: bool,
     pub open_story: bool,
     pub open_library: bool,
     /// Take the last canvas edit back.
     pub undo: bool,
     pub open_help: bool,
-    /// Switch the inspector to a job.
-    pub task: Option<Task>,
+    /// Switch the editor to a mode.
+    pub mode: Option<Mode>,
     pub start_play: bool,
     pub stop_play: bool,
 }
@@ -77,14 +72,6 @@ impl Addable {
             Addable::Entry => "Where the actor stands when a door leads into this room.",
         }
     }
-
-    /// The tab that edits it, opened along with the thing itself.
-    pub fn task(self) -> Task {
-        match self {
-            Addable::Hotspot | Addable::Exit => Task::Things,
-            Addable::Entry => Task::Floor,
-        }
-    }
 }
 
 /// How big the interface is drawn, as a multiple of its natural size.
@@ -93,7 +80,7 @@ impl Addable {
 /// unreadable in practice, and the fix is not per-widget font sizes but
 /// one number the whole interface is scaled by.
 ///
-/// Bounded rather than free: below 0.6 the tab strip stops being
+/// Bounded rather than free: below 0.6 the mode pills stop being
 /// clickable, and above 2.5 the inspector is wider than the picture it
 /// is inspecting. Both are states a user cannot get back out of, since
 /// the control that would undo them has scaled too.
@@ -111,20 +98,24 @@ pub fn clamp_ui_scale(scale: f32) -> f32 {
     }
 }
 
-/// State the bar keeps: whether a room is open, whether it is dirty.
-#[derive(Debug, Clone, Copy)]
+/// State the bar reads: whether a room is open, whether it is dirty,
+/// and the name of the place being edited.
+#[derive(Debug, Clone)]
 pub struct MenuContext {
     pub has_room: bool,
     pub dirty: bool,
     pub playing: bool,
+    /// "project · room", shown beside the menus so the window always
+    /// says where you are.
+    pub crumb: String,
 }
 
 /// Draw the bar. Returns what was asked for.
 pub fn bar(
     ctx: &egui::Context,
-    menu: MenuContext,
+    menu: &MenuContext,
     overlays: &mut Overlays,
-    task: Task,
+    mode: Mode,
     ui_scale: &mut f32,
 ) -> MenuActions {
     let mut actions = MenuActions::default();
@@ -138,18 +129,32 @@ pub fn bar(
         egui::MenuBar::new().ui(ui, |ui| {
             project_menu(ui, menu, &mut actions);
             room_menu(ui, menu, &mut actions);
-            view_menu(ui, menu, overlays, task, ui_scale, &mut actions);
+            view_menu(ui, overlays, ui_scale);
             help_menu(ui, &mut actions);
+            ui.label(egui::RichText::new(&menu.crumb).small().weak());
 
-            // The play control sits at the right where a transport
-            // usually is, away from the menus so it is not read as one.
+            ui.separator();
+            for option in Mode::ALL {
+                let selected = mode == option;
+                if ui
+                    .selectable_label(selected, option.label())
+                    .on_hover_text(option.hint())
+                    .clicked()
+                    && !selected
+                {
+                    actions.mode = Some(option);
+                }
+            }
+
+            // The right-hand cluster: saved-or-not, Save, Play. Laid
+            // right-to-left, so the first added is the rightmost.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if menu.playing {
-                    if ui.button("Stop").clicked() {
+                    if ui.button("⏹ Stop").clicked() {
                         actions.stop_play = true;
                     }
                 } else if ui
-                    .add_enabled(menu.has_room, egui::Button::new("Play"))
+                    .add_enabled(menu.has_room, egui::Button::new("▶ Play game"))
                     .on_hover_text("Run the game from this room")
                     .on_disabled_hover_text("Open a room first")
                     .clicked()
@@ -157,18 +162,26 @@ pub fn bar(
                     actions.start_play = true;
                 }
                 if ui
+                    .add_enabled(menu.dirty, egui::Button::new("Save"))
+                    .on_hover_text("Write this room and its scripts back to their files")
+                    .on_disabled_hover_text("Nothing has changed")
+                    .clicked()
+                {
+                    actions.save = true;
+                }
+                if menu.dirty {
+                    ui.label(
+                        egui::RichText::new("● unsaved")
+                            .small()
+                            .color(egui::Color32::from_rgb(255, 200, 120)),
+                    );
+                }
+                if ui
                     .button("?")
                     .on_hover_text("How this editor works")
                     .clicked()
                 {
                     actions.open_help = true;
-                }
-                if menu.dirty {
-                    ui.label(
-                        egui::RichText::new("unsaved")
-                            .small()
-                            .color(egui::Color32::from_rgb(255, 200, 120)),
-                    );
                 }
             });
         });
@@ -202,7 +215,7 @@ fn scale_shortcuts(ctx: &egui::Context, ui_scale: &mut f32) {
     });
 }
 
-fn project_menu(ui: &mut egui::Ui, menu: MenuContext, actions: &mut MenuActions) {
+fn project_menu(ui: &mut egui::Ui, menu: &MenuContext, actions: &mut MenuActions) {
     ui.menu_button("Project", |ui| {
         if ui
             .add_enabled(menu.dirty, egui::Button::new("Save room"))
@@ -253,18 +266,10 @@ fn project_menu(ui: &mut egui::Ui, menu: MenuContext, actions: &mut MenuActions)
             actions.open_story = true;
             ui.close();
         }
-        if ui
-            .button("Script graph...")
-            .on_hover_text("What happens when something is clicked, as a wiring diagram")
-            .clicked()
-        {
-            actions.open_graph = true;
-            ui.close();
-        }
     });
 }
 
-fn room_menu(ui: &mut egui::Ui, menu: MenuContext, actions: &mut MenuActions) {
+fn room_menu(ui: &mut egui::Ui, menu: &MenuContext, actions: &mut MenuActions) {
     ui.menu_button("Room", |ui| {
         if !menu.has_room {
             ui.label(egui::RichText::new("No room open.").weak());
@@ -293,14 +298,7 @@ fn room_menu(ui: &mut egui::Ui, menu: MenuContext, actions: &mut MenuActions) {
     });
 }
 
-fn view_menu(
-    ui: &mut egui::Ui,
-    menu: MenuContext,
-    overlays: &mut Overlays,
-    task: Task,
-    ui_scale: &mut f32,
-    actions: &mut MenuActions,
-) {
+fn view_menu(ui: &mut egui::Ui, overlays: &mut Overlays, ui_scale: &mut f32) {
     ui.menu_button("View", |ui| {
         ui.label(egui::RichText::new("Show over the picture").small().weak());
         ui.checkbox(&mut overlays.floor, "Walkable floor");
@@ -308,21 +306,7 @@ fn view_menu(
         ui.checkbox(&mut overlays.exits, "Ways out");
         ui.checkbox(&mut overlays.entries, "Arrival points");
         ui.checkbox(&mut overlays.bounds, "Room edge");
-        ui.separator();
-        // Listing the tabs here too: a reader who has not noticed the
-        // tab strip still finds out the editor has five jobs in it.
-        ui.label(egui::RichText::new("Work on").small().weak());
-        for other in Task::ALL {
-            let mut chosen = task == other;
-            if ui
-                .checkbox(&mut chosen, other.label())
-                .on_hover_text(other.question())
-                .clicked()
-            {
-                actions.task = Some(other);
-                ui.close();
-            }
-        }
+        ui.checkbox(&mut overlays.camera, "Camera frame");
         ui.separator();
         ui.label(egui::RichText::new("Interface size").small().weak());
         ui.horizontal(|ui| {
@@ -349,7 +333,6 @@ fn view_menu(
         {
             *ui_scale = clamp_ui_scale(slider);
         }
-        let _ = menu;
     });
 }
 
@@ -371,7 +354,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn everything_addable_says_what_it_is_and_where_it_is_edited() {
+    fn everything_addable_says_what_it_is_for() {
         for what in [Addable::Hotspot, Addable::Exit, Addable::Entry] {
             assert!(!what.label().is_empty(), "{what:?} has no label");
             assert!(
@@ -379,11 +362,6 @@ mod tests {
                 "{what:?} needs a sentence saying what it is for"
             );
         }
-        // Adding a thing and being left on a tab that does not show it
-        // is the worst kind of nothing-happened.
-        assert_eq!(Addable::Hotspot.task(), Task::Things);
-        assert_eq!(Addable::Exit.task(), Task::Things);
-        assert_eq!(Addable::Entry.task(), Task::Floor);
     }
 
     #[test]
@@ -414,7 +392,7 @@ mod tests {
     fn a_fresh_bar_asks_for_nothing() {
         let actions = MenuActions::default();
         assert_eq!(actions, MenuActions::default());
-        assert!(actions.add.is_none() && actions.task.is_none());
+        assert!(actions.add.is_none() && actions.mode.is_none());
         assert!(!actions.save && !actions.start_play && !actions.open_help);
     }
 }

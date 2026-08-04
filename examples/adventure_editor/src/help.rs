@@ -5,9 +5,9 @@
 //! is wrong, and nothing says what any of it is for.
 //!
 //! So there is one page that describes the layout in the order a reader
-//! meets it - left, middle, right, bottom - then the five jobs, then how
-//! things get added. It opens by itself once per run and can be closed
-//! like any window.
+//! meets it - left, middle, right, bottom - then the four modes, then
+//! how things get added. It opens by itself once per run and can be
+//! closed like any window.
 //!
 //! It first opened only when no room was loaded, on the reasoning that
 //! an empty editor is the newcomer's view. That was wrong: a project
@@ -19,7 +19,7 @@
 //! nowhere else: a hotspot is a clickable region, the floor is where the
 //! actor may stand, a sheet is a strip of frames.
 
-use crate::inspector::Task;
+use crate::mode::Mode;
 
 /// Whether the page is open, and whether it has ever been opened.
 #[derive(Debug, Clone, Default)]
@@ -65,19 +65,21 @@ const PARTS: &[Part] = &[
     },
     Part {
         where_: "Right",
-        what: "The job you are doing, in five tabs. \
-               Only one job is shown at a time, and picking a tab \
-               switches on the tool and the overlay that job needs.",
+        what: "The inspector. What it shows follows the mode: the room's \
+               parts in Room, animations in Animate, the script's steps \
+               in Script, the tester's controls in Test.",
     },
     Part {
         where_: "Bottom",
-        what: "What is under the cursor, and what just happened.",
+        what: "What is under the cursor, and what just happened. \
+               In Animate mode the timeline sits beneath it.",
     },
     Part {
         where_: "Top",
-        what: "Everything the editor can do, by name. \
-               The parts that are not rooms - the game's settings, its \
-               menus, its scripts - live in the Project menu.",
+        what: "The menus, then the four mode pills - Room, Animate, \
+               Script, Test - then Save and Play. The pills are the \
+               spine of the editor: pick what you are doing and the \
+               tools, inspector and centre follow.",
     },
 ];
 
@@ -107,19 +109,19 @@ pub fn window(ctx: &egui::Context, state: &mut HelpUi) {
                     }
 
                     ui.add_space(12.0);
-                    ui.heading("The five jobs");
+                    ui.heading("The four modes");
                     ui.label(
                         egui::RichText::new(
-                            "The tabs on the right. Each answers one question \
-                             about the room you have open.",
+                            "The pills at the top. Each answers one question \
+                             about the game you are making.",
                         )
                         .small()
                         .weak(),
                     );
-                    for task in Task::ALL {
+                    for mode in Mode::ALL {
                         ui.add_space(4.0);
-                        ui.label(egui::RichText::new(task.label()).strong());
-                        ui.label(egui::RichText::new(task.question()).small());
+                        ui.label(egui::RichText::new(mode.label()).strong());
+                        ui.label(egui::RichText::new(mode.hint()).small());
                     }
 
                     ui.add_space(12.0);
@@ -127,14 +129,14 @@ pub fn window(ctx: &egui::Context, state: &mut HelpUi) {
                     ui.label(
                         "Everything a room can hold is added from the Room menu. \
                          What you add appears in the middle of the view, and the \
-                         editor switches to the tab that edits it.",
+                         editor switches to Room mode to edit it.",
                     );
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(
-                            "You can also draw one directly: the Floor tab's Outline \
-                             tool traces the walkable area, and the Things tab's \
-                             Box out tool drags a rectangle over something clickable.",
+                            "You can also draw one directly: in Room mode the Outline \
+                             tool traces the walkable area, and the Box out tool drags \
+                             a rectangle over something clickable.",
                         )
                         .small(),
                     );
