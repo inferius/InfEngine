@@ -219,6 +219,7 @@ impl Editor {
                 cards: &mut self.cards,
             };
             let view = &mut self.view;
+            let player = &mut self.player;
             let play = &mut self.play;
             let play_draft = &mut self.play_draft;
             let room_id = state.room.id.clone();
@@ -330,6 +331,9 @@ impl Editor {
                     );
                 }
                 ui::status_bar(ctx, &mut state);
+                // The player strip sits above the status bar, present
+                // only while something is playing.
+                crate::player::panel(ctx, player);
                 // What is left between the panels is the canvas; the
                 // view frames the room against it.
                 let rect = ctx.content_rect();

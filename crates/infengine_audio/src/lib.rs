@@ -32,6 +32,14 @@ pub struct Sound {
     data: StaticSoundData,
 }
 
+impl Sound {
+    /// A88.3: how long the sound runs, in seconds. What a player UI
+    /// scales its slider by.
+    pub fn duration_secs(&self) -> f32 {
+        self.data.duration().as_secs_f32()
+    }
+}
+
 /// W232: decode an audio file into a playable [`Sound`] without an
 /// [`AudioSystem`]. Decoding is device-independent, so this can run
 /// on a background thread; only playback needs the audio manager.
@@ -125,6 +133,12 @@ impl AudioSystem {
     pub fn play_sound(&mut self, sound: &Sound) -> Result<(), AudioError> {
         self.manager.play(sound.data.clone())?;
         Ok(())
+    }
+
+    /// A88.3: play `sound` once, keeping the handle - for a player UI
+    /// that wants to show where it is, pause it, seek it, stop it.
+    pub fn play_sound_tracked(&mut self, sound: &Sound) -> Result<ActiveSound, AudioError> {
+        Ok(ActiveSound(self.manager.play(sound.data.clone())?))
     }
 
     /// Play `sound` with a linear gain in `[0, 1]`. Below ~1e-3
@@ -267,6 +281,39 @@ impl ActiveSound {
             duration: std::time::Duration::from_secs_f32(fade_s.max(0.0)),
             ..Default::default()
         });
+    }
+
+    /// A88.3: seconds into the sound, for a progress display.
+    pub fn position(&self) -> f32 {
+        self.0.position() as f32
+    }
+
+    /// A88.3: hold the sound where it is, with a short fade so the
+    /// cut is not a click.
+    pub fn pause(&mut self, fade_s: f32) {
+        self.0.pause(kira::Tween {
+            duration: std::time::Duration::from_secs_f32(fade_s.max(0.0)),
+            ..Default::default()
+        });
+    }
+
+    /// A88.3: let a paused sound run on.
+    pub fn resume(&mut self, fade_s: f32) {
+        self.0.resume(kira::Tween {
+            duration: std::time::Duration::from_secs_f32(fade_s.max(0.0)),
+            ..Default::default()
+        });
+    }
+
+    /// A88.3: jump to `seconds` into the sound.
+    pub fn seek_to(&mut self, seconds: f32) {
+        self.0.seek_to(seconds.max(0.0) as f64);
+    }
+
+    /// A88.3: whether playback has run out or been stopped - when a
+    /// player UI should put itself away.
+    pub fn is_stopped(&self) -> bool {
+        self.0.state() == kira::sound::PlaybackState::Stopped
     }
 }
 

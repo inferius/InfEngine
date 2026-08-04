@@ -26,6 +26,7 @@ mod library;
 mod menu;
 mod mode;
 mod play;
+mod player;
 mod playback;
 mod settings;
 mod sheet;

@@ -120,6 +120,8 @@ pub struct Editor {
     /// Sheet textures, keyed by the image path they came from.
     anim_textures: HashMap<String, Texture2dHandle>,
     audio: Option<AudioSystem>,
+    /// The sound the editor is playing, for the player strip.
+    player: Option<crate::player::Player>,
     languages: Vec<String>,
     language: LanguageChoice,
     /// This room's lines: id, text in the chosen language, and
@@ -221,6 +223,7 @@ impl Editor {
             room_animations: Vec::new(),
             anim_textures: HashMap::new(),
             audio: AudioSystem::new().ok(),
+            player: None,
             languages: Vec::new(),
             language: LanguageChoice::default(),
             lines: Vec::new(),
@@ -336,9 +339,10 @@ impl Editor {
             self.status = format!("{id} has no recording");
             return;
         };
-        self.status = match assets::play_file(self.audio.as_mut(), &self.project, &path) {
-            Ok(message) | Err(message) => message,
-        };
+        self.play_file(&path);
+        if let Some(player) = self.player.as_mut() {
+            player.name = id.to_string();
+        }
     }
 
     /// Start cutting a loose image into frames.
@@ -631,12 +635,27 @@ impl Editor {
     }
 
     fn play_file(&mut self, relative: &str) {
-        if let Err(message) = assets::play_file(self.audio.as_mut(), &self.project, relative) {
-            // Where the author is looking, not just in the log: a
-            // silent play with the reason buried is a bug report
-            // waiting to be written.
-            self.status = format!("{relative}: {message}");
-            self.play.note(message);
+        match assets::play_file(self.audio.as_mut(), &self.project, relative) {
+            Ok((handle, duration)) => {
+                // One player, one sound: starting the next stops the
+                // last, the way pressing play on anything does.
+                if let Some(old) = self.player.as_mut() {
+                    old.handle.stop(0.05);
+                }
+                self.player = Some(crate::player::Player {
+                    name: relative.to_string(),
+                    handle,
+                    duration,
+                    paused: false,
+                });
+            }
+            Err(message) => {
+                // Where the author is looking, not just in the log: a
+                // silent play with the reason buried is a bug report
+                // waiting to be written.
+                self.status = format!("{relative}: {message}");
+                self.play.note(message);
+            }
         }
     }
 
@@ -649,7 +668,14 @@ impl Editor {
     /// missing-music report happened.
     fn play_sound_id(&mut self, id: &str) {
         match self.project.sounds.get(id).map(str::to_string) {
-            Some(file) => self.play_file(&file),
+            Some(file) => {
+                self.play_file(&file);
+                // The strip names what was asked for, not the file it
+                // resolved to - the id is the thing being chosen.
+                if let Some(player) = self.player.as_mut() {
+                    player.name = id.to_string();
+                }
+            }
             None => self.play_file(id),
         }
     }

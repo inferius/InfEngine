@@ -85,24 +85,27 @@ fn upload(
     }
 }
 
-/// Play a sound given as a project-relative path.
+/// Play a sound given as a project-relative path, keeping the handle.
 ///
-/// Returns what to say about it, so the caller can put it in the status
-/// line without this knowing there is one.
+/// The handle and the duration are what the player strip runs on:
+/// where the sound is, how long it is, and the means to hold, seek
+/// and stop it.
 pub fn play_file(
     audio: Option<&mut AudioSystem>,
     project: &Project,
     relative: &str,
-) -> Result<String, String> {
+) -> Result<(infengine_audio::ActiveSound, f32), String> {
     let Some(audio) = audio else {
         return Err("no audio device".to_string());
     };
     let path = project.resolve(relative);
-    match audio.load_sound(&path).and_then(|sound| audio.play_sound(&sound)) {
-        Ok(()) => Ok(format!("playing {relative}")),
-        Err(err) => {
-            warn!(file = relative, %err, "could not play");
-            Err(err.to_string())
-        }
-    }
+    let sound = audio.load_sound(&path).map_err(|err| {
+        warn!(file = relative, %err, "could not load");
+        err.to_string()
+    })?;
+    let handle = audio.play_sound_tracked(&sound).map_err(|err| {
+        warn!(file = relative, %err, "could not play");
+        err.to_string()
+    })?;
+    Ok((handle, sound.duration_secs()))
 }
