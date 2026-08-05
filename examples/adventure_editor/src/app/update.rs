@@ -114,14 +114,14 @@ impl Editor {
             self.path.clone()
         };
         // The workbench advances its own clock, whatever the modes do.
-        if let Some(asset) = self.asset.as_mut() {
-            asset.tick(ctx.delta_time);
+        if let Some(bench) = self.bench.as_mut() {
+            bench.tick(ctx.delta_time);
         }
 
         // In Script mode the graph covers the centre, and an asset on
         // the workbench covers it too; drawing the room underneath
         // either would be work nobody sees.
-        let centre_taken = self.mode == Mode::Script || self.asset.is_some();
+        let centre_taken = self.mode == Mode::Script || self.bench.is_some();
         if let Some(renderer) = self.renderer.as_mut()
             && !centre_taken
         {
@@ -219,7 +219,9 @@ impl Editor {
         let mut timeline_actions = crate::timeline::TimelineActions::default();
         let mut story_actions = crate::ui_story::StoryActions::default();
         let mut library_actions = crate::library::LibraryActions::default();
-        let mut asset_actions = crate::asset_editor::AssetActions::default();
+        let mut asset_actions = crate::bench::BenchActions::default();
+        let screen_names: Vec<String> =
+            self.screen_ui.screens.iter().map(|s| s.id.clone()).collect();
         if self.story_ui.open && self.story_cache.is_none() {
             self.story_cache =
                 Some(infengine_adventure::story::Story::of(&self.project));
@@ -270,7 +272,7 @@ impl Editor {
         };
         let mode = self.mode;
         let game_view = self.game_ui.manifest.view;
-        let asset_image = self.asset.as_ref().map(|a| a.animation.image.clone());
+        let asset_image = self.bench.as_ref().and_then(|b| b.image().map(str::to_string));
         let scene_id = self.scene_script_id();
         // The room's scenes, for the timeline's picker.
         let scene_ids: Vec<String> = {
@@ -313,6 +315,10 @@ impl Editor {
                 } else {
                     String::new()
                 },
+                bench: self
+                    .bench
+                    .as_ref()
+                    .map(|open| (open.what(), open.dirty())),
                 camera: self.play.game.state.camera,
                 cursor_room,
                 game_view,
@@ -323,7 +329,7 @@ impl Editor {
             };
             let view = &mut self.view;
             let player = &mut self.player;
-            let asset = &mut self.asset;
+            let bench = &mut self.bench;
             let play = &mut self.play;
             let play_draft = &mut self.play_draft;
             let room_id = state.room.id.clone();
@@ -456,12 +462,21 @@ impl Editor {
                 // An asset on the workbench owns the centre - it is
                 // not a room, and editing it over one was the
                 // confusion this replaces.
-                if let Some(editor) = asset.as_mut() {
-                    asset_actions = crate::asset_editor::panel(
+                if let Some(open) = bench.as_mut() {
+                    asset_actions = crate::bench::panel(
                         ctx,
-                        editor,
+                        open,
                         asset_texture.clone(),
                         &room_names,
+                        &crate::screen_desk::Context {
+                            locales: &locales,
+                            language: &language,
+                            pictures: &picker_images,
+                            screens: &screen_names,
+                            scripts: &script_ids,
+                            languages: &languages,
+                            texture: &|image| sheet_texture(ctx, state.project, image),
+                        },
                     );
                 } else {
                     ui::stage_chips(ctx, &mut state, &scene_id);
@@ -535,23 +550,26 @@ impl Editor {
             self.set_mode(Mode::Script);
             self.open_graph(&id);
         }
-        if library_actions.edit_screens {
-            self.screen_ui.open = true;
-        }
         if let Some(name) = library_actions.new_room {
             self.create_room(&name);
         }
         if let Some(id) = library_actions.edit_animation {
             self.open_asset(&id);
         }
+        if let Some(id) = library_actions.edit_screen {
+            self.open_screen_desk(&id);
+        }
+        if let Some(id) = library_actions.edit_font {
+            self.open_font_desk(&id);
+        }
         if let Some(image) = library_actions.cut_sheet {
             self.cut_new_asset(&image);
         }
         if asset_actions.save {
-            self.save_asset();
+            self.save_bench();
         }
         if asset_actions.close {
-            self.asset = None;
+            self.bench = None;
             self.status = "closed the workbench".into();
         }
         self.apply_timeline(timeline_actions);

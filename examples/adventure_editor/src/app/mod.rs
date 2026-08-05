@@ -137,8 +137,8 @@ pub struct Editor {
     slots: Vec<infengine_adventure::save::SlotInfo>,
     screen_ui: ScreenUi,
     graph_ui: GraphUi,
-    /// An animation open on the workbench, which takes over the centre.
-    asset: Option<crate::asset_editor::AssetEditor>,
+    /// The asset open on the workbench, which takes over the centre.
+    bench: Option<crate::bench::Bench>,
     status: String,
 }
 
@@ -241,7 +241,7 @@ impl Editor {
             slots: Vec::new(),
             screen_ui,
             graph_ui: GraphUi::default(),
-            asset: None,
+            bench: None,
             status,
         }
     }
@@ -410,7 +410,9 @@ impl Editor {
             self.status = format!("{} did not load", animation.image);
             return;
         };
-        self.asset = Some(crate::asset_editor::AssetEditor::open(animation, size));
+        self.bench = Some(crate::bench::Bench::Animation(
+            crate::asset_editor::AssetEditor::open(animation, size),
+        ));
         self.status = format!("editing {id} - Close gives the room back");
     }
 
@@ -431,7 +433,7 @@ impl Editor {
         let mut editor = crate::asset_editor::AssetEditor::open(animation, size);
         // Nothing has been written yet, so it starts unsaved.
         editor.dirty = true;
-        self.asset = Some(editor);
+        self.bench = Some(crate::bench::Bench::Animation(editor));
         self.status = format!("cutting {image} as {id}");
     }
 
@@ -442,9 +444,106 @@ impl Editor {
         Some(Vec2::new(w as f32, h as f32))
     }
 
+    /// Put a screen on the workbench, laid out at its design size.
+    fn open_screen_desk(&mut self, id: &str) {
+        let Some(screen) = self.screen_ui.screens.iter().find(|s| s.id == id).cloned() else {
+            self.status = format!("no screen called {id}");
+            return;
+        };
+        self.bench = Some(crate::bench::Bench::Screen(
+            crate::screen_desk::ScreenDesk::open(screen),
+        ));
+        self.status = format!("laying out {id}");
+    }
+
+    /// Put a font on the workbench.
+    fn open_font_desk(&mut self, id: &str) {
+        let Some(font) = self.project.fonts.iter().find(|f| f.id == id).cloned() else {
+            self.status = format!("no font called {id}");
+            return;
+        };
+        self.bench = Some(crate::bench::Bench::Font(
+            crate::font_desk::FontDesk::open(font),
+        ));
+        self.status = format!("looking at {id}");
+    }
+
+    /// Write whatever is on the workbench back to its file.
+    fn save_bench(&mut self) {
+        match self.bench.as_mut() {
+            Some(crate::bench::Bench::Animation(_)) => self.save_asset(),
+            Some(crate::bench::Bench::Screen(_)) => self.save_screen_desk(),
+            Some(crate::bench::Bench::Font(_)) => self.save_font_desk(),
+            None => {}
+        }
+    }
+
+    /// Write the workbench's screen, and keep the editor's copy in step.
+    fn save_screen_desk(&mut self) {
+        use infengine_adventure::screen;
+        let Some(crate::bench::Bench::Screen(desk)) = self.bench.as_mut() else {
+            return;
+        };
+        let screen = desk.screen.clone();
+        let id = screen.id.trim().to_string();
+        if id.is_empty() {
+            return;
+        }
+        let dir = self.project.root.join(screen::SCREEN_DIR);
+        // A rename leaves the old file behind, so it goes first.
+        if desk.original_id != id {
+            let old = dir.join(format!("{}{}", desk.original_id, screen::SCREEN_SUFFIX));
+            let _ = std::fs::remove_file(old);
+        }
+        match screen::save(&screen, &dir) {
+            Ok(()) => {
+                let original = desk.original_id.clone();
+                desk.dirty = false;
+                desk.original_id = id.clone();
+                self.screen_ui.screens.retain(|s| s.id != original && s.id != id);
+                self.screen_ui.screens.push(screen);
+                self.screen_ui.screens.sort_by(|a, b| a.id.cmp(&b.id));
+                self.status = format!("saved {id}");
+            }
+            Err(err) => {
+                warn!(%err, "could not save the screen");
+                self.status = err.to_string();
+            }
+        }
+    }
+
+    /// Write the workbench's font metrics back beside its atlas.
+    fn save_font_desk(&mut self) {
+        use infengine_adventure::pixfont;
+        let Some(crate::bench::Bench::Font(desk)) = self.bench.as_mut() else {
+            return;
+        };
+        let font = desk.font.clone();
+        let id = font.id.trim().to_string();
+        if id.is_empty() {
+            return;
+        }
+        let dir = self.project.root.join(pixfont::FONT_DIR);
+        match pixfont::save(&font, &dir) {
+            Ok(()) => {
+                let original = desk.original_id.clone();
+                desk.dirty = false;
+                desk.original_id = id.clone();
+                self.project.fonts.retain(|f| f.id != original && f.id != id);
+                self.project.fonts.push(font);
+                self.project.fonts.sort_by(|a, b| a.id.cmp(&b.id));
+                self.status = format!("saved {id}");
+            }
+            Err(err) => {
+                warn!(%err, "could not save the font");
+                self.status = err.to_string();
+            }
+        }
+    }
+
     /// Write the workbench's animation into the project's index.
     fn save_asset(&mut self) {
-        let Some(editor) = self.asset.as_mut() else {
+        let Some(crate::bench::Bench::Animation(editor)) = self.bench.as_mut() else {
             return;
         };
         let animation = editor.animation.clone();
@@ -461,7 +560,7 @@ impl Editor {
         let dir = self.project.root.join(infengine_adventure::anim::ANIMATION_DIR);
         match infengine_adventure::anim::save_index(&self.project.animations, &dir) {
             Ok(()) => {
-                if let Some(editor) = self.asset.as_mut() {
+                if let Some(crate::bench::Bench::Animation(editor)) = self.bench.as_mut() {
                     editor.dirty = false;
                     editor.original_id = id.clone();
                 }

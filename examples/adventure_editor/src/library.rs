@@ -110,14 +110,16 @@ pub struct LibraryActions {
     pub play: Option<String>,
     /// A script to put on the graph canvas, in Script mode.
     pub open_script: Option<String>,
-    /// The screen designer was asked for.
-    pub edit_screens: bool,
     /// A room to create, by the name typed for it.
     pub new_room: Option<String>,
     /// An animation to open on the workbench, in its own workspace.
     pub edit_animation: Option<String>,
     /// A picture to cut into a new animation.
     pub cut_sheet: Option<String>,
+    /// A screen to lay out on the workbench.
+    pub edit_screen: Option<String>,
+    /// A font to look at on the workbench.
+    pub edit_font: Option<String>,
 }
 
 /// Draw the panel. Returns what was asked for; opening a room goes
@@ -154,7 +156,7 @@ pub fn panel(
                     Shelf::Sounds => sounds_shelf(ui, state, ui_state.project, &mut asked),
                     Shelf::Scripts => scripts_shelf(ui, state, ui_state.project, &mut asked),
                     Shelf::Screens => screens_shelf(ui, state, ui_state.project, &mut asked),
-                    Shelf::Fonts => fonts_shelf(ui, state, ui_state.project),
+                    Shelf::Fonts => fonts_shelf(ui, state, ui_state.project, &mut asked),
                 });
             ui.separator();
             ui.label(
@@ -922,18 +924,26 @@ fn screens_shelf(
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .small_button("Edit")
-                    .on_hover_text("Open the screen designer")
+                    .small_button("✎")
+                    .on_hover_text(crate::lang::t(
+                        "Lay it out on the workbench",
+                        "Rozvrhni ji na pracovním stole",
+                    ))
                     .clicked()
                 {
-                    actions.edit_screens = true;
+                    actions.edit_screen = Some(name.to_string());
                 }
             });
         });
     }
 }
 
-fn fonts_shelf(ui: &mut egui::Ui, state: &mut LibraryUi, project: &Project) {
+fn fonts_shelf(
+    ui: &mut egui::Ui,
+    state: &mut LibraryUi,
+    project: &Project,
+    actions: &mut LibraryActions,
+) {
     ui.label(
         egui::RichText::new(
             "The game's lettering. The manifest picks which one subtitles and menus draw with.",
@@ -972,6 +982,18 @@ fn fonts_shelf(ui: &mut egui::Ui, state: &mut LibraryUi, project: &Project) {
                 .small()
                 .weak(),
             );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("✎")
+                    .on_hover_text(crate::lang::t(
+                        "Open it on the workbench: the atlas, its characters, a sample",
+                        "Otevři ho na pracovním stole: atlas, znaky, ukázka",
+                    ))
+                    .clicked()
+                {
+                    actions.edit_font = Some(name.to_string());
+                }
+            });
         });
     }
 }
@@ -1065,6 +1087,6 @@ mod tests {
     fn actions_default_to_doing_nothing() {
         let actions = LibraryActions::default();
         assert!(actions.add.is_none() && actions.play.is_none());
-        assert!(actions.open_script.is_none() && !actions.edit_screens);
+        assert!(actions.open_script.is_none() && actions.edit_screen.is_none());
     }
 }

@@ -89,6 +89,8 @@ pub struct UiState<'a> {
     /// Whether a scene is running, and what it is doing right now.
     pub playing: bool,
     pub now: String,
+    /// What is on the workbench, and whether it is unsaved.
+    pub bench: Option<(String, bool)>,
     /// Where the view is, while one runs.
     pub camera: glam::Vec2,
     /// Where the cursor is, in room pixels.
@@ -275,7 +277,19 @@ pub fn status_bar(ctx: &egui::Context, state: &mut UiState<'_>) {
                 }
             }
             ui.separator();
-            if state.playing && !state.now.is_empty() {
+            if let Some((what, unsaved)) = state.bench.clone() {
+                // The workbench owns the centre, so the bar says whose
+                // work is on it rather than describing a room nobody
+                // can see.
+                ui.label(
+                    egui::RichText::new(if unsaved {
+                        format!("✎ {what} ●")
+                    } else {
+                        format!("✎ {what}")
+                    })
+                    .strong(),
+                );
+            } else if state.playing && !state.now.is_empty() {
                 // While a scene runs, the most useful thing the bar can
                 // say is what the script is doing this instant.
                 ui.label(egui::RichText::new(format!("▶ {}", state.now)).strong());
