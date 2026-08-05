@@ -64,6 +64,8 @@ pub struct TimelineActions {
     pub pause: Option<bool>,
     /// The scrubber: put the scene at this many seconds, sight only.
     pub seek: Option<f32>,
+    /// A different scene of this room to lay out and play.
+    pub pick_scene: Option<String>,
     /// A sound or track the details column asked to hear.
     pub hear: Option<String>,
 }
@@ -131,6 +133,8 @@ pub fn panel(
     ctx: &egui::Context,
     line: &Timeline,
     tracks: &[Track],
+    scene: &str,
+    scenes: &[String],
     playing: bool,
     paused: bool,
     elapsed: f32,
@@ -147,8 +151,8 @@ pub fn panel(
         .default_height(200.0)
         .show(ctx, |ui| {
             header(
-                ui, line, playing, paused, elapsed, zoom, snap, selected, pickers,
-                &mut actions,
+                ui, line, scene, scenes, playing, paused, elapsed, zoom, snap, selected,
+                pickers, &mut actions,
             );
             ui.separator();
             if line.slots.is_empty() {
@@ -234,6 +238,8 @@ fn names_column(ui: &mut egui::Ui, tracks: &[Track]) {
 fn header(
     ui: &mut egui::Ui,
     line: &Timeline,
+    scene: &str,
+    scenes: &[String],
     playing: bool,
     paused: bool,
     elapsed: f32,
@@ -246,6 +252,27 @@ fn header(
     use crate::lang::t;
     ui.horizontal(|ui| {
         ui.heading(t("Timeline", "Časová osa"));
+        // Which of the room's scenes is on the tracks. The answer to
+        // "what am I editing here": one named scene of this room, and
+        // this is where it is picked.
+        egui::ComboBox::from_id_salt("timeline_scene")
+            .selected_text(scene)
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                for id in scenes {
+                    if ui
+                        .selectable_label(id == scene, id)
+                        .clicked()
+                    {
+                        actions.pick_scene = Some(id.clone());
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t(
+                "The room's scenes - pick which one to lay out and play",
+                "Scény této místnosti - vyber, kterou skládat a přehrávat",
+            ));
         // The scene plays from here: the strip is where it is tuned,
         // so the transport lives on the strip - play, pause, stop, and
         // the scrubber that goes anywhere.
@@ -369,7 +396,7 @@ fn add_menu(
     use crate::lang::t;
     ui.menu_button(t("Add step", "Přidat krok"), |ui| {
         let first = |list: &[String]| list.first().cloned().unwrap_or_default();
-        let entries: [(&str, &str, Action); 6] = [
+        let entries: [(&str, &str, Action); 7] = [
             (
                 t("Wait", "Čekání"),
                 t("A pause of so many seconds", "Pauza na daný počet sekund"),
@@ -413,6 +440,17 @@ fn add_menu(
                 Action::Say {
                     line: String::new(),
                     speaker: None,
+                },
+            ),
+            (
+                t("Go to room", "Přechod do místnosti"),
+                t(
+                    "End the scene somewhere else - how an intro hands over to the game",
+                    "Ukonči scénu jinde - takhle intro předá hru",
+                ),
+                Action::GoToRoom {
+                    room: first(pickers.rooms),
+                    entry: None,
                 },
             ),
         ];

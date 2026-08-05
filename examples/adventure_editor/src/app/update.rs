@@ -214,6 +214,19 @@ impl Editor {
         let picker_images = self.pictures.clone();
         let mode = self.mode;
         let scene_id = self.scene_script_id();
+        // The room's scenes, for the timeline's picker.
+        let scene_ids: Vec<String> = {
+            let prefix = format!("{}.", self.room.script_prefix());
+            let mut ids: Vec<String> = self
+                .project
+                .scripts
+                .keys()
+                .filter(|id| id.starts_with(&prefix))
+                .cloned()
+                .collect();
+            ids.sort();
+            ids
+        };
         let mut content = None;
         if let Some(ui) = self.ui.as_mut() {
             let mut state = UiState {
@@ -343,6 +356,8 @@ impl Editor {
                         ctx,
                         line,
                         &scene_tracks,
+                        &scene_id,
+                        &scene_ids,
                         extras.play.active,
                         extras.play.paused,
                         extras.play.elapsed,
@@ -433,6 +448,9 @@ impl Editor {
         }
         if library_actions.edit_screens {
             self.screen_ui.open = true;
+        }
+        if let Some(name) = library_actions.new_room {
+            self.create_room(&name);
         }
         self.apply_timeline(timeline_actions);
         self.apply_menu(menu_actions);

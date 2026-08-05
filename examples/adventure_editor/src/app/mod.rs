@@ -269,6 +269,50 @@ impl Editor {
         }
     }
 
+    /// Make an empty room by name, save it, and open it.
+    ///
+    /// It exists the moment it is named: a room that is only in memory
+    /// until the first manual save is a room that gets lost.
+    fn create_room(&mut self, name: &str) {
+        let id: String = name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .collect::<String>()
+            .to_lowercase();
+        if id.is_empty() {
+            return;
+        }
+        let dir = self.project.root.join(infengine_adventure::project::ROOMS_DIR);
+        let path = dir.join(format!("{id}{}", infengine_adventure::project::ROOM_SUFFIX));
+        if path.exists() {
+            self.status = format!("{id} already exists");
+            return;
+        }
+        let room = Room::new(&id, Vec2::new(320.0, 200.0));
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            self.status = err.to_string();
+            return;
+        }
+        match infengine_adventure::save(&room, &path) {
+            Ok(()) => {
+                self.project.rooms.push(path);
+                self.project.rooms.sort();
+                let index = self
+                    .project
+                    .rooms
+                    .iter()
+                    .position(|p| Project::room_label(p) == id)
+                    .unwrap_or(0);
+                self.open_room(index);
+                self.status = format!("created {id} - draw its floor, add a way out");
+            }
+            Err(err) => {
+                warn!(%err, "could not create the room");
+                self.status = err.to_string();
+            }
+        }
+    }
+
     fn load_textures(&mut self) {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
@@ -1202,6 +1246,15 @@ impl Editor {
         }
         if let Some(to) = actions.seek {
             self.seek_scene(to.max(0.0));
+        }
+        if let Some(scene) = actions.pick_scene {
+            // A different scene: fresh selection, fresh run if one was
+            // going.
+            self.scene_script = Some(scene);
+            self.timeline_selected = None;
+            if self.play.active {
+                self.stop_play();
+            }
         }
 
         let mut touched = false;

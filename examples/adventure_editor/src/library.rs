@@ -66,6 +66,8 @@ pub struct LibraryUi {
     filter: String,
     shelf: Shelf,
     thumbs: HashMap<String, Option<egui::TextureHandle>>,
+    /// What the next room will be called.
+    new_room: String,
     /// The animation playing inline in its row, if any.
     ///
     /// Inline on purpose: previewing from the shelf used to select the
@@ -86,6 +88,8 @@ pub struct LibraryActions {
     pub open_script: Option<String>,
     /// The screen designer was asked for.
     pub edit_screens: bool,
+    /// A room to create, by the name typed for it.
+    pub new_room: Option<String>,
 }
 
 /// Draw the panel. Returns what was asked for; opening a room goes
@@ -112,7 +116,7 @@ pub fn panel(
                 .auto_shrink([false, false])
                 .max_height((ui.available_height() - footer).max(60.0))
                 .show(ui, |ui| match state.shelf {
-                    Shelf::Rooms => rooms_shelf(ui, state, ui_state, actions),
+                    Shelf::Rooms => rooms_shelf(ui, state, ui_state, actions, &mut asked),
                     Shelf::Pictures => {
                         pictures_shelf(ui, state, ui_state.project, pictures, &mut asked)
                     }
@@ -187,10 +191,34 @@ fn shown<'a>(filter: &str, names: impl Iterator<Item = &'a str>) -> Vec<&'a str>
 /// typing a name wants the row itself, not the drawer it is in.
 fn rooms_shelf(
     ui: &mut egui::Ui,
-    state: &LibraryUi,
+    state: &mut LibraryUi,
     ui_state: &mut UiState<'_>,
     actions: &mut UiActions,
+    asked: &mut LibraryActions,
 ) {
+    use crate::lang::t;
+    // A game grows by rooms, so the shelf that lists them is where a
+    // new one is made: name it and it exists, saved and open.
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut state.new_room)
+                .hint_text(t("new room name", "jméno nové místnosti"))
+                .desired_width(150.0),
+        );
+        let name = state.new_room.trim().to_string();
+        if ui
+            .add_enabled(!name.is_empty(), egui::Button::new(t("+ New", "+ Nová")))
+            .on_hover_text(t(
+                "Create an empty room by this name, save it and open it",
+                "Založ prázdnou místnost s tímto jménem, ulož ji a otevři",
+            ))
+            .clicked()
+        {
+            asked.new_room = Some(name);
+            state.new_room.clear();
+        }
+    });
+    ui.add_space(4.0);
     if ui_state.project.is_empty() {
         ui.label(crate::lang::t("No rooms found.", "Žádné místnosti."));
         ui.label(
