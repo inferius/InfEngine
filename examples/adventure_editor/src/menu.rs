@@ -32,6 +32,8 @@ pub struct MenuActions {
     pub add: Option<Addable>,
     pub open_game: bool,
     pub open_screens: bool,
+    /// The page that opens and makes games.
+    pub open_browser: bool,
     pub open_story: bool,
     /// Take the last canvas edit back.
     pub undo: bool,
@@ -235,6 +237,19 @@ fn scale_shortcuts(ctx: &egui::Context, ui_scale: &mut f32) {
 fn project_menu(ui: &mut egui::Ui, menu: &MenuContext, actions: &mut MenuActions) {
     use crate::lang::t;
     ui.menu_button(t("Project", "Projekt"), |ui| {
+        // A98: opening a game no longer means a terminal.
+        if ui
+            .button(t("Open a game...", "Otevřít hru..."))
+            .on_hover_text(t(
+                "Recent games, and a browser for finding another",
+                "Naposledy otevřené hry a procházení složek",
+            ))
+            .clicked()
+        {
+            actions.open_browser = true;
+            ui.close();
+        }
+        ui.separator();
         if ui
             .add_enabled(menu.dirty, egui::Button::new(t("Save room", "Uložit místnost")))
             .on_disabled_hover_text(t("Nothing has changed", "Nic se nezměnilo"))
@@ -300,7 +315,7 @@ fn project_menu(ui: &mut egui::Ui, menu: &MenuContext, actions: &mut MenuActions
             ))
             .clicked()
         {
-            actions.open_story = true;
+            actions.mode = Some(Mode::Story);
             ui.close();
         }
     });

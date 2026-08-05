@@ -121,7 +121,8 @@ impl Editor {
         // In Script mode the graph covers the centre, and an asset on
         // the workbench covers it too; drawing the room underneath
         // either would be work nobody sees.
-        let centre_taken = self.mode == Mode::Script || self.bench.is_some();
+        let centre_taken =
+            self.mode == Mode::Script || self.bench.is_some() || self.browser.open;
         if let Some(renderer) = self.renderer.as_mut()
             && !centre_taken
         {
@@ -220,9 +221,10 @@ impl Editor {
         let mut story_actions = crate::ui_story::StoryActions::default();
         let mut library_actions = crate::library::LibraryActions::default();
         let mut asset_actions = crate::bench::BenchActions::default();
+        let mut browser_actions = crate::project_browser::BrowserActions::default();
         let screen_names: Vec<String> =
             self.screen_ui.screens.iter().map(|s| s.id.clone()).collect();
-        if self.story_ui.open && self.story_cache.is_none() {
+        if self.mode == Mode::Story && self.story_cache.is_none() {
             self.story_cache =
                 Some(infengine_adventure::story::Story::of(&self.project));
         }
@@ -330,6 +332,8 @@ impl Editor {
             let view = &mut self.view;
             let player = &mut self.player;
             let bench = &mut self.bench;
+            let browser = &mut self.browser;
+            let recent = &self.recent;
             let play = &mut self.play;
             let play_draft = &mut self.play_draft;
             let room_id = state.room.id.clone();
@@ -375,6 +379,7 @@ impl Editor {
             let timeline_snap = &mut self.timeline_snap;
             let timeline_reveal = self.timeline_reveal.take();
             let story_ui = &mut self.story_ui;
+            let story_layout = &mut self.story_layout;
             let library_ui = &mut self.library_ui;
             let story_cache = &self.story_cache;
             let timeline_selected = &self.timeline_selected;
@@ -392,12 +397,6 @@ impl Editor {
                 crate::help::window(ctx, help_ui);
                 game_actions = ui_game::window(ctx, game_ui, &room_names, &languages);
                 screen_actions = ui_screen::window(ctx, screen_ui, &languages);
-                if story_ui.open
-                    && let Some(story) = story_cache.as_ref()
-                {
-                    story_actions =
-                        crate::ui_story::window(ctx, story_ui, story, &story_start);
-                }
                 if let Some(screen) = screen_ui.preview_screen() {
                     screen_actions.fired =
                         ui_screen::preview(ctx, screen, &locales, &language, &play_flags);
@@ -462,7 +461,12 @@ impl Editor {
                 // An asset on the workbench owns the centre - it is
                 // not a room, and editing it over one was the
                 // confusion this replaces.
-                if let Some(open) = bench.as_mut() {
+                if browser.open {
+                    // The page that opens games owns the centre: there
+                    // may be no game to draw behind it.
+                    browser_actions =
+                        crate::project_browser::panel(ctx, browser, recent);
+                } else if let Some(open) = bench.as_mut() {
                     asset_actions = crate::bench::panel(
                         ctx,
                         open,
@@ -480,6 +484,19 @@ impl Editor {
                     );
                 } else {
                     ui::stage_chips(ctx, &mut state, &scene_id);
+                    if mode == Mode::Story {
+                        // The map owns the centre in Story mode: it is
+                        // the whole game, not a window over one room.
+                        if let Some(story) = story_cache.as_ref() {
+                            story_actions = crate::ui_story::panel(
+                                ctx,
+                                story_ui,
+                                story,
+                                story_layout,
+                                &story_start,
+                            );
+                        }
+                    }
                     if mode == Mode::Script {
                         graph_actions = ui_graph::panel(
                             ctx,
@@ -528,6 +545,26 @@ impl Editor {
                 .position(|path| infengine_adventure::Project::room_label(path) == id)
         {
             self.open_room(index);
+            // Opening a place from the map means going there, so the
+            // editor follows.
+            self.set_mode(Mode::Room);
+        }
+        if let Some(id) = story_actions.set_start {
+            self.game_ui.manifest.start_room = id.clone();
+            self.game_ui.status = match self.game_ui.manifest.save(&self.project.root) {
+                Ok(()) => format!("the game now starts in {id}"),
+                Err(err) => err.to_string(),
+            };
+            self.status = self.game_ui.status.clone();
+            self.story_cache = None;
+        }
+        if story_actions.arrange {
+            self.story_layout.at.clear();
+            self.save_story_layout();
+            self.status = "arranged".into();
+        }
+        if story_actions.save_layout {
+            self.save_story_layout();
         }
         if let Some(action) = library_actions.add {
             // Land it in the scene's timeline and turn the editor
@@ -567,6 +604,18 @@ impl Editor {
         }
         if asset_actions.save {
             self.save_bench();
+        }
+        if let Some(root) = browser_actions.open {
+            self.open_project(&root);
+        }
+        if let Some(root) = browser_actions.create {
+            self.create_project(&root);
+        }
+        if let Some(root) = browser_actions.forget {
+            self.forget_recent(&root);
+        }
+        if menu_actions.open_browser {
+            self.show_browser();
         }
         if asset_actions.close {
             self.bench = None;

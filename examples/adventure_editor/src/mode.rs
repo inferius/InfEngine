@@ -23,10 +23,13 @@ pub enum Mode {
     Script,
     /// Playing the game with the tester's controls at hand.
     Test,
+    /// The whole game as a map: every place and the ways between.
+    Story,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 4] = [Mode::Room, Mode::Animate, Mode::Script, Mode::Test];
+    pub const ALL: [Mode; 5] =
+        [Mode::Room, Mode::Animate, Mode::Script, Mode::Test, Mode::Story];
 
     /// The pill's label.
     pub fn label(self) -> &'static str {
@@ -36,6 +39,7 @@ impl Mode {
             Mode::Animate => t("Animate", "Animace"),
             Mode::Script => t("Script", "Skript"),
             Mode::Test => t("Test", "Test"),
+            Mode::Story => t("Story", "Příběh"),
         }
     }
 
@@ -59,6 +63,10 @@ impl Mode {
                 "Play the game, with flags and the log at hand.",
                 "Hraj hru, s přepínači a záznamem po ruce.",
             ),
+            Mode::Story => t(
+                "The whole game as a map: every place, and the ways between them.",
+                "Celá hra jako mapa: všechna místa a cesty mezi nimi.",
+            ),
         }
     }
 
@@ -75,7 +83,7 @@ impl Mode {
             // The canvas still selects and pans; composing happens on
             // the timeline below and the shelves beside it.
             Mode::Animate => &[Tool::Select],
-            Mode::Script | Mode::Test => &[],
+            Mode::Script | Mode::Test | Mode::Story => &[],
         }
     }
 
@@ -94,7 +102,7 @@ impl Mode {
                 overlays.bounds = true;
                 overlays.camera = true;
             }
-            Mode::Script | Mode::Test => {}
+            Mode::Script | Mode::Test | Mode::Story => {}
         }
     }
 }

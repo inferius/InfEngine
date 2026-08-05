@@ -59,6 +59,18 @@ pub fn panel(
                 Mode::Room => room_mode(ui, state, actions),
                 Mode::Animate => animate_mode(ui, state, actions),
                 Mode::Script => scripts::show(ui, state, actions, extras.on_canvas.as_deref()),
+                // The map is its own inspector: what a place is,
+                // is the room it opens.
+                Mode::Story => {
+                    ui.label(
+                        egui::RichText::new(crate::lang::t(
+                            "Double-click a place on the map to open it.                              Right-click one for more.",
+                            "Dvojklikem na místo ho otevřeš. Pravým tlačítkem víc.",
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                }
                 Mode::Test => {
                     egui::ScrollArea::vertical()
                         .id_salt("inspector_scroll")
@@ -128,6 +140,14 @@ fn header(ui: &mut egui::Ui, state: &UiState<'_>, extras: &Extras<'_>) {
             t(
                 "boxes and wires in the centre, the same steps as text below",
                 "uzly a dráty uprostřed, tytéž kroky jako text níže",
+            )
+            .into(),
+        ),
+        Mode::Story => (
+            crate::lang::t("The whole game", "Celá hra").to_string(),
+            crate::lang::t(
+                "every place, and the ways between them",
+                "všechna místa a cesty mezi nimi",
             )
             .into(),
         ),

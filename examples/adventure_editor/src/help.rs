@@ -54,7 +54,7 @@ struct Part {
 /// The layout in the order a reader meets it, in the interface
 /// language. A function rather than a constant so the switch in the
 /// View menu takes effect on the next frame.
-fn parts() -> [Part; 5] {
+fn parts() -> [Part; 6] {
     use crate::lang::t;
     [
         Part {
@@ -100,14 +100,25 @@ fn parts() -> [Part; 5] {
             ),
         },
         Part {
+            where_: t("Opening a game", "Otevření hry"),
+            what: t(
+                "Project > Open a game lists the games you had open and \
+                 browses for another. A folder holding rooms/ is a game, \
+                 and New game writes a fresh one.",
+                "Projekt > Otevřít hru ukáže naposledy otevřené hry a nechá \
+                 tě projít složky. Složka s rooms/ je hra a Nová hra založí \
+                 čerstvou.",
+            ),
+        },
+        Part {
             where_: t("Top", "Nahoře"),
             what: t(
-                "The menus, then the four mode pills - Room, Animate, \
-                 Script, Test - then Save and Play. The pills are the \
+                "The menus, then the mode pills - Room, Animate, Script, \
+                 Test, Story - then Save and Play. The pills are the \
                  spine of the editor: pick what you are doing and the \
                  tools, inspector and centre follow.",
-                "Menu, pak čtyři přepínače režimů - Místnost, Animace, \
-                 Skript, Test - a Uložit s Přehrát. Přepínače jsou páteř \
+                "Menu, pak přepínače režimů - Místnost, Animace, Skript, \
+                 Test, Příběh - a Uložit s Přehrát. Přepínače jsou páteř \
                  editoru: vyber, co děláš, a nástroje, inspektor i střed \
                  se přizpůsobí.",
             ),
@@ -146,7 +157,7 @@ pub fn window(ctx: &egui::Context, state: &mut HelpUi) {
                     }
 
                     ui.add_space(12.0);
-                    ui.heading(t("The four modes", "Čtyři režimy"));
+                    ui.heading(t("The modes", "Režimy"));
                     ui.label(
                         egui::RichText::new(t(
                             "The pills at the top. Each answers one question \
@@ -285,7 +296,7 @@ mod tests {
         for czech in [false, true] {
             crate::lang::set_czech(czech);
             let parts = parts();
-            assert_eq!(parts.len(), 5);
+            assert_eq!(parts.len(), 6);
             for part in parts {
                 assert!(!part.where_.is_empty());
                 assert!(

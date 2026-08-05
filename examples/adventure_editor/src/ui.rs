@@ -162,7 +162,9 @@ pub fn stage_chips(ctx: &egui::Context, state: &mut UiState<'_>, scene_id: &str)
                             format!("playing {}", state.room.id)
                         }
                     }
-                    Mode::Script => unreachable!("no canvas in Script mode"),
+                    Mode::Script | Mode::Story => {
+                        unreachable!("those modes have no room canvas")
+                    }
                 };
                 chip(ui, |ui| {
                     ui.label(egui::RichText::new(what).small());

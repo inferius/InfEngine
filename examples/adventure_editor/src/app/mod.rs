@@ -6,6 +6,7 @@
 
 mod input;
 mod bench_ops;
+mod project_ops;
 mod screens;
 mod update;
 
@@ -140,6 +141,11 @@ pub struct Editor {
     graph_ui: GraphUi,
     /// The asset open on the workbench, which takes over the centre.
     bench: Option<crate::bench::Bench>,
+    /// The page that opens games, and the games opened recently.
+    browser: crate::project_browser::Browser,
+    recent: Vec<std::path::PathBuf>,
+    /// Where the story map's nodes sit, kept with the game.
+    story_layout: crate::story_layout::Layout,
     status: String,
 }
 
@@ -177,6 +183,7 @@ impl Editor {
             screens,
             ..Default::default()
         };
+        let root_shown = project.root.clone();
         let status = if project.is_empty() {
             format!("no rooms under {}", project.root.display())
         } else {
@@ -243,6 +250,15 @@ impl Editor {
             screen_ui,
             graph_ui: GraphUi::default(),
             bench: None,
+            browser: crate::project_browser::Browser {
+                // A folder that is not a game opens the page that
+                // finds one, rather than an editor with nothing in it.
+                open: !crate::project_browser::is_project(&root_shown),
+                at: root_shown.clone(),
+                ..Default::default()
+            },
+            recent: settings.recent.clone(),
+            story_layout: crate::story_layout::Layout::load(&root_shown),
             status,
         }
     }
@@ -536,6 +552,9 @@ impl Editor {
                     }
                 }
             }
+            // The map is built fresh when it is entered: it is
+            // cheap next to being wrong about the game's shape.
+            Mode::Story => self.story_cache = None,
             Mode::Room | Mode::Animate => {}
         }
     }
@@ -841,6 +860,17 @@ impl Editor {
         };
     }
 
+    /// Write the story map's arrangement beside the rooms.
+    fn save_story_layout(&mut self) {
+        // Nodes the game no longer has do not get to hold a place.
+        let alive: Vec<String> = self.project.room_ids();
+        self.story_layout.keep_only(&alive);
+        if let Err(err) = self.story_layout.save(&self.project.root) {
+            warn!(%err, "could not write the story layout");
+            self.status = err.to_string();
+        }
+    }
+
     /// Where saved games go.
     ///
     /// The project directory, which is right for the editor: a test save
@@ -1085,9 +1115,7 @@ impl Editor {
             self.undo();
         }
         if actions.open_story {
-            self.story_ui.open = true;
-            // Fresh on every open: the map is cheap next to being wrong.
-            self.story_cache = None;
+            self.set_mode(Mode::Story);
         }
         if actions.open_help {
             self.help.open = true;
@@ -1484,6 +1512,7 @@ impl AppHandler for Editor {
             timeline_open: self.timeline_open,
             language: if crate::lang::is_czech() { "cs" } else { "en" }.into(),
             library_grid: self.library_ui.view == crate::library::View::Grid,
+            recent: self.recent.clone(),
         }
         .save();
     }
