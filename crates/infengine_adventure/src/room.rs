@@ -27,6 +27,24 @@ pub enum LayerKind {
     Parallax { factor: Vec2 },
 }
 
+/// A layer that appears only in a certain state of the world.
+///
+/// A93: this is how one room wears its variants - the table with the
+/// letter and the table without are two layers over one background,
+/// each shown while its flag agrees. The alternative was one image per
+/// state of the room, which multiplies pictures by every flag that
+/// touches them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayerCondition {
+    /// The flag that decides.
+    pub flag: String,
+    /// Show the layer when the flag has this value. An unset flag
+    /// counts as `false`, so `value: false` shows the layer until a
+    /// script first sets the flag.
+    #[serde(default = "default_true")]
+    pub value: bool,
+}
+
 /// One painted plane of a room.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
@@ -40,6 +58,25 @@ pub struct Layer {
     pub kind: LayerKind,
     #[serde(default = "default_true")]
     pub visible: bool,
+    /// Drawn only while this condition holds, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shown_if: Option<LayerCondition>,
+}
+
+impl Layer {
+    /// Whether the layer draws, given the game's flags.
+    ///
+    /// `visible` is the author's own switch; the condition is the
+    /// game's. Both must agree.
+    pub fn shown(&self, flag_of: impl Fn(&str) -> bool) -> bool {
+        if !self.visible {
+            return false;
+        }
+        match &self.shown_if {
+            Some(condition) => flag_of(&condition.flag) == condition.value,
+            None => true,
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -54,6 +91,7 @@ impl Default for Layer {
             offset: Vec2::ZERO,
             kind: LayerKind::default(),
             visible: true,
+            shown_if: None,
         }
     }
 }
@@ -271,6 +309,73 @@ impl Room {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_layer_with_no_condition_draws_whenever_it_is_visible() {
+        let layer = Layer {
+            image: "bg.png".into(),
+            ..Default::default()
+        };
+        assert!(layer.shown(|_| false));
+        let hidden = Layer {
+            visible: false,
+            ..layer.clone()
+        };
+        assert!(!hidden.shown(|_| true), "the author's switch wins");
+    }
+
+    #[test]
+    fn a_conditional_layer_follows_its_flag() {
+        // The table with the letter and the table without: two layers
+        // over one background, opposite conditions on one flag.
+        let with_letter = Layer {
+            image: "table_letter.png".into(),
+            shown_if: Some(LayerCondition {
+                flag: "took_letter".into(),
+                value: false,
+            }),
+            ..Default::default()
+        };
+        let without = Layer {
+            image: "table_bare.png".into(),
+            shown_if: Some(LayerCondition {
+                flag: "took_letter".into(),
+                value: true,
+            }),
+            ..Default::default()
+        };
+        // Before the letter is taken the flag is unset, which reads as
+        // false: the letter is on the table.
+        assert!(with_letter.shown(|_| false));
+        assert!(!without.shown(|_| false));
+        // After.
+        assert!(!with_letter.shown(|_| true));
+        assert!(without.shown(|_| true));
+    }
+
+    #[test]
+    fn a_condition_only_answers_for_its_own_flag() {
+        let layer = Layer {
+            shown_if: Some(LayerCondition {
+                flag: "saw_wizard".into(),
+                value: true,
+            }),
+            ..Default::default()
+        };
+        assert!(layer.shown(|flag| flag == "saw_wizard"));
+        assert!(!layer.shown(|flag| flag == "something_else"));
+    }
+
+    #[test]
+    fn a_room_file_written_before_conditions_still_loads() {
+        // No shown_if in the text at all: the layer draws, as it did.
+        let layer: Layer = ron::from_str(
+            r#"(name: "bg", image: "hall.png", offset: (0.0, 0.0), visible: true)"#,
+        )
+        .expect("an older layer still parses");
+        assert!(layer.shown_if.is_none());
+        assert!(layer.shown(|_| false));
+    }
 
     #[test]
     fn a_room_without_a_camera_is_all_on_screen() {

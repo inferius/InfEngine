@@ -1317,6 +1317,31 @@ impl Editor {
         if let Some(id) = actions.open_graph_script {
             self.open_graph(&id);
         }
+        if let Some(image) = actions.add_layer {
+            self.remember();
+            let name = image
+                .rsplit('/')
+                .next()
+                .and_then(|file| file.split('.').next())
+                .unwrap_or("layer")
+                .to_string();
+            self.room.layers.push(infengine_adventure::room::Layer {
+                name,
+                image,
+                ..Default::default()
+            });
+            self.dirty = true;
+            self.load_textures();
+            self.status = "picture added on top - place it, or give it a flag".into();
+        }
+        if let Some(index) = actions.remove_layer
+            && index < self.room.layers.len()
+        {
+            self.remember();
+            let gone = self.room.layers.remove(index);
+            self.dirty = true;
+            self.status = format!("removed {}", gone.image);
+        }
         if actions.stop_play {
             self.stop_play();
         }

@@ -38,6 +38,10 @@ pub struct UiActions {
     pub run_script: Option<String>,
     /// A script to put on the graph canvas.
     pub open_graph_script: Option<String>,
+    /// A picture to add as a new top layer.
+    pub add_layer: Option<String>,
+    /// A layer to take off the room.
+    pub remove_layer: Option<usize>,
     /// It asked to stop instead.
     pub stop_play: bool,
     pub save: bool,
@@ -76,6 +80,10 @@ pub struct UiState<'a> {
     pub voice_language: &'a mut String,
     /// This room's lines: id, text, and whether audio exists.
     pub lines: &'a [(String, String, bool)],
+    /// Project-relative pictures, for adding a layer.
+    pub pictures: &'a [String],
+    /// Flags any script in the project mentions, for conditions.
+    pub known_flags: &'a [String],
     /// The sheet being cut into frames, if any.
     pub sheet: &'a mut Option<crate::sheet::SheetDraft>,
     /// Whether a scene is running, and what it is doing right now.

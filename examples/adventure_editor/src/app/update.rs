@@ -97,7 +97,20 @@ impl Editor {
             && self.mode != Mode::Script
         {
             draw::sync_camera(renderer, &self.view);
-            draw::draw_layers(renderer, &self.room, &self.view, &self.textures);
+            // While a test run is going the room wears the state the
+            // game is in - the table with the letter, or without it.
+            // While editing, every switched-on layer shows.
+            let staged_flags = self
+                .play
+                .active
+                .then(|| self.play.game.state.flags.clone());
+            draw::draw_layers(
+                renderer,
+                &self.room,
+                &self.view,
+                &self.textures,
+                staged_flags.as_ref(),
+            );
             if let Some((animation, handle, frame)) = &preview {
                 draw::draw_animation_frame(
                     renderer,
@@ -212,6 +225,19 @@ impl Editor {
         let picker_sounds: Vec<String> = self.project.sounds.ids().map(str::to_string).collect();
         let picker_rooms: Vec<String> = self.project.room_ids();
         let picker_images = self.pictures.clone();
+        // Every flag the project's scripts mention, for the layer
+        // conditions: naming one from memory is how a variant ends up
+        // gated on a flag nothing ever sets.
+        let known_flags: Vec<String> = {
+            let mut flags: std::collections::BTreeSet<String> = self
+                .project
+                .scripts
+                .values()
+                .flat_map(|script| script.flags())
+                .collect();
+            flags.extend(self.play.game.state.flags.keys().cloned());
+            flags.into_iter().collect()
+        };
         let mode = self.mode;
         let scene_id = self.scene_script_id();
         // The room's scenes, for the timeline's picker.
@@ -246,6 +272,8 @@ impl Editor {
                 text_language: &mut self.language.text,
                 voice_language: &mut self.language.voice,
                 lines: &self.lines,
+                pictures: &picker_images,
+                known_flags: &known_flags,
                 sheet: &mut self.sheet,
                 playing: self.play.active,
                 now: if self.play.active {

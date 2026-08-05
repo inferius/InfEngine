@@ -165,7 +165,7 @@ fn room_mode(ui: &mut egui::Ui, state: &mut UiState<'_>, actions: &mut UiActions
             things::selected(ui, state, actions);
 
             section(ui, "room", t("Room", "Místnost"), state.room.layers.len(), true, |ui| {
-                room::show(ui, state)
+                room::show(ui, state, actions)
             });
             let floors = state.room.walk.solids.len() + state.room.entries.len();
             section(ui, "floor", t("Floor", "Podlaha"), floors, true, |ui| {

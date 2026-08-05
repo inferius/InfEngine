@@ -23,14 +23,19 @@ pub fn sync_camera(renderer: &mut Renderer, view: &View) {
 }
 
 /// Draw every visible layer, back to front.
+///
+/// A93: layers can carry a condition - the table with the letter and
+/// the table without are two layers over one background - so the draw
+/// asks the game's flags which of them exist right now.
 pub fn layers(
     renderer: &mut Renderer,
     room: &Room,
     view: &View,
     textures: &HashMap<String, Texture2dHandle>,
+    flag_of: &dyn Fn(&str) -> bool,
 ) {
     for layer in &room.layers {
-        if !layer.visible {
+        if !layer.shown(flag_of) {
             continue;
         }
         let Some(handle) = textures.get(&layer.image) else {

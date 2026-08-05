@@ -469,6 +469,7 @@ mod tests {
             offset: Vec2::ZERO,
             kind: LayerKind::Background,
             visible: true,
+            shown_if: None,
         });
         io::save(&room, &root.join(io::ROOM_DIR).join("hall.room.ron")).expect("room");
         touch(root, "images/hall.png");

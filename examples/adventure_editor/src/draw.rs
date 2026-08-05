@@ -72,13 +72,25 @@ pub fn sync_camera(renderer: &mut Renderer, view: &View) {
 /// A layer whose image has not loaded is skipped rather than drawn as a
 /// placeholder: a magenta box over a background reads as a broken room,
 /// and the inspector already reports which images are missing.
+///
+/// `flags` is the game's state while one runs, `None` while editing -
+/// an author sees every layer they switched on, conditions and all,
+/// because a layer that cannot be seen cannot be placed.
 pub fn draw_layers(
     renderer: &mut Renderer,
     room: &Room,
     view: &View,
     textures: &HashMap<String, Texture2dHandle>,
+    flags: Option<&std::collections::BTreeMap<String, bool>>,
 ) {
-    for layer in room.layers.iter().filter(|l| l.visible) {
+    for layer in &room.layers {
+        let shown = match flags {
+            Some(flags) => layer.shown(|flag| flags.get(flag).copied().unwrap_or(false)),
+            None => layer.visible,
+        };
+        if !shown {
+            continue;
+        }
         let Some(&handle) = textures.get(&layer.image) else {
             continue;
         };

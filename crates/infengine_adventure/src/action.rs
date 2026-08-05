@@ -316,6 +316,25 @@ impl Script {
         count
     }
 
+    /// A93: every flag this script sets or tests, sorted and unique.
+    ///
+    /// What the editor offers when something has to name a flag - a
+    /// conditional layer, a test run's setup. A flag typed from memory
+    /// is how a variant ends up gated on a name nothing ever sets.
+    pub fn flags(&self) -> Vec<String> {
+        let mut found = std::collections::BTreeSet::new();
+        self.walk(&mut |action| match action {
+            Action::SetFlag { flag, .. } => {
+                found.insert(flag.clone());
+            }
+            Action::Branch { on: Condition::Flag(flag), .. } => {
+                found.insert(flag.clone());
+            }
+            _ => {}
+        });
+        found.into_iter().collect()
+    }
+
     /// Localisation ids this script speaks, in order.
     pub fn spoken_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();

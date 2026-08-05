@@ -474,9 +474,14 @@ impl AppHandler for Game {
             );
         }
 
+        // Snapshotted before the renderer borrow: the closure only
+        // reads flags, but the borrow checker cannot see that.
+        let flags = self.host.game.state.flags.clone();
         if let Some(renderer) = self.renderer.as_mut() {
             draw::sync_camera(renderer, &self.view);
-            draw::layers(renderer, &self.host.room, &self.view, &self.textures);
+            draw::layers(renderer, &self.host.room, &self.view, &self.textures, &|flag| {
+                flags.get(flag).copied().unwrap_or(false)
+            });
             for (item, at) in &ground {
                 if let Some(&handle) = self.textures.get(&icon_path(item)) {
                     draw::ground_item(renderer, &self.view, *at, handle);

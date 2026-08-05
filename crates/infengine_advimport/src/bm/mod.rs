@@ -526,6 +526,7 @@ pub fn to_room(parsed: &scene::Scene, game: &GameMeta) -> Room {
             ),
             kind: layer_kind(element),
             visible: true,
+            shown_if: None,
         });
     }
 
