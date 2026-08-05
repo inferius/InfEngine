@@ -25,7 +25,16 @@ pub struct Settings {
     pub language: String,
     /// Whether the library shows cells of picture rather than a list.
     pub library_grid: bool,
+    /// A98: games opened recently, newest first.
+    ///
+    /// A path is the rest of its line rather than one token, because a
+    /// folder is allowed to have a space in its name and the usual
+    /// split-on-whitespace would cut `My Game` in half.
+    pub recent: Vec<PathBuf>,
 }
+
+/// How many recent projects are worth keeping.
+const RECENT_LIMIT: usize = 12;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -37,7 +46,23 @@ impl Default for Settings {
             timeline_open: true,
             language: "en".into(),
             library_grid: false,
+            recent: Vec::new(),
         }
+    }
+}
+
+impl Settings {
+    /// Put a project at the top of the recent list.
+    pub fn remember_project(&mut self, path: &std::path::Path) {
+        let path = path.to_path_buf();
+        self.recent.retain(|old| old != &path);
+        self.recent.insert(0, path);
+        self.recent.truncate(RECENT_LIMIT);
+    }
+
+    /// Drop one, for a folder that is not there any more.
+    pub fn forget_project(&mut self, path: &std::path::Path) {
+        self.recent.retain(|old| old.as_path() != path);
     }
 }
 
@@ -82,7 +107,11 @@ impl Settings {
             self.timeline_open as u8,
             self.language,
             self.library_grid as u8,
-        )
+        ) + &self
+            .recent
+            .iter()
+            .map(|path| format!("recent {}\n", path.display()))
+            .collect::<String>()
     }
 
     fn parse(text: &str) -> Self {
@@ -92,11 +121,20 @@ impl Settings {
             let (Some(key), Some(value)) = (parts.next(), parts.next()) else {
                 continue;
             };
-            // The one key whose value is a word, read before the number
-            // parse can throw it away.
+            // The keys whose value is not a number, read before the
+            // number parse can throw them away.
             if key == "language" {
                 if matches!(value, "en" | "cs") {
                     out.language = value.to_string();
+                }
+                continue;
+            }
+            if key == "recent" {
+                // The rest of the line: a folder may have spaces in it.
+                if let Some(rest) = line.split_once(' ').map(|(_, rest)| rest.trim())
+                    && !rest.is_empty()
+                {
+                    out.recent.push(PathBuf::from(rest));
                 }
                 continue;
             }
@@ -135,6 +173,7 @@ mod tests {
             timeline_open: false,
             language: "cs".into(),
             library_grid: true,
+            recent: vec![PathBuf::from("F:/Games/My Game"), PathBuf::from("C:/x")],
         };
         assert_eq!(Settings::parse(&settings.serialise()), settings);
     }
@@ -161,5 +200,47 @@ mod tests {
             1.0,
             "an infinite scale draws nothing"
         );
+    }
+}
+
+#[cfg(test)]
+mod recent_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn a_recent_path_keeps_its_spaces() {
+        // Split-on-whitespace would cut "My Game" in half.
+        let parsed = Settings::parse("recent F:/Games/My Game
+");
+        assert_eq!(parsed.recent, vec![PathBuf::from("F:/Games/My Game")]);
+    }
+
+    #[test]
+    fn remembering_moves_a_project_to_the_top_without_repeating_it() {
+        let mut settings = Settings::default();
+        settings.remember_project(Path::new("a"));
+        settings.remember_project(Path::new("b"));
+        settings.remember_project(Path::new("a"));
+        assert_eq!(settings.recent, vec![PathBuf::from("a"), PathBuf::from("b")]);
+    }
+
+    #[test]
+    fn the_recent_list_has_an_end() {
+        let mut settings = Settings::default();
+        for i in 0..40 {
+            settings.remember_project(Path::new(&format!("p{i}")));
+        }
+        assert_eq!(settings.recent.len(), RECENT_LIMIT);
+        assert_eq!(settings.recent[0], PathBuf::from("p39"), "newest first");
+    }
+
+    #[test]
+    fn forgetting_drops_only_the_one_named() {
+        let mut settings = Settings::default();
+        settings.remember_project(Path::new("a"));
+        settings.remember_project(Path::new("b"));
+        settings.forget_project(Path::new("a"));
+        assert_eq!(settings.recent, vec![PathBuf::from("b")]);
     }
 }

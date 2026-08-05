@@ -39,6 +39,8 @@ dependencies = [
  "infengine_editor",
  "infengine_render",
  "infengine_window",
+ "ron",
+ "serde",
  "tracing",
  "tracing-subscriber",
 ]
