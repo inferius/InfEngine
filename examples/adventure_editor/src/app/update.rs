@@ -75,6 +75,11 @@ impl Editor {
         // Compute what depends on &self before taking the renderer out
         // mutably; the borrow checker cannot see that they are disjoint.
         let selected = self.selected_points();
+        let cursor_room = self.cursor_room();
+        let rubber = match self.drag {
+            super::Drag::HotspotRect(from) => Some(from),
+            _ => None,
+        };
         let actor = self.play.active.then(|| {
             let position = self.play.game.state.actor.position;
             (position, self.room.scale.scale_at(position.y))
@@ -103,15 +108,40 @@ impl Editor {
                     self.playback.position,
                 );
             }
+            // While the game runs, the stage is the game: the editing
+            // overlays would sit on top of every scene like scaffolding
+            // left up on opening night. The camera frame survives - it
+            // is the one line that describes the play, not the edit.
+            let staged = if self.play.active {
+                draw::Overlays {
+                    floor: false,
+                    hotspots: false,
+                    exits: false,
+                    entries: false,
+                    bounds: false,
+                    camera: self.overlays.camera,
+                }
+            } else {
+                self.overlays
+            };
             draw::draw_overlays(
                 renderer,
                 &self.room,
                 &self.view,
-                &self.overlays,
+                &staged,
                 &selected,
                 &walk_line,
                 self.play.game.state.camera,
             );
+            // What the hand is in the middle of, live: the outline
+            // from its first corner, the rectangle from its first
+            // pixel.
+            if self.tool == crate::edit::Tool::DrawFloor && !self.floor_draft.is_empty() {
+                draw::draw_floor_draft(renderer, &self.view, &self.floor_draft, cursor_room);
+            }
+            if let Some(from) = rubber {
+                draw::draw_rubber_rect(renderer, &self.view, from, cursor_room);
+            }
             if let Some((position, scale)) = actor {
                 draw::draw_actor(renderer, &self.view, position, scale);
             }
@@ -183,7 +213,6 @@ impl Editor {
         let picker_rooms: Vec<String> = self.project.room_ids();
         let picker_images = self.pictures.clone();
         let mode = self.mode;
-        let cursor_room = self.view.window_to_room(self.cursor);
         let scene_id = self.scene_script_id();
         let mut content = None;
         if let Some(ui) = self.ui.as_mut() {
@@ -335,8 +364,11 @@ impl Editor {
                 // only while something is playing.
                 crate::player::panel(ctx, player);
                 // What is left between the panels is the canvas; the
-                // view frames the room against it.
-                let rect = ctx.content_rect();
+                // view frames the room against it. available_rect, not
+                // content_rect: the latter is the whole screen, and
+                // measuring against it put the frame chip under the
+                // menu and made Fit centre the room beneath the panels.
+                let rect = ctx.available_rect();
                 state.content_min = egui::vec2(rect.left(), rect.top());
                 state.content_max = egui::vec2(rect.right(), rect.bottom());
                 ui::stage_chips(ctx, &mut state, &scene_id);

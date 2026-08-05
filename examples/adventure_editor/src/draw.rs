@@ -327,6 +327,47 @@ fn dim(c: [f32; 4]) -> [f32; 4] {
     [c[0] * 0.4, c[1] * 0.4, c[2] * 0.4, c[3] * 0.6]
 }
 
+/// The floor outline being drawn, from its very first click.
+///
+/// A closed polygon only exists from three points, and until this the
+/// draft drew as nothing - so the first two clicks of every outline
+/// looked like the tool was broken. Now each placed corner shows, the
+/// placed run is a polyline, and a rubber line runs from the last
+/// corner to the cursor: the next click is always visible before it is
+/// made.
+pub fn draw_floor_draft(renderer: &mut Renderer, view: &View, draft: &[Vec2], cursor: Vec2) {
+    for pair in draft.windows(2) {
+        let a = view.room_to_world(pair[0]);
+        let b = view.room_to_world(pair[1]);
+        renderer.debug_line([a.x, a.y], [b.x, b.y], color::FLOOR);
+    }
+    for point in draft {
+        handle(renderer, view, *point, color::FLOOR, 3.0);
+    }
+    if let Some(last) = draft.last() {
+        let a = view.room_to_world(*last);
+        let b = view.room_to_world(cursor);
+        renderer.debug_line([a.x, a.y], [b.x, b.y], dim(color::FLOOR));
+    }
+}
+
+/// The rectangle being dragged out, live under the hand.
+pub fn draw_rubber_rect(renderer: &mut Renderer, view: &View, from: Vec2, to: Vec2) {
+    let lo = from.min(to);
+    let hi = from.max(to);
+    outline(
+        renderer,
+        view,
+        &[
+            lo,
+            Vec2::new(hi.x, lo.y),
+            hi,
+            Vec2::new(lo.x, hi.y),
+        ],
+        color::HOTSPOT,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

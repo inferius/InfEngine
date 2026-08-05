@@ -203,13 +203,16 @@ fn rooms_shelf(
         );
         return;
     }
-    let labels: Vec<(usize, String)> = matching_rooms(ui_state.project, &state.filter)
+    let mut labels: Vec<(usize, String)> = matching_rooms(ui_state.project, &state.filter)
         .into_iter()
         .filter_map(|index| {
             let path = ui_state.project.rooms.get(index)?;
             Some((index, Project::room_label(path)))
         })
         .collect();
+    // Alphabetical, not filesystem order: the list is read by name,
+    // and a name that cannot be predicted cannot be found.
+    labels.sort_by(|a, b| a.1.cmp(&b.1));
     let searching = !state.filter.trim().is_empty();
     for (family, members) in group_by_family(&labels) {
         if members.len() == 1 || searching {

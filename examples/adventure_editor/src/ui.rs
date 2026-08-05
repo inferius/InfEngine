@@ -180,6 +180,31 @@ pub fn stage_chips(ctx: &egui::Context, state: &mut UiState<'_>, scene_id: &str)
                 }
             });
         });
+
+    // The opposite corner answers the other question: what will the
+    // mouse do here. In Room mode that is the tool; elsewhere the
+    // canvas does not draw.
+    if state.mode == Mode::Room {
+        egui::Area::new("stage_state".into())
+            .pivot(egui::Align2::RIGHT_BOTTOM)
+            .fixed_pos(egui::pos2(
+                state.content_max.x - 10.0,
+                state.content_max.y - 10.0,
+            ))
+            .interactable(false)
+            .show(ctx, |ui| {
+                chip(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} · {}",
+                            crate::inspector::tool_label(*state.tool),
+                            crate::inspector::tool_hint(*state.tool)
+                        ))
+                        .small(),
+                    );
+                });
+            });
+    }
 }
 
 /// One dark pill over the picture.

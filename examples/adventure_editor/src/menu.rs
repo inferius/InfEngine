@@ -40,6 +40,8 @@ pub struct MenuActions {
     pub mode: Option<Mode>,
     pub start_play: bool,
     pub stop_play: bool,
+    /// Run the game as its own process, in its own window.
+    pub play_in_window: bool,
 }
 
 /// Things the Room menu can add. Each lands in the middle of the room so
@@ -253,6 +255,18 @@ fn project_menu(ui: &mut egui::Ui, menu: &MenuContext, actions: &mut MenuActions
             .clicked()
         {
             actions.reload = true;
+            ui.close();
+        }
+        ui.separator();
+        if ui
+            .button(t("Play in its own window", "Spustit ve vlastním okně"))
+            .on_hover_text(t(
+                "Run the game as the player will see it - a separate window, no editor around it",
+                "Spusť hru, jak ji uvidí hráč - samostatné okno, žádný editor okolo",
+            ))
+            .clicked()
+        {
+            actions.play_in_window = true;
             ui.close();
         }
         ui.separator();

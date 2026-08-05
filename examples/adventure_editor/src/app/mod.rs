@@ -413,6 +413,45 @@ impl Editor {
         self.status = format!("playing {}", self.room.id);
     }
 
+    /// Stop the test run and everything it set in motion.
+    ///
+    /// One place on purpose: stopping the scene without stopping its
+    /// music was the bug - the game state froze and the track played
+    /// on, because the player strip did not know the scene had ended.
+    fn stop_play(&mut self) {
+        self.play.end();
+        if let Some(player) = self.player.as_mut() {
+            player.handle.stop(0.1);
+        }
+        self.player = None;
+        self.status = "stopped".into();
+    }
+
+    /// Play the game the honest way: its own window, its own process.
+    ///
+    /// The editor's Test mode is for testing - flags at hand, log
+    /// visible, the room still an editing surface underneath. Seeing
+    /// the game as a player will see it means running the game, and
+    /// the game binary sits next to the editor's own.
+    fn play_in_game_window(&mut self) {
+        let game = std::env::current_exe()
+            .ok()
+            .and_then(|exe| Some(exe.parent()?.join("adventure_game.exe")))
+            .filter(|path| path.exists());
+        let Some(game) = game else {
+            self.status =
+                "adventure_game.exe not found next to the editor - build it first".into();
+            return;
+        };
+        match std::process::Command::new(&game).arg(&self.project.root).spawn() {
+            Ok(_) => self.status = "game launched in its own window".into(),
+            Err(err) => {
+                warn!(%err, "could not launch the game");
+                self.status = err.to_string();
+            }
+        }
+    }
+
     /// Switch what the editor is being used for.
     ///
     /// The mode owns its side effects: entering Test starts the game,
@@ -424,7 +463,7 @@ impl Editor {
             return;
         }
         if self.mode == Mode::Test && self.play.active {
-            self.play.end();
+            self.stop_play();
         }
         self.mode = mode;
         mode.reveal(&mut self.overlays);
@@ -860,8 +899,7 @@ impl Editor {
             self.start_play();
         }
         if actions.stop {
-            self.play.end();
-            self.status = "stopped".into();
+            self.stop_play();
         }
         if actions.reset {
             self.play.reset(&self.room);
@@ -1005,8 +1043,10 @@ impl Editor {
             }
         }
         if actions.stop_play {
-            self.play.end();
-            self.status = "stopped".into();
+            self.stop_play();
+        }
+        if actions.play_in_window {
+            self.play_in_game_window();
         }
     }
 
@@ -1225,8 +1265,7 @@ impl Editor {
             self.open_graph(&id);
         }
         if actions.stop_play {
-            self.play.end();
-            self.status = "stopped".into();
+            self.stop_play();
         }
         if let Some(id) = actions.play_animation {
             // Where the animation says it belongs, not a magic corner:
@@ -1363,7 +1402,7 @@ impl AppHandler for Editor {
             Key::F => self.view.fit(),
             Key::P => {
                 if self.play.active {
-                    self.play.end();
+                    self.stop_play();
                 } else {
                     self.set_mode(Mode::Test);
                     if !self.play.active {
@@ -1373,8 +1412,7 @@ impl AppHandler for Editor {
             }
             Key::S => self.save(),
             Key::Escape if self.play.active => {
-                self.play.end();
-                self.status = "stopped".into();
+                self.stop_play();
             }
             Key::Escape => {
                 self.selection = Selection::None;
