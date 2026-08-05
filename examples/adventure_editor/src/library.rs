@@ -60,11 +60,25 @@ impl Shelf {
     }
 }
 
+/// How the shelf is laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum View {
+    /// One row each: names, meta, every button.
+    #[default]
+    List,
+    /// Cells of picture: what a thing looks like, at a glance.
+    Grid,
+}
+
 /// The panel's own state.
 #[derive(Default)]
 pub struct LibraryUi {
     filter: String,
     shelf: Shelf,
+    /// List or grid. Kept per session; the shelves share it, because
+    /// switching to pictures and finding a different layout would be
+    /// its own small surprise.
+    pub view: View,
     thumbs: HashMap<String, Option<egui::TextureHandle>>,
     /// What the next room will be called.
     new_room: String,
@@ -75,6 +89,16 @@ pub struct LibraryUi {
     /// nothing saying what it was or how to stop it. Browsing happens
     /// on the shelf; the canvas belongs to the room and the scene.
     previewing: Option<String>,
+}
+
+impl LibraryUi {
+    /// A library laid out the way the last session left it.
+    pub fn with_view(view: View) -> Self {
+        Self {
+            view,
+            ..Default::default()
+        }
+    }
 }
 
 /// What the library asked for.
@@ -149,6 +173,23 @@ fn header(ui: &mut egui::Ui, state: &mut LibraryUi, project: &Project, pictures:
     use crate::lang::t;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(t("LIBRARY", "KNIHOVNA")).small().weak());
+        // List or grid: a name tells you which asset it is, a picture
+        // tells you what it looks like, and which of those you want
+        // depends on whether you know the project yet.
+        if matches!(state.shelf, Shelf::Pictures | Shelf::Animations) {
+            let grid = state.view == View::Grid;
+            if ui
+                .selectable_label(grid, if grid { "▦" } else { "☰" })
+                .on_hover_text(if grid {
+                    t("Showing pictures. Click for a list.", "Ukazuje obrázky. Klikni pro seznam.")
+                } else {
+                    t("Showing a list. Click for pictures.", "Ukazuje seznam. Klikni pro obrázky.")
+                })
+                .clicked()
+            {
+                state.view = if grid { View::List } else { View::Grid };
+            }
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let count = match state.shelf {
                 Shelf::Rooms => project.rooms.len(),
@@ -384,6 +425,53 @@ pub fn matching_rooms(project: &Project, filter: &str) -> Vec<usize> {
 // ---------------------------------------------------------------------
 // The other shelves.
 
+/// How wide one grid cell is, in points.
+const CELL: f32 = 76.0;
+
+/// A cell of the grid: a picture, its name under it, draggable.
+///
+/// Returns the response, so a shelf can hang its own clicks on it -
+/// opening a workbench, starting a preview.
+fn grid_cell(
+    ui: &mut egui::Ui,
+    name: &str,
+    asset: DragAsset,
+    draw: impl FnOnce(&mut egui::Ui, egui::Rect),
+) -> egui::Response {
+    let id = egui::Id::new(("library_cell", name));
+    ui.dnd_drag_source(id, asset, |ui| {
+        ui.vertical(|ui| {
+            ui.set_width(CELL);
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(CELL, CELL * 0.75), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 3.0, egui::Color32::from_gray(24));
+            draw(ui, rect);
+            // Truncated rather than wrapped: a wrapped name makes the
+            // cells different heights and the grid stops being a grid.
+            let short: String = if name.chars().count() > 12 {
+                format!("{}…", name.chars().take(11).collect::<String>())
+            } else {
+                name.to_string()
+            };
+            ui.label(egui::RichText::new(short).small());
+        });
+    })
+    .response
+    .on_hover_cursor(egui::CursorIcon::Grab)
+    .on_hover_text(name)
+}
+
+/// Draw a texture to fit inside a cell, keeping its proportions.
+fn fit_into(ui: &mut egui::Ui, rect: egui::Rect, texture: &egui::TextureHandle) {
+    let size = texture.size_vec2();
+    let scale = (rect.width() / size.x.max(1.0))
+        .min(rect.height() / size.y.max(1.0))
+        .min(4.0);
+    let drawn = size * scale;
+    let at = egui::Rect::from_center_size(rect.center(), drawn);
+    egui::Image::new((texture.id(), drawn)).paint_at(ui, at);
+}
+
 fn pictures_shelf(
     ui: &mut egui::Ui,
     state: &mut LibraryUi,
@@ -391,6 +479,10 @@ fn pictures_shelf(
     pictures: &[String],
     actions: &mut LibraryActions,
 ) {
+    if state.view == View::Grid {
+        pictures_grid(ui, state, project, pictures, actions);
+        return;
+    }
     // A couple of reads per frame keeps the panel smooth; the rest fill
     // in as the frames go by.
     let mut budget = 2usize;
@@ -449,6 +541,67 @@ fn pictures_shelf(
     }
 }
 
+/// The pictures as cells of picture.
+fn pictures_grid(
+    ui: &mut egui::Ui,
+    state: &mut LibraryUi,
+    project: &Project,
+    pictures: &[String],
+    actions: &mut LibraryActions,
+) {
+    let names: Vec<String> = shown(&state.filter, pictures.iter().map(String::as_str))
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let mut budget = 3usize;
+    ui.horizontal_wrapped(|ui| {
+        for name in names {
+            let thumb = match state.thumbs.get(&name) {
+                Some(loaded) => loaded.clone(),
+                None if budget > 0 => {
+                    budget -= 1;
+                    let loaded = read_thumb(ui.ctx(), project, &name);
+                    state.thumbs.insert(name.clone(), loaded.clone());
+                    loaded
+                }
+                None => {
+                    ui.ctx().request_repaint();
+                    None
+                }
+            };
+            let response = grid_cell(
+                ui,
+                &name,
+                DragAsset::Image(name.clone()),
+                |ui, rect| {
+                    if let Some(texture) = thumb.as_ref() {
+                        fit_into(ui, rect, texture);
+                    }
+                },
+            );
+            // A cell is the thing itself, so clicking it does the
+            // thing: a picture opens as a cut, which is what a picture
+            // in this project usually becomes.
+            if response.double_clicked() {
+                actions.cut_sheet = Some(name.clone());
+            }
+            response.context_menu(|ui| {
+                if ui.button(crate::lang::t("Cut into an animation", "Rozřezat na animaci")).clicked() {
+                    actions.cut_sheet = Some(name.clone());
+                    ui.close();
+                }
+                if ui.button(crate::lang::t("Add to the scene", "Přidat do scény")).clicked() {
+                    actions.add = Some(Action::ShowImage {
+                        image: name.clone(),
+                        seconds: 2.0,
+                    });
+                    ui.close();
+                }
+            });
+        }
+    });
+}
+
 fn read_thumb(
     ctx: &egui::Context,
     project: &Project,
@@ -461,6 +614,83 @@ fn read_thumb(
     Some(ctx.load_texture(format!("library:{name}"), pixels, egui::TextureOptions::LINEAR))
 }
 
+/// The animations as cells that play.
+///
+/// The whole point of the grid: a shelf of names says a project has a
+/// hundred animations, a shelf of moving pictures says which one is
+/// the torch.
+fn animations_grid(
+    ui: &mut egui::Ui,
+    state: &LibraryUi,
+    project: &Project,
+    actions: &mut LibraryActions,
+) {
+    let names: Vec<String> = project.animations.iter().map(|a| a.id.clone()).collect();
+    let shown_names = shown(&state.filter, names.iter().map(String::as_str));
+    ui.horizontal_wrapped(|ui| {
+        for name in shown_names {
+            let Some(animation) = project.animations.iter().find(|a| a.id == name) else {
+                continue;
+            };
+            let texture = crate::inspector::motion::sheet_texture(ui, project, &animation.image);
+            let now = ui.input(|i| i.time) as f32;
+            let response = grid_cell(
+                ui,
+                name,
+                DragAsset::Animation(name.to_string()),
+                |ui, rect| {
+                    let Some(texture) = texture else {
+                        return;
+                    };
+                    let sheet = texture.size_vec2();
+                    let frame = animation.frame_at(now);
+                    let (uv_min, uv_max) =
+                        animation.frame_uv(frame, glam::Vec2::new(sheet.x, sheet.y));
+                    let scale = (rect.width() / animation.frame_size.x.max(1.0))
+                        .min(rect.height() / animation.frame_size.y.max(1.0))
+                        .min(4.0);
+                    let drawn = egui::vec2(
+                        animation.frame_size.x * scale,
+                        animation.frame_size.y * scale,
+                    );
+                    let at = egui::Rect::from_center_size(rect.center(), drawn);
+                    egui::Image::new((texture.id(), drawn))
+                        .uv(egui::Rect::from_min_max(
+                            egui::pos2(uv_min.x, uv_min.y),
+                            egui::pos2(uv_max.x, uv_max.y),
+                        ))
+                        .paint_at(ui, at);
+                },
+            );
+            if response.double_clicked() {
+                actions.edit_animation = Some(name.to_string());
+            }
+            response.context_menu(|ui| {
+                if ui
+                    .button(crate::lang::t("Open on the workbench", "Otevřít na pracovním stole"))
+                    .clicked()
+                {
+                    actions.edit_animation = Some(name.to_string());
+                    ui.close();
+                }
+                if ui
+                    .button(crate::lang::t("Add to the scene", "Přidat do scény"))
+                    .clicked()
+                {
+                    actions.add = Some(Action::PlayAnim {
+                        animation: name.to_string(),
+                        wait: true,
+                        at: None,
+                    });
+                    ui.close();
+                }
+            });
+        }
+    });
+    // Every cell is playing, so the shelf has to keep drawing.
+    ui.ctx().request_repaint();
+}
+
 fn animations_shelf(
     ui: &mut egui::Ui,
     state: &mut LibraryUi,
@@ -468,6 +698,10 @@ fn animations_shelf(
     actions: &mut LibraryActions,
 ) {
     use crate::lang::t;
+    if state.view == View::Grid {
+        animations_grid(ui, state, project, actions);
+        return;
+    }
     let names: Vec<String> = project.animations.iter().map(|a| a.id.clone()).collect();
     for name in shown(&state.filter, names.iter().map(String::as_str)) {
         let Some(animation) = project.animations.iter().find(|a| a.id == name) else {

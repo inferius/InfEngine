@@ -23,6 +23,8 @@ pub struct Settings {
     pub timeline_open: bool,
     /// The interface language: "en" or "cs".
     pub language: String,
+    /// Whether the library shows cells of picture rather than a list.
+    pub library_grid: bool,
 }
 
 impl Default for Settings {
@@ -34,6 +36,7 @@ impl Default for Settings {
             timeline_snap_time: true,
             timeline_open: true,
             language: "en".into(),
+            library_grid: false,
         }
     }
 }
@@ -71,13 +74,14 @@ impl Settings {
 
     fn serialise(&self) -> String {
         format!(
-            "ui_scale {}\ntimeline_zoom {}\ntimeline_snap_parts {}\ntimeline_snap_time {}\ntimeline_open {}\nlanguage {}\n",
+            "ui_scale {}\ntimeline_zoom {}\ntimeline_snap_parts {}\ntimeline_snap_time {}\ntimeline_open {}\nlanguage {}\nlibrary_grid {}\n",
             self.ui_scale,
             self.timeline_zoom,
             self.timeline_snap_parts as u8,
             self.timeline_snap_time as u8,
             self.timeline_open as u8,
             self.language,
+            self.library_grid as u8,
         )
     }
 
@@ -108,6 +112,7 @@ impl Settings {
                 "timeline_snap_parts" => out.timeline_snap_parts = value != 0.0,
                 "timeline_snap_time" => out.timeline_snap_time = value != 0.0,
                 "timeline_open" => out.timeline_open = value != 0.0,
+                "library_grid" => out.library_grid = value != 0.0,
                 // A newer editor's keys are not this one's problem.
                 _ => {}
             }
@@ -129,6 +134,7 @@ mod tests {
             timeline_snap_time: true,
             timeline_open: false,
             language: "cs".into(),
+            library_grid: true,
         };
         assert_eq!(Settings::parse(&settings.serialise()), settings);
     }

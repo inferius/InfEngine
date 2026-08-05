@@ -197,7 +197,11 @@ impl Editor {
             help: crate::help::HelpUi::default(),
             pictures: Vec::new(),
             story_ui: crate::ui_story::StoryUi::default(),
-            library_ui: crate::library::LibraryUi::default(),
+            library_ui: crate::library::LibraryUi::with_view(if settings.library_grid {
+                crate::library::View::Grid
+            } else {
+                crate::library::View::List
+            }),
             play_still: None,
             cards: crate::cards::Cards::default(),
             story_cache: None,
@@ -1557,6 +1561,7 @@ impl AppHandler for Editor {
             timeline_snap_time: self.timeline_snap.time,
             timeline_open: self.timeline_open,
             language: if crate::lang::is_czech() { "cs" } else { "en" }.into(),
+            library_grid: self.library_ui.view == crate::library::View::Grid,
         }
         .save();
     }
