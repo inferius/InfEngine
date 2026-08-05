@@ -270,7 +270,13 @@ pub fn tool_hint(tool: Tool) -> &'static str {
 /// see is worse than one in the wrong place.
 fn problems(ui: &mut egui::Ui, state: &UiState<'_>) {
     let issues = state.room.validate();
-    if issues.is_empty() && state.missing_images.is_empty() {
+    // A95: a room bigger than the game's window that nobody set to
+    // scroll plays wrong while looking finished, which is exactly what
+    // this list is for.
+    let squashed = (state.room.size.x > state.game_view.x + 0.5
+        || state.room.size.y > state.game_view.y + 0.5)
+        && !state.room.camera.scrolls(state.room.size);
+    if issues.is_empty() && state.missing_images.is_empty() && !squashed {
         return;
     }
     ui.separator();
@@ -283,6 +289,15 @@ fn problems(ui: &mut egui::Ui, state: &UiState<'_>) {
                 format!("image not found: {image}")
             })
             .color(egui::Color32::from_rgb(255, 140, 120)),
+        );
+    }
+    if squashed {
+        ui.label(
+            egui::RichText::new(crate::lang::t(
+                "Bigger than the game's window and not set to scroll - see Camera.",
+                "Větší než okno hry a nenastavená na posun - viz Kamera.",
+            ))
+            .color(egui::Color32::from_rgb(255, 200, 120)),
         );
     }
     for issue in issues {

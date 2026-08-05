@@ -20,6 +20,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
 use crate::action::Action;
@@ -30,7 +31,7 @@ use crate::{anim, io, screen, script_io, sound};
 pub const MANIFEST_FILE: &str = "game.ron";
 
 /// What a game is, apart from its rooms.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameManifest {
     pub title: String,
     /// Room the game opens in.
@@ -67,6 +68,41 @@ pub struct GameManifest {
     /// refusing to start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<ActorLook>,
+    /// A95: how much of a room the player sees at once, in room pixels.
+    ///
+    /// The game's own resolution, and the thing a room is measured
+    /// against to know whether it scrolls. A background 320x400 in a
+    /// 320x200 game is a room the view travels down; without a number
+    /// to compare against, "bigger than the screen" has no meaning and
+    /// every scrolling room had to be set up by hand.
+    #[serde(default = "default_view")]
+    pub view: Vec2,
+}
+
+/// The resolution these games were drawn for, and a sane default for
+/// a project whose manifest predates the field.
+fn default_view() -> Vec2 {
+    Vec2::new(320.0, 200.0)
+}
+
+/// Hand-written rather than derived, because a derived default would
+/// give the view zero pixels - and a manifest the editor mints for a
+/// project that has none is exactly where that would bite.
+impl Default for GameManifest {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            start_room: String::new(),
+            start_entry: String::new(),
+            font: None,
+            start_screen: String::new(),
+            intro_room: String::new(),
+            languages: Vec::new(),
+            default_language: LanguageChoice::default(),
+            actor: None,
+            view: default_view(),
+        }
+    }
 }
 
 /// The animations the player character is drawn from.
@@ -685,10 +721,27 @@ mod tests {
                 walk_front: "brandon_front".into(),
                 ..Default::default()
             }),
+            view: Vec2::new(320.0, 200.0),
         };
         manifest.save(&root).expect("save");
         assert_eq!(GameManifest::load(&root), Some(manifest));
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_manifest_written_before_the_window_existed_gets_the_usual_one() {
+        // A95: without a default, an older game.ron would load with a
+        // zero-pixel window and every room would count as oversized.
+        let root = temp("manifest_old");
+        fs::create_dir_all(&root).expect("dir");
+        fs::write(
+            root.join(MANIFEST_FILE),
+            r#"(title: "Old", start_room: "hall")"#,
+        )
+        .expect("write");
+        let manifest = GameManifest::load(&root).expect("loads");
+        assert_eq!(manifest.view, Vec2::new(320.0, 200.0));
         let _ = fs::remove_dir_all(&root);
     }
 

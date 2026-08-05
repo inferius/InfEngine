@@ -269,6 +269,7 @@ impl Editor {
             flags.into_iter().collect()
         };
         let mode = self.mode;
+        let game_view = self.game_ui.manifest.view;
         let asset_image = self.asset.as_ref().map(|a| a.animation.image.clone());
         let scene_id = self.scene_script_id();
         // The room's scenes, for the timeline's picker.
@@ -314,6 +315,7 @@ impl Editor {
                 },
                 camera: self.play.game.state.camera,
                 cursor_room,
+                game_view,
                 timeline_open: &mut self.timeline_open,
                 content_min: egui::Vec2::ZERO,
                 content_max: egui::Vec2::ZERO,

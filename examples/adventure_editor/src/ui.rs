@@ -93,6 +93,10 @@ pub struct UiState<'a> {
     pub camera: glam::Vec2,
     /// Where the cursor is, in room pixels.
     pub cursor_room: glam::Vec2,
+    /// How much of a room the player sees at once - the game's own
+    /// resolution, which is what a room is measured against to know
+    /// whether it scrolls.
+    pub game_view: glam::Vec2,
     /// Whether Animate mode shows the timeline. The status bar's
     /// toggle; the panel is worth a third of the window and a way to
     /// give it back.

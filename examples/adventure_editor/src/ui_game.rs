@@ -48,6 +48,28 @@ pub fn window(
                 ui.text_edit_singleline(&mut game.manifest.title);
             });
 
+            // A95: the game's own resolution. Every room is measured
+            // against it to know whether it scrolls, so it belongs
+            // with the title rather than buried per room.
+            ui.horizontal(|ui| {
+                ui.label(crate::lang::t("window", "okno"))
+                    .on_hover_text(crate::lang::t(
+                        "How much of a room the player sees at once. A bigger room scrolls.",
+                        "Kolik z místnosti hráč vidí najednou. Větší místnost se posouvá.",
+                    ));
+                ui.add(
+                    egui::DragValue::new(&mut game.manifest.view.x)
+                        .range(64.0..=4096.0)
+                        .speed(1.0),
+                );
+                ui.label("x");
+                ui.add(
+                    egui::DragValue::new(&mut game.manifest.view.y)
+                        .range(64.0..=4096.0)
+                        .speed(1.0),
+                );
+            });
+
             ui.horizontal(|ui| {
                 ui.label("starts in");
                 egui::ComboBox::from_id_salt("start_room")
