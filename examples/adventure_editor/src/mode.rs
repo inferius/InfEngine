@@ -70,6 +70,18 @@ impl Mode {
         }
     }
 
+    /// Whether the centre of the window is the room.
+    ///
+    /// Script fills it with the graph and Story with the map, so asking
+    /// either for the room's frame chip is a question with no answer.
+    /// The first version of that question answered `unreachable!`, and
+    /// it was reached the moment Story mode existed - so the knowledge
+    /// lives here, once, rather than as a guard each caller writes out
+    /// and one of them forgets.
+    pub fn has_room_canvas(self) -> bool {
+        matches!(self, Mode::Room | Mode::Animate | Mode::Test)
+    }
+
     /// The canvas tools this mode offers. The first is picked when the
     /// mode is entered, so the mouse always does something sensible.
     pub fn tools(self) -> &'static [Tool] {
@@ -135,6 +147,26 @@ mod tests {
                 Mode::ALL.iter().any(|m| m.tools().contains(&tool)),
                 "{tool:?} is offered by no mode"
             );
+        }
+    }
+
+    #[test]
+    fn a_mode_that_fills_the_centre_itself_has_no_room_canvas() {
+        // The crash this pins: Story mode asked the room's chip drawer
+        // what to write, and the drawer had no answer.
+        assert!(Mode::Room.has_room_canvas());
+        assert!(Mode::Animate.has_room_canvas());
+        assert!(Mode::Test.has_room_canvas());
+        assert!(!Mode::Script.has_room_canvas(), "the graph fills the centre");
+        assert!(!Mode::Story.has_room_canvas(), "the map fills the centre");
+    }
+
+    #[test]
+    fn a_mode_with_canvas_tools_has_a_canvas_to_use_them_on() {
+        for mode in Mode::ALL {
+            if !mode.tools().is_empty() {
+                assert!(mode.has_room_canvas(), "{mode:?} offers tools but draws no room");
+            }
         }
     }
 

@@ -125,7 +125,8 @@ impl std::fmt::Debug for UiState<'_> {
 /// chip names it and carries the one control it needs, the stop.
 pub fn stage_chips(ctx: &egui::Context, state: &mut UiState<'_>, scene_id: &str) {
     use crate::lang::t;
-    if state.mode == Mode::Script || state.current_room.is_none() {
+    // A mode that fills the centre itself has no room to frame.
+    if !state.mode.has_room_canvas() || state.current_room.is_none() {
         return;
     }
     egui::Area::new("stage_chips".into())
@@ -162,9 +163,9 @@ pub fn stage_chips(ctx: &egui::Context, state: &mut UiState<'_>, scene_id: &str)
                             format!("playing {}", state.room.id)
                         }
                     }
-                    Mode::Script | Mode::Story => {
-                        unreachable!("those modes have no room canvas")
-                    }
+                    // Guarded above; a label rather than a panic, because
+                    // a wrong word on a chip is not worth a crash.
+                    Mode::Script | Mode::Story => String::new(),
                 };
                 chip(ui, |ui| {
                     ui.label(egui::RichText::new(what).small());

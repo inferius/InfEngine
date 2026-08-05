@@ -118,11 +118,11 @@ impl Editor {
             bench.tick(ctx.delta_time);
         }
 
-        // In Script mode the graph covers the centre, and an asset on
-        // the workbench covers it too; drawing the room underneath
-        // either would be work nobody sees.
+        // Story and Script fill the centre with their own thing, and so
+        // does the workbench and the page that opens games; drawing the
+        // room under any of them is work nobody sees.
         let centre_taken =
-            self.mode == Mode::Script || self.bench.is_some() || self.browser.open;
+            !self.mode.has_room_canvas() || self.bench.is_some() || self.browser.open;
         if let Some(renderer) = self.renderer.as_mut()
             && !centre_taken
         {
