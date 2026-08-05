@@ -238,6 +238,12 @@ impl AnimationSet {
         self.animations.get(id)
     }
 
+    /// A94: take an animation out, for a rename - the old entry is the
+    /// thing being renamed, not a sibling of the new one.
+    pub fn remove(&mut self, id: &str) -> Option<Animation> {
+        self.animations.remove(id)
+    }
+
     pub fn len(&self) -> usize {
         self.animations.len()
     }

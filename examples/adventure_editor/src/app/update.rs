@@ -22,6 +22,28 @@ use crate::draw;
 
 use super::Editor;
 
+/// A sheet as an interface texture, cached per image in egui's own
+/// store - the workbench and the cutter both draw through egui, and
+/// re-decoding a sheet every frame would be a visible stutter.
+fn sheet_texture(
+    ctx: &egui::Context,
+    project: &Project,
+    image: &str,
+) -> Option<egui::TextureHandle> {
+    let key = egui::Id::new(("sheet_preview", image));
+    if let Some(handle) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
+        return Some(handle);
+    }
+    let loaded = image::open(project.resolve(image)).ok()?;
+    let rgba = loaded.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let pixels = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+    let handle =
+        ctx.load_texture(format!("cutter:{image}"), pixels, egui::TextureOptions::NEAREST);
+    ctx.data_mut(|d| d.insert_temp(key, handle.clone()));
+    Some(handle)
+}
+
 impl Editor {
     pub(super) fn frame(&mut self, window: &EngineWindow, ctx: &FrameContext<'_>) {
         if self.renderer.is_none() {
@@ -91,10 +113,17 @@ impl Editor {
         } else {
             self.path.clone()
         };
-        // In Script mode the graph covers the centre; drawing the room
-        // underneath it would be work nobody sees.
+        // The workbench advances its own clock, whatever the modes do.
+        if let Some(asset) = self.asset.as_mut() {
+            asset.tick(ctx.delta_time);
+        }
+
+        // In Script mode the graph covers the centre, and an asset on
+        // the workbench covers it too; drawing the room underneath
+        // either would be work nobody sees.
+        let centre_taken = self.mode == Mode::Script || self.asset.is_some();
         if let Some(renderer) = self.renderer.as_mut()
-            && self.mode != Mode::Script
+            && !centre_taken
         {
             draw::sync_camera(renderer, &self.view);
             // While a test run is going the room wears the state the
@@ -190,6 +219,7 @@ impl Editor {
         let mut timeline_actions = crate::timeline::TimelineActions::default();
         let mut story_actions = crate::ui_story::StoryActions::default();
         let mut library_actions = crate::library::LibraryActions::default();
+        let mut asset_actions = crate::asset_editor::AssetActions::default();
         if self.story_ui.open && self.story_cache.is_none() {
             self.story_cache =
                 Some(infengine_adventure::story::Story::of(&self.project));
@@ -239,6 +269,7 @@ impl Editor {
             flags.into_iter().collect()
         };
         let mode = self.mode;
+        let asset_image = self.asset.as_ref().map(|a| a.animation.image.clone());
         let scene_id = self.scene_script_id();
         // The room's scenes, for the timeline's picker.
         let scene_ids: Vec<String> = {
@@ -290,6 +321,7 @@ impl Editor {
             };
             let view = &mut self.view;
             let player = &mut self.player;
+            let asset = &mut self.asset;
             let play = &mut self.play;
             let play_draft = &mut self.play_draft;
             let room_id = state.room.id.clone();
@@ -342,6 +374,11 @@ impl Editor {
                 // Applied before anything is laid out, so the whole
                 // frame is measured at the size it will be drawn at.
                 ctx.set_zoom_factor(*ui_scale);
+                // The workbench draws the sheet through egui rather
+                // than the room renderer, so it needs its own texture.
+                let asset_texture = asset_image
+                    .as_deref()
+                    .and_then(|image| sheet_texture(ctx, state.project, image));
                 menu_actions =
                     crate::menu::bar(ctx, &menu_ctx, state.overlays, mode, ui_scale);
                 crate::help::window(ctx, help_ui);
@@ -414,9 +451,31 @@ impl Editor {
                 let rect = ctx.available_rect();
                 state.content_min = egui::vec2(rect.left(), rect.top());
                 state.content_max = egui::vec2(rect.right(), rect.bottom());
-                ui::stage_chips(ctx, &mut state, &scene_id);
-                if mode == Mode::Script {
-                    graph_actions = ui_graph::panel(ctx, graph_ui, &script_ids);
+                // An asset on the workbench owns the centre - it is
+                // not a room, and editing it over one was the
+                // confusion this replaces.
+                if let Some(editor) = asset.as_mut() {
+                    asset_actions = crate::asset_editor::panel(
+                        ctx,
+                        editor,
+                        asset_texture.clone(),
+                        &room_names,
+                    );
+                } else {
+                    ui::stage_chips(ctx, &mut state, &scene_id);
+                    if mode == Mode::Script {
+                        graph_actions = ui_graph::panel(
+                            ctx,
+                            graph_ui,
+                            &script_ids,
+                            ui_graph::GraphOptions {
+                                animations: &picker_animations,
+                                sounds: &picker_sounds,
+                                rooms: &picker_rooms,
+                                images: &picker_images,
+                            },
+                        );
+                    }
                 }
                 if extras.play.active {
                     ui_play::subtitle(ctx, extras.play);
@@ -479,6 +538,19 @@ impl Editor {
         }
         if let Some(name) = library_actions.new_room {
             self.create_room(&name);
+        }
+        if let Some(id) = library_actions.edit_animation {
+            self.open_asset(&id);
+        }
+        if let Some(image) = library_actions.cut_sheet {
+            self.cut_new_asset(&image);
+        }
+        if asset_actions.save {
+            self.save_asset();
+        }
+        if asset_actions.close {
+            self.asset = None;
+            self.status = "closed the workbench".into();
         }
         self.apply_timeline(timeline_actions);
         self.apply_menu(menu_actions);

@@ -71,6 +71,18 @@ pub struct GraphActions {
     pub save: bool,
     /// Run what is on the canvas, without saving it.
     pub run: bool,
+    /// An animation a node names, to open on the workbench.
+    pub edit_animation: Option<String>,
+}
+
+/// What a node's params may be, so the graph offers pickers rather
+/// than blank boxes.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GraphOptions<'a> {
+    pub animations: &'a [String],
+    pub sounds: &'a [String],
+    pub rooms: &'a [String],
+    pub images: &'a [String],
 }
 
 /// The script canvas, filling the centre of the window in Script mode.
@@ -82,8 +94,30 @@ pub fn panel(
     ctx: &egui::Context,
     state: &mut GraphUi,
     scripts: &[String],
+    options: GraphOptions<'_>,
 ) -> GraphActions {
     let mut actions = GraphActions::default();
+
+    // What every param may be, refreshed each frame: a project gains
+    // animations while the graph is open, and a picker listing what
+    // the project held a minute ago is a picker that lies.
+    state.editor.param_options.clear();
+    for (key, values) in [
+        ("animation", options.animations),
+        ("sound", options.sounds),
+        ("music", options.sounds),
+        ("room", options.rooms),
+        ("image", options.images),
+    ] {
+        if !values.is_empty() {
+            state
+                .editor
+                .param_options
+                .insert(key.to_string(), values.to_vec());
+        }
+    }
+    // The one param that names something with a workbench of its own.
+    state.editor.param_editable.insert("animation".to_string());
 
     egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -151,5 +185,8 @@ pub fn panel(
             state.dirty |= state.editor.show(ui, &state.registry);
         });
 
+    if let Some((_, id)) = state.editor.take_open_asset() {
+        actions.edit_animation = Some(id);
+    }
     actions
 }

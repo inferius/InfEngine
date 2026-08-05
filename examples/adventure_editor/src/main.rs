@@ -15,6 +15,7 @@
 
 mod add;
 mod app;
+mod asset_editor;
 mod assets;
 mod cards;
 mod draw;

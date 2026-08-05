@@ -137,6 +137,8 @@ pub struct Editor {
     slots: Vec<infengine_adventure::save::SlotInfo>,
     screen_ui: ScreenUi,
     graph_ui: GraphUi,
+    /// An animation open on the workbench, which takes over the centre.
+    asset: Option<crate::asset_editor::AssetEditor>,
     status: String,
 }
 
@@ -235,6 +237,7 @@ impl Editor {
             slots: Vec::new(),
             screen_ui,
             graph_ui: GraphUi::default(),
+            asset: None,
             status,
         }
     }
@@ -386,6 +389,85 @@ impl Editor {
         self.play_file(&path);
         if let Some(player) = self.player.as_mut() {
             player.name = id.to_string();
+        }
+    }
+
+    /// Put an animation on the workbench, in its own workspace.
+    ///
+    /// The sheet has to be measured first: every sensible frame size
+    /// depends on how big the picture is, and a cut drawn against a
+    /// guessed size would be a cut drawn against nothing.
+    fn open_asset(&mut self, id: &str) {
+        let Some(animation) = self.project.animations.get(id).cloned() else {
+            self.status = format!("no animation called {id}");
+            return;
+        };
+        let Some(size) = self.sheet_size(&animation.image) else {
+            self.status = format!("{} did not load", animation.image);
+            return;
+        };
+        self.asset = Some(crate::asset_editor::AssetEditor::open(animation, size));
+        self.status = format!("editing {id} - Close gives the room back");
+    }
+
+    /// Open a loose picture as a brand-new animation, cut by guess.
+    fn cut_new_asset(&mut self, image: &str) {
+        let Some(size) = self.sheet_size(image) else {
+            self.status = format!("{image} did not load");
+            return;
+        };
+        let draft = SheetDraft::guess(image, size);
+        let mut animation = draft.to_animation();
+        // A new id, distinct from anything already indexed, so saving
+        // adds rather than overwrites.
+        if self.project.animations.get(&animation.id).is_some() {
+            animation.id = format!("{}_2", animation.id);
+        }
+        let id = animation.id.clone();
+        let mut editor = crate::asset_editor::AssetEditor::open(animation, size);
+        // Nothing has been written yet, so it starts unsaved.
+        editor.dirty = true;
+        self.asset = Some(editor);
+        self.status = format!("cutting {image} as {id}");
+    }
+
+    /// Upload a sheet and report its size in pixels.
+    fn sheet_size(&mut self, image: &str) -> Option<Vec2> {
+        let handle = self.animation_texture(image)?;
+        let (w, h) = self.renderer.as_ref()?.texture_size(handle)?;
+        Some(Vec2::new(w as f32, h as f32))
+    }
+
+    /// Write the workbench's animation into the project's index.
+    fn save_asset(&mut self) {
+        let Some(editor) = self.asset.as_mut() else {
+            return;
+        };
+        let animation = editor.animation.clone();
+        let id = animation.id.trim().to_string();
+        if id.is_empty() {
+            return;
+        }
+        // A rename replaces rather than duplicates: the old entry is
+        // the thing being renamed, not a sibling of it.
+        if editor.original_id != id {
+            self.project.animations.remove(&editor.original_id);
+        }
+        self.project.animations.insert(animation);
+        let dir = self.project.root.join(infengine_adventure::anim::ANIMATION_DIR);
+        match infengine_adventure::anim::save_index(&self.project.animations, &dir) {
+            Ok(()) => {
+                if let Some(editor) = self.asset.as_mut() {
+                    editor.dirty = false;
+                    editor.original_id = id.clone();
+                }
+                self.collect_animations();
+                self.status = format!("saved {id}");
+            }
+            Err(err) => {
+                warn!(%err, "could not write the animation index");
+                self.status = err.to_string();
+            }
         }
     }
 
@@ -778,6 +860,11 @@ impl Editor {
         }
         if actions.save {
             self.save_graph();
+        }
+        if let Some(id) = actions.edit_animation {
+            // From a node straight to the animation it names, which is
+            // the trip a scene author makes constantly.
+            self.open_asset(&id);
         }
         if actions.run
             && let Some(script) = self.graph_ui.to_script()
@@ -1221,6 +1308,9 @@ impl Editor {
         }
         if let Some(id) = actions.hear {
             self.play_sound_id(&id);
+        }
+        if let Some(id) = actions.edit_animation {
+            self.open_asset(&id);
         }
         if actions.play {
             let script = self.scene_script_id();

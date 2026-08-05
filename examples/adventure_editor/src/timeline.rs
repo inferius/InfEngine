@@ -68,6 +68,8 @@ pub struct TimelineActions {
     pub pick_scene: Option<String>,
     /// A sound or track the details column asked to hear.
     pub hear: Option<String>,
+    /// An animation the details column asked to open on the workbench.
+    pub edit_animation: Option<String>,
 }
 
 /// What a dragged bar or edge snaps to. Both are the author's to turn
@@ -866,6 +868,17 @@ fn details(
             }
             Action::PlayAnim { animation, wait, at } => {
                 changed |= pick(ui, "animation", animation, pickers.animations);
+                if !animation.is_empty()
+                    && ui
+                        .small_button(crate::lang::t("✎ Edit", "✎ Upravit"))
+                        .on_hover_text(crate::lang::t(
+                            "Open it on the workbench: the sheet, the cut, the timing",
+                            "Otevři ji na pracovním stole: arch, řez, časování",
+                        ))
+                        .clicked()
+                {
+                    actions.edit_animation = Some(animation.clone());
+                }
                 changed |= ui.checkbox(wait, "wait for it").changed();
                 let mut placed = at.is_some();
                 if ui

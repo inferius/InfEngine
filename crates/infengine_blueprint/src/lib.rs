@@ -1269,6 +1269,22 @@ pub struct BlueprintEditor {
     /// in the game C# scripts. Mirrored from the workspace before
     /// each show(); the context menu + inspector dropdown consume it.
     pub callable_methods: Vec<cs_scan::BlueprintCallableMethod>,
+    /// A94: what a param may be, by param name.
+    ///
+    /// The host fills this with what its project actually holds - the
+    /// adventure editor puts every animation under `animation`, every
+    /// sound under `sound`, every room under `room` - and the generic
+    /// param editor offers a picker instead of a blank box. Typing an
+    /// animation's name from memory is how a scene ends up pointing at
+    /// nothing, and the graph had no other way to say what exists.
+    pub param_options: HashMap<String, Vec<String>>,
+    /// A94: params naming an asset the host can open on a workbench of
+    /// its own. Those get an Edit button, reported through
+    /// [`BlueprintEditor::take_open_asset`].
+    pub param_editable: std::collections::HashSet<String>,
+    /// Set when the user asked to open the asset a param names: the
+    /// param's name and its value.
+    open_asset: Option<(String, String)>,
     /// Find-in-graph state. `find_open` toggles the small floating
     /// search panel; `find_query` is the live filter; the canvas
     /// reads both each frame and offers click-to-jump for matches.
@@ -1296,6 +1312,15 @@ impl BlueprintEditor {
             blueprint,
             ..Self::default()
         }
+    }
+
+    /// A94: the asset the user asked to open, taken once.
+    ///
+    /// Returned rather than opened here: what "open an animation"
+    /// means belongs to the host, and the graph should not have to
+    /// know it has a workbench.
+    pub fn take_open_asset(&mut self) -> Option<(String, String)> {
+        self.open_asset.take()
     }
 
     /// How much bigger than its authored size a node is drawn.
@@ -2091,17 +2116,61 @@ impl BlueprintEditor {
                 // so user-registered node kinds can be tweaked. New
                 // keys can't be added here - those come from a custom
                 // inspector the host registers later.
+                //
+                // A94: a param the host described in `param_options`
+                // gets a picker of what the project actually holds,
+                // and one in `param_editable` gets an Edit button that
+                // opens the asset it names. Typing an animation's name
+                // from memory is how a scene points at nothing.
                 if node.params.is_empty() {
                     ui.label("(no params)");
                 } else {
                     let keys: Vec<String> = node.params.keys().cloned().collect();
                     for k in keys {
                         let mut v = node.params.get(&k).cloned().unwrap_or_default();
+                        let options = self.param_options.get(&k);
                         ui.horizontal(|ui| {
                             ui.label(&k);
-                            if ui.text_edit_singleline(&mut v).changed() {
-                                node.params.insert(k.clone(), v);
-                                dirty = true;
+                            match options {
+                                Some(known) if !known.is_empty() => {
+                                    egui::ComboBox::from_id_salt(format!(
+                                        "param_{}_{}",
+                                        node.id.0, k
+                                    ))
+                                    .selected_text(if v.is_empty() {
+                                        "(none)"
+                                    } else {
+                                        v.as_str()
+                                    })
+                                    .width(170.0)
+                                    .show_ui(ui, |ui| {
+                                        for option in known {
+                                            if ui
+                                                .selectable_label(&v == option, option)
+                                                .clicked()
+                                            {
+                                                v = option.clone();
+                                                node.params.insert(k.clone(), v.clone());
+                                                dirty = true;
+                                            }
+                                        }
+                                    });
+                                }
+                                _ => {
+                                    if ui.text_edit_singleline(&mut v).changed() {
+                                        node.params.insert(k.clone(), v.clone());
+                                        dirty = true;
+                                    }
+                                }
+                            }
+                            if self.param_editable.contains(&k)
+                                && !v.is_empty()
+                                && ui
+                                    .small_button("✎")
+                                    .on_hover_text("Open this asset on its own workbench")
+                                    .clicked()
+                            {
+                                self.open_asset = Some((k.clone(), v.clone()));
                             }
                         });
                     }

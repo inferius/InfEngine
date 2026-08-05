@@ -90,6 +90,10 @@ pub struct LibraryActions {
     pub edit_screens: bool,
     /// A room to create, by the name typed for it.
     pub new_room: Option<String>,
+    /// An animation to open on the workbench, in its own workspace.
+    pub edit_animation: Option<String>,
+    /// A picture to cut into a new animation.
+    pub cut_sheet: Option<String>,
 }
 
 /// Draw the panel. Returns what was asked for; opening a room goes
@@ -419,13 +423,26 @@ fn pictures_shelf(
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .small_button("+")
-                    .on_hover_text("Show this picture for a while, as a timeline step")
+                    .on_hover_text(crate::lang::t(
+                        "Show this picture for a while, as a timeline step",
+                        "Ukaž tenhle obrázek na chvíli, jako krok na ose",
+                    ))
                     .clicked()
                 {
                     actions.add = Some(Action::ShowImage {
                         image: name.to_string(),
                         seconds: 2.0,
                     });
+                }
+                if ui
+                    .small_button("✂")
+                    .on_hover_text(crate::lang::t(
+                        "Cut it into an animation on the workbench",
+                        "Rozřež ho na animaci na pracovním stole",
+                    ))
+                    .clicked()
+                {
+                    actions.cut_sheet = Some(name.to_string());
                 }
             });
         });
@@ -482,6 +499,16 @@ fn animations_shelf(
                         wait: true,
                         at: None,
                     });
+                }
+                if ui
+                    .small_button("✎")
+                    .on_hover_text(t(
+                        "Open it on the workbench: the sheet, the cut, the timing",
+                        "Otevři ji na pracovním stole: arch, řez, časování",
+                    ))
+                    .clicked()
+                {
+                    actions.edit_animation = Some(name.to_string());
                 }
                 let toggle = if playing_here { "⏹" } else { "▶" };
                 if ui
