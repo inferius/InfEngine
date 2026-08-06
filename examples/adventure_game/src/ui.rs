@@ -465,9 +465,19 @@ fn draw_widget_text(
         return paint(ui, bounds, text, size, align, colour);
     };
     let atlas = texture.size_vec2();
-    // Sized like the widget asked, in whole pixels of the face.
-    let scale = (size / font.line_height.max(1) as f32).floor().max(1.0);
-    let total = font.measure(text) * scale;
+    // Sized like the widget asked, in whole pixels of the face - but
+    // never wider than the widget it sits in.
+    //
+    // A bitmap face grows in both directions at once: asking for text
+    // three times the atlas height also makes every letter three times
+    // wider, and a title that fitted its box as a proportional font ran
+    // off both edges of the screen as this one. So the box has the last
+    // word, which is what a menu means by a widget's rectangle.
+    let natural = font.measure(text).max(glam::Vec2::ONE);
+    let by_height = size / font.line_height.max(1) as f32;
+    let by_width = bounds.width() / natural.x;
+    let scale = by_height.min(by_width).floor().max(1.0);
+    let total = natural * scale;
     let origin = match align {
         Align::Left => egui::pos2(bounds.left(), bounds.center().y - total.y * 0.5),
         Align::Center => bounds.center() - egui::vec2(total.x * 0.5, total.y * 0.5),

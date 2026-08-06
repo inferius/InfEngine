@@ -337,15 +337,23 @@ impl AppHandler for Game {
             return;
         }
         match key {
-            // Escape opens the pause menu if the game has one, and
-            // closes whatever is open otherwise.
+            // A100: Escape goes back, and the front door has no back.
+            //
+            // A title screen before the game has begun is not something
+            // to dismiss: doing so left the player in a room nobody had
+            // started, where Escape then offered to resume and save a
+            // game that did not exist.
             Key::Escape => {
                 if self.host.screen.is_some() {
-                    let request = self.host.fire(
-                        &infengine_adventure::screen::ScreenAction::Close,
-                    );
-                    self.perform(request);
-                } else if self.host.project.screen("pause").is_some() {
+                    if self.host.started {
+                        let request = self.host.fire(
+                            &infengine_adventure::screen::ScreenAction::Close,
+                        );
+                        self.perform(request);
+                    }
+                } else if self.host.started
+                    && self.host.project.screen("pause").is_some()
+                {
                     self.host.screen = Some("pause".into());
                 }
             }

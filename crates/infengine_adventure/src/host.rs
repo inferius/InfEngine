@@ -135,6 +135,13 @@ pub struct Host {
     /// Whether the launch intro is still running - the stretch the
     /// player is allowed to skip with a click or Escape.
     pub intro: bool,
+    /// A100: whether the player has actually entered the game.
+    ///
+    /// A title screen is the front door, not a pause: Escape there used
+    /// to dismiss it into a room nobody had started, where the next
+    /// Escape offered Resume and Save for a game that had never begun.
+    /// One flag says which side of the door we are on.
+    pub started: bool,
     /// What happened, newest last.
     pub log: Vec<Note>,
     /// How much of the log to keep.
@@ -177,6 +184,7 @@ impl Host {
             verb: Verb::Walk,
             screen: None,
             beneath: Vec::new(),
+            started: false,
             intro: false,
             log: Vec::new(),
             log_limit: 200,
@@ -212,6 +220,7 @@ impl Host {
     /// Begin the story: the starting room, with a fresh state.
     pub fn new_game(&mut self) -> Request {
         self.intro = false;
+        self.started = true;
         let manifest = self.manifest();
         self.game.state = GameState::default();
         self.screen = None;
@@ -307,6 +316,7 @@ impl Host {
                 self.screen = None;
                 Request::default()
             }
+            // Loading is entering the game as much as New Game is.
             ScreenAction::Open { screen } => {
                 if self.project.screen(screen).is_some() {
                     if let Some(open) = self.screen.replace(screen.clone()) {
@@ -333,7 +343,11 @@ impl Host {
                 self.save(*slot);
                 Request::default()
             }
-            ScreenAction::LoadGame { slot } => self.load(*slot),
+            ScreenAction::LoadGame { slot } => {
+                let request = self.load(*slot);
+                self.started = true;
+                request
+            }
             ScreenAction::RunScript { script } => {
                 if !self.game.run_script(script) {
                     self.note(Note::Missing(format!("script {script}")));
@@ -535,6 +549,37 @@ pub fn reading_time(text: &str) -> f32 {
 mod tests {
     use super::*;
     use crate::screen;
+
+    #[test]
+    fn a_game_is_not_started_until_somebody_starts_it() {
+        // A100: the front door. Escape on a title screen used to dismiss
+        // it into a room nobody had entered, where the next Escape
+        // offered to resume and save a game that had never begun.
+        let root = temp("front_door");
+        build(&root);
+        screen::save(
+            &Screen::new("title", Vec2::new(320.0, 200.0)),
+            &root.join(screen::SCREEN_DIR),
+        )
+        .expect("screen");
+        crate::pack::GameManifest {
+            start_room: "hall".into(),
+            start_screen: "title".into(),
+            ..Default::default()
+        }
+        .save(&root)
+        .expect("manifest");
+
+        let mut host = Host::new(Project::open(&root));
+        host.start();
+        assert_eq!(host.screen.as_deref(), Some("title"));
+        assert!(!host.started, "showing a title is not playing");
+
+        host.fire(&ScreenAction::NewGame);
+        assert!(host.started, "and pressing New Game is");
+
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn back_out_of_a_submenu_lands_on_the_menu_it_came_from() {
