@@ -153,6 +153,18 @@ fn u32_at(data: &[u8], at: usize) -> Option<u32> {
 
 /// Decode a `.WSA` file.
 pub fn decode(data: &[u8]) -> Result<Animation, WsaError> {
+    decode_over(data, None)
+}
+
+/// Decode a `.WSA` that plays over what is already on screen.
+///
+/// A file whose offset table opens with a zero stores no first frame:
+/// its deltas apply to whatever the screen holds when it starts - the
+/// backdrop, or the last frame of the animation before it. `base` is
+/// that screen content, `width * height` palette indices. Without it,
+/// such a file decodes as if the screen were blank, which shows exactly
+/// the pixels the animation touches and nothing else.
+pub fn decode_over(data: &[u8], base: Option<&[u8]>) -> Result<Animation, WsaError> {
     if data.len() < HEADER_LEN {
         return Err(WsaError::TooSmall { len: data.len() });
     }
@@ -177,14 +189,49 @@ pub fn decode(data: &[u8]) -> Result<Animation, WsaError> {
     }
 
     // The table carries two extra entries past the frames: the end of
-    // the last frame, and a trailing zero.
+    // the last frame, and a trailing zero. Where it starts is the one
+    // thing the releases disagree on: the files inside the PAKs have a
+    // ten-byte header whose flags word may put a palette after the
+    // table, the loose files of an installed game go straight from the
+    // eight-byte header into the table with no flags at all. The right
+    // layout identifies itself - offsets are absolute, and the first
+    // one lands exactly where the table (plus palette) ends.
     let table_len = (frames + 2) * 4;
-    let table_end = HEADER_LEN + table_len;
+    let mut layout = None;
+    'starts: for start in [HEADER_LEN - 2, HEADER_LEN] {
+        if data.len() < start + table_len {
+            continue;
+        }
+        // A zero in the first slot means the file stores no first frame
+        // - its deltas play over what the screen already shows - and the
+        // slot that must land on the table's end is the next one.
+        for lead in [0usize, 4] {
+            let probe = u32_at(data, start + lead).unwrap_or(0) as usize;
+            if lead == 4 && u32_at(data, start) != Some(0) {
+                continue;
+            }
+            for palette_len in [0usize, VGA_PALETTE_BYTES] {
+                if probe == start + table_len + palette_len {
+                    layout = Some((start, lead, palette_len > 0));
+                    break 'starts;
+                }
+            }
+        }
+    }
+    // Files that do not self-identify keep the old reading: ten-byte
+    // header, flags bit for the palette, offsets resolved through the
+    // first entry further down.
+    let (table_start, lead, palette_by_layout) =
+        layout.unwrap_or((HEADER_LEN, 0, flags & FLAG_HAS_PALETTE != 0));
+    let table_end = table_start + table_len;
     if table_end > data.len() {
         return Err(WsaError::TruncatedTable);
     }
+    // Where the frame ranges are read from: past the leading zero, so a
+    // screen-over file's first stored chunk is its first frame's delta.
+    let entries_at = table_start + lead;
 
-    let palette = if flags & FLAG_HAS_PALETTE != 0 {
+    let palette = if palette_by_layout {
         data.get(table_end..table_end + VGA_PALETTE_BYTES)
             .and_then(Palette::from_vga_6bit)
     } else {
@@ -195,16 +242,22 @@ pub fn decode(data: &[u8]) -> Result<Animation, WsaError> {
     // first table entry points at the first frame, and the first frame
     // begins right after the header, so the difference is the base.
     let laid_out = table_end + if palette.is_some() { VGA_PALETTE_BYTES } else { 0 };
-    let first = u32_at(data, HEADER_LEN).unwrap_or(0) as usize;
-    let base = laid_out.saturating_sub(first);
+    let first = u32_at(data, entries_at).unwrap_or(0) as usize;
+    let file_base = laid_out.saturating_sub(first);
 
     let pixels = width as usize * height as usize;
     let mut buffer = vec![0u8; pixels];
+    if lead > 0
+        && let Some(screen) = base
+        && screen.len() == pixels
+    {
+        buffer.copy_from_slice(screen);
+    }
     let mut out = Vec::with_capacity(frames);
 
     for frame in 0..frames {
-        let start = u32_at(data, HEADER_LEN + frame * 4).unwrap_or(0) as usize;
-        let end = u32_at(data, HEADER_LEN + (frame + 1) * 4).unwrap_or(0) as usize;
+        let start = u32_at(data, entries_at + frame * 4).unwrap_or(0) as usize;
+        let end = u32_at(data, entries_at + (frame + 1) * 4).unwrap_or(0) as usize;
         // An empty range is a frame the file does not store: the buffer
         // carries over, which is how a WSA holds a still. Frame 0
         // legitimately starts at offset 0, so emptiness has to be judged
@@ -213,7 +266,7 @@ pub fn decode(data: &[u8]) -> Result<Animation, WsaError> {
             out.push(buffer.clone());
             continue;
         }
-        let (from, to) = (base + start, base + end);
+        let (from, to) = (file_base + start, file_base + end);
         let Some(chunk) = data.get(from..to.min(data.len())) else {
             return Err(WsaError::BadFrameRange { frame });
         };
