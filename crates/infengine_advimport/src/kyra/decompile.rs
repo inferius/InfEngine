@@ -95,6 +95,12 @@ const OPEN_WSA_SLOT: usize = 1;
 /// the sixth is the only one whose values stay inside that. The others
 /// run to 112 and 240, which are frame numbers and screen positions.
 const PLAY_WSA_SLOT: usize = 5;
+/// Where [`FN_PLAY_WSA`]'s screen position starts: arguments 2 and 3.
+///
+/// Same method as the slot: across all 782 seven-argument calls in the
+/// game, argument 2 stays within 0..=320 and argument 3 within 0..=200,
+/// and no other pair does - screen coordinates, nothing else fits.
+const PLAY_WSA_AT: usize = 2;
 
 /// The verb a click carries in a game that has no verb menu.
 const CLICK: Verb = Verb::Use;
@@ -369,6 +375,13 @@ fn translate(
         // The slot says which file, and the file is imported under the
         // room's name and its own. A slot nothing opened stays unknown
         // rather than pointing at an animation that is not there.
+        //
+        // A102: the third and fourth arguments are where the frames go.
+        // Measured, not assumed: across all 782 seven-argument calls in
+        // the game, argument 2 is always within 0..=320 and argument 3
+        // within 0..=200 - screen coordinates, nothing else fits. They
+        // were dropped before, which drew every scripted animation at
+        // its sheet's own idea of home and scattered the intro.
         FN_PLAY_WSA => site
             .args
             .get(PLAY_WSA_SLOT)
@@ -378,7 +391,7 @@ fn translate(
             .map(|animation| Action::PlayAnim {
                 animation,
                 wait: true,
-                at: None,
+                at: point(&site.args, PLAY_WSA_AT),
             }),
         _ => None,
     };
@@ -1025,13 +1038,18 @@ mod tests {
     }
 
     /// A call to `displayWsaSequentialFrames` with `slot` in its sixth
-    /// argument, where the game puts it.
+    /// argument and the screen position in its third and fourth, where
+    /// the game puts them: frames 0..20, at 120,8, delay 14.
     fn play_wsa(slot: i8) -> Vec<u8> {
+        // Pushed last argument first, so argument 0 lands nearest the
+        // call.
         let mut v = push(1);
         v.extend(push(slot));
-        for _ in 0..5 {
-            v.extend(push(0));
-        }
+        v.extend(push(14));
+        v.extend(push(8));
+        v.extend(push(120));
+        v.extend(push(20));
+        v.extend(push(0));
         v.extend(call(FN_PLAY_WSA as u16));
         v
     }
@@ -1039,7 +1057,9 @@ mod tests {
     #[test]
     fn an_animation_is_named_by_the_file_the_slot_was_opened_with() {
         // The name is in the script's own string table, so a room names
-        // its own animations.
+        // its own animations - and the call's own coordinates say where
+        // the frames go, which is the A102 fix: dropping them drew every
+        // scripted animation at its sheet's idea of home.
         let mut code = open_wsa(1, 0);
         code.extend(play_wsa(0));
         let out = decompile("belroom", &script_saying(code, &["x", "RINGBELL.WSA"]));
@@ -1048,7 +1068,7 @@ mod tests {
             Some(&Action::PlayAnim {
                 animation: "belroom_ringbell".into(),
                 wait: true,
-                at: None,
+                at: Some(glam::Vec2::new(120.0, 8.0)),
             })
         );
     }
@@ -1324,7 +1344,7 @@ mod tests {
             Some(&Action::PlayAnim {
                 animation: "belroom_ringbell".into(),
                 wait: true,
-                at: None,
+                at: Some(glam::Vec2::new(120.0, 8.0)),
             }),
             "{:?}",
             out.scripts[0].actions
@@ -1350,7 +1370,7 @@ mod tests {
             Some(&Action::PlayAnim {
                 animation: "belroom_ringbell".into(),
                 wait: true,
-                at: None,
+                at: Some(glam::Vec2::new(184.0, 64.0)),
             }),
             "{:?}",
             out.scripts[0].actions
@@ -1487,7 +1507,7 @@ mod tests {
             Some(&Action::PlayAnim {
                 animation: "belroom_ringbell".into(),
                 wait: true,
-                at: None,
+                at: Some(glam::Vec2::new(120.0, 8.0)),
             })
         );
     }
