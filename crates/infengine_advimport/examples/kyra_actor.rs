@@ -86,7 +86,28 @@ fn main() {
 
     let mut written = Vec::new();
     for (id, (top, bottom)) in named {
-        let Some(boxes) = frames(&pixels, width, *top, *bottom) else {
+        let mut raw = segments(&pixels, width, *top, *bottom);
+        // The side band opens with the standing figure - the pose the
+        // game shows when Brandon stops - and only then the walk. Taking
+        // six from the front of the band puts the stand inside the
+        // cycle, and the walk blinks into standing once every loop. So
+        // the first segment of the side band becomes the idle animation,
+        // and the walk is cut from what follows it.
+        if id == "actor_walk_right" && raw.len() > WALK_FRAMES {
+            let (left, right) = raw.remove(0);
+            // The segment is two standing figures that touch - facing
+            // the viewer, then facing along the walk. The idle the game
+            // shows is the front-facing one on the left.
+            let stand = (left, left + (right - left) / 2);
+            let frame = (stand.1 - stand.0 + 1, bottom - top + 1);
+            let sheet = cut(&pixels, width, *top, frame, &[stand]);
+            let rel = "animations/actor_stand.png".to_string();
+            if save(&project.join(&rel), frame.0, frame.1, &sheet).is_ok() {
+                println!("   actor_stand: 1 frame of {}x{}", frame.0, frame.1);
+                written.push(("actor_stand", rel, 1, frame));
+            }
+        }
+        let Some(boxes) = frames(raw) else {
             println!("{id}: no frames found");
             continue;
         };
@@ -137,14 +158,19 @@ fn main() {
         return;
     };
     manifest.actor = Some(ActorLook {
-        // The sheet's side view faces right, so the left-facing walk is
-        // left empty and drawn mirrored. Naming both would draw the
-        // figure walking left while facing right.
-        walk_left: String::new(),
-        walk_right: "actor_walk_right".into(),
+        // The sheet's side view faces LEFT - the id keeps the name the
+        // project has known it by. Naming it on the left side and
+        // leaving the right empty draws the right-facing walk mirrored;
+        // naming both sides was the moonwalk.
+        walk_left: "actor_walk_right".into(),
+        walk_right: String::new(),
         walk_back: "actor_walk_back".into(),
         walk_front: "actor_walk_front".into(),
-        idle: String::new(),
+        idle: if written.iter().any(|(id, ..)| *id == "actor_stand") {
+            "actor_stand".into()
+        } else {
+            String::new()
+        },
     });
     match manifest.save(&project) {
         Ok(()) => println!("manifest now names the actor"),
@@ -170,31 +196,32 @@ fn bands(pixels: &[u8], width: usize, height: usize) -> Vec<(usize, usize)> {
     out
 }
 
-/// Frame size and the left edge of each frame in a band.
-///
-/// Frames are cropped tight in the sheet and are not the same width, so
-/// the box is the widest of them and each frame is centred in it.
-/// Anything much wider than the rest is two figures that touch, and is
-/// split down the middle rather than kept as one enormous frame.
-fn frames(
-    pixels: &[u8],
-    width: usize,
-    top: usize,
-    bottom: usize,
-) -> Option<Vec<(usize, usize)>> {
-    let mut segments: Vec<(usize, usize)> = Vec::new();
+/// Columns that hold something in a band, grouped into segments - one
+/// per figure, except where figures touch.
+fn segments(pixels: &[u8], width: usize, top: usize, bottom: usize) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
     let mut start = None;
     for x in 0..=width {
         let full = x < width && (top..=bottom).any(|y| solid(pixels, width, x, y));
         match (full, start) {
             (true, None) => start = Some(x),
             (false, Some(left)) => {
-                segments.push((left, x - 1));
+                out.push((left, x - 1));
                 start = None;
             }
             _ => {}
         }
     }
+    out
+}
+
+/// The frame boxes a band's segments make.
+///
+/// Frames are cropped tight in the sheet and are not the same width, so
+/// the box is the widest of them and each frame is centred in it.
+/// Anything much wider than the rest is two figures that touch, and is
+/// split down the middle rather than kept as one enormous frame.
+fn frames(segments: Vec<(usize, usize)>) -> Option<Vec<(usize, usize)>> {
     if segments.is_empty() {
         return None;
     }
