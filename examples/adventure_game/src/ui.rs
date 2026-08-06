@@ -390,7 +390,8 @@ fn widget_ui(
                 ui,
                 bounds,
                 &text_of(host, line),
-                *size * scale,
+                *size,
+                scale,
                 *align,
                 egui::Color32::WHITE,
                 host,
@@ -419,7 +420,8 @@ fn widget_ui(
                 ui,
                 bounds,
                 &text_of(host, line),
-                *size * scale,
+                *size,
+                scale,
                 *align,
                 colour,
                 host,
@@ -452,6 +454,7 @@ fn draw_widget_text(
     bounds: egui::Rect,
     text: &str,
     size: f32,
+    screen_scale: f32,
     align: Align,
     colour: egui::Color32,
     host: &Host,
@@ -459,24 +462,25 @@ fn draw_widget_text(
     art: &mut HashMap<String, Option<egui::TextureHandle>>,
 ) {
     let Some(font) = face else {
-        return paint(ui, bounds, text, size, align, colour);
+        return paint(ui, bounds, text, size * screen_scale, align, colour);
     };
     let Some(texture) = art_for(ui.ctx(), host, art, &font.image).clone() else {
-        return paint(ui, bounds, text, size, align, colour);
+        return paint(ui, bounds, text, size * screen_scale, align, colour);
     };
     let atlas = texture.size_vec2();
-    // Sized like the widget asked, in whole pixels of the face - but
-    // never wider than the widget it sits in.
+    // A bitmap face comes in whole multiples of itself, and the
+    // multiple is decided in the screen's own design units - so every
+    // widget asking for the same size draws at the same multiple, and
+    // Load cannot come out bigger than New Game because its word is
+    // shorter. The screen scale then blows the whole menu up together.
     //
-    // A bitmap face grows in both directions at once: asking for text
-    // three times the atlas height also makes every letter three times
-    // wider, and a title that fitted its box as a proportional font ran
-    // off both edges of the screen as this one. So the box has the last
-    // word, which is what a menu means by a widget's rectangle.
+    // The box still has the last word: a title wider than its widget
+    // drops a multiple rather than running off both edges of the
+    // screen, which is what happened when height alone decided.
     let natural = font.measure(text).max(glam::Vec2::ONE);
-    let by_height = size / font.line_height.max(1) as f32;
-    let by_width = bounds.width() / natural.x;
-    let scale = by_height.min(by_width).floor().max(1.0);
+    let design = (size / font.line_height.max(1) as f32).floor().max(1.0);
+    let fits = (bounds.width() / (natural.x * screen_scale)).floor().max(1.0);
+    let scale = design.min(fits) * screen_scale;
     let total = natural * scale;
     let origin = match align {
         Align::Left => egui::pos2(bounds.left(), bounds.center().y - total.y * 0.5),
