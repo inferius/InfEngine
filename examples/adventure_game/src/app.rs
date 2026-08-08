@@ -36,6 +36,9 @@ pub struct Game {
     /// A picture over the room, and the seconds it has left.
     /// Infinity means until the room changes.
     still: Option<(String, f32)>,
+    /// The music that is playing, held so the next PlayMusic replaces
+    /// it instead of layering a second track over it.
+    music: Option<infengine_audio::ActiveSound>,
     /// How far into the walk cycle the actor is.
     ///
     /// Kept across rooms: a figure that restarts its stride every time
@@ -73,6 +76,7 @@ impl Game {
             textures: HashMap::new(),
             animation: None,
             still: None,
+            music: None,
             step: 0.0,
             cursor: Vec2::ZERO,
             status: String::new(),
@@ -216,12 +220,20 @@ impl Game {
             let left = if seconds > 0.0 { seconds } else { f32::INFINITY };
             self.still = Some((image, left));
         }
-        for file in [request.voice, request.sound]
-            .into_iter()
-            .flatten()
-            .chain(request.music.flatten())
-        {
+        for file in [request.voice, request.sound].into_iter().flatten() {
             self.play(&file);
+        }
+        // Music replaces music: the outer Some is "a PlayMusic action
+        // happened", the inner one is the track - None stops it. Left
+        // untracked, every scene change layered a new track over the
+        // old one still playing out.
+        if let Some(music) = request.music {
+            if let Some(mut old) = self.music.take() {
+                old.stop(0.5);
+            }
+            if let Some(file) = music {
+                self.music = self.play_tracked(&file);
+            }
         }
     }
 
@@ -232,6 +244,21 @@ impl Game {
         let path = self.host.project.resolve(relative);
         if let Err(err) = audio.load_sound(&path).and_then(|s| audio.play_sound(&s)) {
             warn!(file = relative, %err, "could not play");
+        }
+    }
+
+    fn play_tracked(&mut self, relative: &str) -> Option<infengine_audio::ActiveSound> {
+        let audio = self.audio.as_mut()?;
+        let path = self.host.project.resolve(relative);
+        match audio
+            .load_sound(&path)
+            .and_then(|s| audio.play_sound_tracked(&s))
+        {
+            Ok(handle) => Some(handle),
+            Err(err) => {
+                warn!(file = relative, %err, "could not play");
+                None
+            }
         }
     }
 }
