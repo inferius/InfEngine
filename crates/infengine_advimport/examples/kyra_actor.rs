@@ -139,7 +139,15 @@ fn main() {
 
     // Register them, keeping whatever the project already had.
     let dir = project.join("animations");
-    let mut set = anim::load_index(&dir).unwrap_or_default();
+    let mut set = match anim::load_index(&dir) {
+        Ok(set) => set,
+        Err(err) => {
+            // A half-read index written back is how 700 rows were lost
+            // once; refusing is the only safe answer.
+            println!("refusing to touch a broken index: {err}");
+            return;
+        }
+    };
     for (id, rel, frames, (w, h)) in &written {
         set.insert(Animation::new(
             *id,

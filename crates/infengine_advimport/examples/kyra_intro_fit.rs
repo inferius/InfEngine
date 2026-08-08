@@ -129,10 +129,19 @@ fn main() {
     let anim_dir = project
         .as_ref()
         .map(|p| p.join(infengine_adventure::anim::ANIMATION_DIR));
-    let mut index = anim_dir
+    let mut index = match anim_dir
         .as_ref()
-        .and_then(|dir| infengine_adventure::anim::load_index(dir).ok())
-        .unwrap_or_default();
+        .map(|dir| infengine_adventure::anim::load_index(dir))
+    {
+        Some(Ok(index)) => index,
+        Some(Err(err)) => {
+            // Writing back a half-read index is how 700 rows were lost
+            // once; a broken index stops the run instead.
+            println!("refusing to touch a broken index: {err}");
+            return;
+        }
+        None => Default::default(),
+    };
 
     for piece in PIECES {
         let Some(data) = read(piece.file) else {
