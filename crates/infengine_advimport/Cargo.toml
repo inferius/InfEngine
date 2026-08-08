@@ -15,6 +15,7 @@ workspace = true
 moont = { version = "1.0.0", optional = true }
 vorbis_rs = { version = "0.5.6", optional = true }
 infengine_adventure = { path = "../infengine_adventure" }
+infengine_loca = { path = "../infengine_loca" }
 infengine_opl = { path = "../infengine_opl" }
 glam = { workspace = true }
 image = { workspace = true }
