@@ -205,10 +205,16 @@ impl Animation {
 
     /// The same rectangle as texture coordinates, given the sheet's
     /// pixel size.
+    ///
+    /// Pulled in by half a texel on every side: the frames touch in the
+    /// sheet, and sampling exactly on the shared edge picks up a column
+    /// of the neighbouring frame - seen as stray pixels flickering on
+    /// the actor's silhouette.
     pub fn frame_uv(&self, index: u32, sheet: Vec2) -> (Vec2, Vec2) {
         let (min, max) = self.frame_rect(index);
         let sheet = sheet.max(Vec2::splat(1.0));
-        (min / sheet, max / sheet)
+        let inset = Vec2::splat(0.5).min((max - min) / 2.0);
+        ((min + inset) / sheet, (max - inset) / sheet)
     }
 
     /// Width the whole sheet should be.
@@ -447,13 +453,15 @@ mod tests {
     }
 
     #[test]
-    fn texture_coordinates_span_the_frame() {
+    fn texture_coordinates_stay_half_a_texel_inside_the_frame() {
+        // Sampling exactly on the shared edge picks up the neighbouring
+        // frame, so the rectangle is pulled in by half a texel.
         let a = river();
         let (min, max) = a.frame_uv(1, Vec2::new(168.0, 32.0));
-        assert!((min.x - 1.0 / 3.0).abs() < 1e-5);
-        assert!((max.x - 2.0 / 3.0).abs() < 1e-5);
-        assert_eq!(min.y, 0.0);
-        assert_eq!(max.y, 1.0);
+        assert!((min.x - (56.0 + 0.5) / 168.0).abs() < 1e-5);
+        assert!((max.x - (112.0 - 0.5) / 168.0).abs() < 1e-5);
+        assert!((min.y - 0.5 / 32.0).abs() < 1e-5);
+        assert!((max.y - 31.5 / 32.0).abs() < 1e-5);
     }
 
     #[test]
