@@ -31,17 +31,23 @@ struct Piece {
     file: &'static str,
     col: &'static str,
     over: &'static str,
+    /// Whether this tool bakes the sheet. The story animations belong
+    /// to kyra_intro_time, which re-bakes them in played order with the
+    /// executable's exact timing - overwriting those here linearised
+    /// them again, which read on screen as a timing regression. Only
+    /// the island's looping ambients stay linear and stay here.
+    bake: bool,
 }
 
 const PIECES: &[Piece] = &[
-    Piece { id: "intro1_westwood", file: "WESTWOOD.WSA", col: "WW.COL", over: "sky" },
-    Piece { id: "intro1_kyrandia", file: "KYRANDIA.WSA", col: "WW.COL", over: "sky" },
-    Piece { id: "intro1_shore", file: "SHORE.WSA", col: "WW.COL", over: "sky" },
-    Piece { id: "intro1_destruct", file: "DESTRUCT.WSA", col: "WW.COL", over: "sky" },
-    Piece { id: "intro2_tree1", file: "TREE1.WSA", col: "TREE_EXP.COL", over: "TREE.CPS" },
-    Piece { id: "intro2_tree2", file: "TREE2.WSA", col: "TREE_EXP.COL", over: "TREE.CPS" },
-    Piece { id: "intro3_kallak", file: "KALLAK.WSA", col: "KALLAK.COL", over: "" },
-    Piece { id: "intro4_mal-kal", file: "MAL-KAL.WSA", col: "MAL-KAL.COL", over: "MAL-KAL.CPS" },
+    Piece { id: "intro1_westwood", file: "WESTWOOD.WSA", col: "WW.COL", over: "sky", bake: false },
+    Piece { id: "intro1_kyrandia", file: "KYRANDIA.WSA", col: "WW.COL", over: "sky", bake: false },
+    Piece { id: "intro1_shore", file: "SHORE.WSA", col: "WW.COL", over: "sky", bake: true },
+    Piece { id: "intro1_destruct", file: "DESTRUCT.WSA", col: "WW.COL", over: "sky", bake: true },
+    Piece { id: "intro2_tree1", file: "TREE1.WSA", col: "TREE_EXP.COL", over: "TREE.CPS", bake: false },
+    Piece { id: "intro2_tree2", file: "TREE2.WSA", col: "TREE_EXP.COL", over: "TREE.CPS", bake: false },
+    Piece { id: "intro3_kallak", file: "KALLAK.WSA", col: "KALLAK.COL", over: "", bake: false },
+    Piece { id: "intro4_mal-kal", file: "MAL-KAL.WSA", col: "MAL-KAL.COL", over: "MAL-KAL.CPS", bake: false },
 ];
 
 /// Backdrops the intro composes over, with the palette that colours
@@ -89,15 +95,27 @@ fn main() {
                 Err(err) => println!("{name}: {err}"),
             }
         }
-        if let Some((w, h, indices, palette)) = &sky {
-            let rgba = palette
+        // The scroll strip, stitched the way seq_introLogos composes
+        // its pages: the sky with the logos (TOP rows 91..195), the
+        // distant island under it (TOP rows 0..64), and the vista
+        // entering from BOTTOM row 64 down. TOP's rows 195..200 and
+        // BOTTOM's rows 0..64 never reach the screen - gluing whole
+        // files put a black bar through the pan.
+        if let (Some(top), Some(bottom)) = (screen("TOP.CPS"), screen("BOTTOM.CPS")) {
+            let mut indices = Vec::with_capacity(320 * 280);
+            indices.extend_from_slice(&top.indices[91 * 320..195 * 320]);
+            indices.extend_from_slice(&top.indices[..64 * 320]);
+            indices.extend_from_slice(&bottom.indices[64 * 320..176 * 320]);
+            let rgba = top
+                .palette
                 .as_ref()
-                .map(|p| p.expand_rgba(indices, None))
+                .or(bottom.palette.as_ref())
+                .map(|p| p.expand_rgba(&indices, None))
                 .unwrap_or_default();
             if !rgba.is_empty() {
                 let path = project.join("pictures").join("intro_sky.png");
-                match save(&path, *w as u32, *h as u32, &rgba) {
-                    Ok(()) => println!("TOP+BOTTOM -> pictures/intro_sky.png"),
+                match save(&path, 320, 280, &rgba) {
+                    Ok(()) => println!("TOP+BOTTOM -> pictures/intro_sky.png (280-row scroll strip)"),
                     Err(err) => println!("intro_sky: {err}"),
                 }
             }
@@ -165,7 +183,7 @@ fn main() {
             tree_last = anim.frames.last().cloned();
         }
 
-        if let (Some(project), Some(dir)) = (&project, &anim_dir) {
+        if let (true, Some(project), Some(dir)) = (piece.bake, &project, &anim_dir) {
             let palette = col(piece.col);
             let (w, h, rgba) = anim.to_sheet_rgba(palette.as_ref());
             let rel = format!("animations/{}.png", piece.id);
@@ -192,9 +210,9 @@ fn main() {
                 Vec2::new(anim.width as f32, anim.height as f32),
             );
             entry.columns = anim.sheet_columns();
+            entry.fps = if piece.id == "intro1_shore" { 8.0 } else { 12.0 };
+            entry.looping = piece.id == "intro1_shore";
             if let Some(old) = old {
-                entry.fps = old.fps;
-                entry.looping = old.looping;
                 entry.room = old.room;
                 entry.at = old.at;
             }
