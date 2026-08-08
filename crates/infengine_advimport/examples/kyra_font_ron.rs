@@ -67,16 +67,17 @@ fn main() {
                 if ink == 0 {
                     continue;
                 }
-                // The nibble picks a palette slot, not an intensity -
-                // treating it as alpha made the lettering a ghost of
-                // itself. Ink is ink: opaque white, tinted at draw
-                // time.
-                let _ = ink;
-                sheet.put_pixel(
-                    cx + x,
-                    cy + glyph.top as u32 + y,
-                    image::Rgba([255, 255, 255, 255]),
-                );
+                // The nibble picks a palette slot: 1 is the outline and
+                // shadow, higher slots are the fill. Painting them all
+                // white merged the outline into the letter and every
+                // word became a blob - the outline stays dark, the fill
+                // is white and gets tinted at draw time.
+                let colour = if ink == 1 {
+                    image::Rgba([16, 16, 16, 255])
+                } else {
+                    image::Rgba([255, 255, 255, 255])
+                };
+                sheet.put_pixel(cx + x, cy + glyph.top as u32 + y, colour);
             }
         }
         if glyph.is_empty() {
