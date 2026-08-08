@@ -139,18 +139,32 @@ impl Game {
 
     /// Enter a room and run its entry script, if it has one.
     ///
-    /// `<room>.entry` is what an authored room uses. `<room>.entry0` is
-    /// the fallback because an imported game numbers its scripts by the
-    /// source's own entry table, and the first of those is the routine
-    /// the original ran on arrival.
+    /// `<room>.entry` is what an authored room uses and runs alone. An
+    /// imported game numbers its scripts by the source's function
+    /// table, and the original ran two of those on arrival: function 0
+    /// (scene init) and then function 2 (the entry scene itself - the
+    /// willow's greeting lives there, and a room like it has no
+    /// function 0 at all). So both run, in that order, whichever of
+    /// them exist.
     pub fn enter(&mut self, room: &Room, entry: Option<&str>) {
         self.state.enter(room, entry);
         self.runner.stop();
         let prefix = room.script_prefix();
-        let id = [format!("{prefix}.entry"), format!("{prefix}.entry0")]
-            .into_iter()
-            .find(|id| self.scripts.contains_key(id));
-        if let Some(script) = id.and_then(|id| self.scripts.get(&id)).cloned() {
+        if let Some(script) = self.scripts.get(&format!("{prefix}.entry")).cloned() {
+            self.runner.start(&script);
+            return;
+        }
+        let mut combined: Option<crate::action::Script> = None;
+        for id in [format!("{prefix}.entry0"), format!("{prefix}.entry2")] {
+            let Some(part) = self.scripts.get(&id) else {
+                continue;
+            };
+            match &mut combined {
+                None => combined = Some(part.clone()),
+                Some(script) => script.actions.extend(part.actions.iter().cloned()),
+            }
+        }
+        if let Some(script) = combined {
             self.runner.start(&script);
         }
     }
@@ -714,6 +728,52 @@ mod tests {
         game.step(&room, 0.016);
         assert!(game.state.flag("arrived"));
         assert_eq!(game.scripts_for("hall"), vec!["hall.entry0", "hall.entry7"]);
+    }
+
+    #[test]
+    fn arrival_runs_the_init_and_then_the_entry_scene() {
+        // The original runs function 0 and then function 2 on entering
+        // a scene - and the willow's greeting is a function 2 in a room
+        // with no function 0 at all, so each runs when present.
+        let room = room();
+        let mut scripts = HashMap::new();
+        let mut init = Script::new("hall.entry0");
+        init.push(Action::SetFlag {
+            flag: "init".into(),
+            value: true,
+        });
+        scripts.insert(init.id.clone(), init);
+        let mut scene = Script::new("hall.entry2");
+        scene.push(Action::SetFlag {
+            flag: "scene".into(),
+            value: true,
+        });
+        scripts.insert(scene.id.clone(), scene);
+
+        let mut game = Game::new(scripts);
+        game.enter(&room, None);
+        for _ in 0..4 {
+            game.step(&room, 0.016);
+        }
+        assert!(game.state.flag("init"));
+        assert!(game.state.flag("scene"));
+    }
+
+    #[test]
+    fn a_room_with_only_an_entry_scene_still_greets() {
+        let room = room();
+        let mut scripts = HashMap::new();
+        let mut scene = Script::new("hall.entry2");
+        scene.push(Action::SetFlag {
+            flag: "scene".into(),
+            value: true,
+        });
+        scripts.insert(scene.id.clone(), scene);
+
+        let mut game = Game::new(scripts);
+        game.enter(&room, None);
+        game.step(&room, 0.016);
+        assert!(game.state.flag("scene"));
     }
 
     #[test]
