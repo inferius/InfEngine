@@ -155,6 +155,28 @@ pub fn held_item(renderer: &mut Renderer, view: &View, cursor: Vec2, handle: Tex
     );
 }
 
+/// Draw the game's own pointer at the mouse.
+///
+/// Hot spot at the top-left for the plain arrow and in the middle for
+/// the directional ones, which is where each of them points.
+pub fn cursor(
+    renderer: &mut Renderer,
+    view: &View,
+    at: Vec2,
+    handle: Texture2dHandle,
+    centred: bool,
+) {
+    let Some((w, h)) = renderer.texture_size(handle) else {
+        return;
+    };
+    let size = Vec2::new(w as f32, h as f32) * view.scale;
+    let corner = if centred { at - size * 0.5 } else { at };
+    renderer.draw_texture(
+        handle,
+        SpriteInstance::new([corner.x, flip(view, corner.y)], [size.x, size.y]),
+    );
+}
+
 pub fn still(renderer: &mut Renderer, view: &View, handle: Texture2dHandle) {
     let Some((w, h)) = renderer.texture_size(handle) else {
         return;

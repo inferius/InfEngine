@@ -88,6 +88,10 @@ const FN_CLOSE_WSA: i32 = 42;
 /// Plays a run of frames from a slot: the room's animations, 854 of
 /// them across the game and by far the commonest call left untranslated.
 const FN_PLAY_WSA: i32 = 64;
+/// `runWsaFromBeginningToEnd(x, y, delay, slot, worldUpdate)` - a whole
+/// animation played through where it stands: the branch that carries
+/// Brandon down out of the tree, the staircase slide, the trapdoor.
+const FN_RUN_WSA: i32 = 43;
 /// Which argument of [`FN_OPEN_WSA`] names the file, and which the slot.
 const OPEN_WSA_NAME: usize = 0;
 const OPEN_WSA_SLOT: usize = 1;
@@ -396,6 +400,20 @@ fn translate(
         // within 0..=200 - screen coordinates, nothing else fits. They
         // were dropped before, which drew every scripted animation at
         // its sheet's own idea of home and scattered the intro.
+        // Played start to finish and waited on, which is what "from
+        // beginning to end" means and why the actor does not walk off
+        // mid-lift.
+        FN_RUN_WSA if site.args.len() >= 4 => site
+            .args
+            .get(3)
+            .and_then(|slot| slots.get(*slot))
+            .map(|stem| format!("{room}_{stem}"))
+            .filter(|id| known.has(id))
+            .map(|animation| Action::PlayAnim {
+                animation,
+                wait: true,
+                at: point(&site.args, 0),
+            }),
         FN_PLAY_WSA => site
             .args
             .get(PLAY_WSA_SLOT)
@@ -582,6 +600,16 @@ impl Pass<'_> {
     /// editor shows a branch on something a reader can act on, and the
     /// runtime takes the else side, a decision it can explain.
     fn condition(&self, at: usize) -> (Condition, bool) {
+        // A click-region test first: the rooms' click hooks ask "was
+        // that on the window, the tree, the way down" by calling a
+        // local subroutine that compares the click registers against a
+        // rectangle. It is a jump rather than a Call, so the walk below
+        // never saw it and every gate came through unanswerable - which
+        // flattened whole conversations into playing on any click.
+        if let Some(rect) = self.click_rect_before(at) {
+            return (rect, false);
+        }
+
         // Back to the source of the value being tested: a call's
         // answer, or a register the engine filled before the script
         // ran - the held item travels in register 4.
@@ -741,6 +769,69 @@ impl Pass<'_> {
                 flip,
             ),
         }
+    }
+
+    /// A click-in-rectangle test, when that is what stands before this
+    /// jump.
+    ///
+    /// The shape, as every room's click hook writes it: the two corners
+    /// pushed as literals with their spans worked out, the top-left
+    /// pushed again, then a jump into the file's own helper and a stack
+    /// unwind of four. The helper itself is the same in every room -
+    /// register 1 and 2, the click's x and y, between the corners.
+    fn click_rect_before(&self, at: usize) -> Option<Condition> {
+        // Back over the answer's bookkeeping to the local call.
+        let mut back = at;
+        let mut unwound = false;
+        loop {
+            if back == 0 {
+                return None;
+            }
+            back -= 1;
+            match self.instructions[back].op {
+                Op::PushReturn => continue,
+                Op::AddStack => {
+                    // Four arguments is the helper's signature; anything
+                    // else is a different call.
+                    if self.instructions[back].operand != Some(4) {
+                        return None;
+                    }
+                    unwound = true;
+                }
+                Op::JumpOrConst if unwound => break,
+                _ => return None,
+            }
+        }
+
+        // The constants the call was given, in the order they were
+        // pushed: x1, x0, 1, y1, y0, 1, x0, y0.
+        let mut constants = Vec::new();
+        let mut scan = back;
+        while scan > 0 && constants.len() < 10 {
+            scan -= 1;
+            let instruction = self.instructions[scan];
+            match instruction.op {
+                Op::Push | Op::PushAlt | Op::JumpOrConst => match instruction.operand {
+                    Some(value) => constants.push(value),
+                    None => return None,
+                },
+                Op::Eval | Op::PushReturn => continue,
+                _ => break,
+            }
+        }
+        constants.reverse();
+        if constants.len() < 6 {
+            return None;
+        }
+        let (x1, x0, y1, y0) = (constants[0], constants[1], constants[3], constants[4]);
+        let inside = |v: i32| (0..=320).contains(&v);
+        if !inside(x0) || !inside(x1) || !inside(y0) || !inside(y1) || x1 < x0 || y1 < y0 {
+            return None;
+        }
+        Some(Condition::ClickIn {
+            min: glam::Vec2::new(x0 as f32, y0 as f32),
+            max: glam::Vec2::new(x1 as f32, y1 as f32),
+        })
     }
 
     /// The constant sitting on the stack when `at` runs: the last plain

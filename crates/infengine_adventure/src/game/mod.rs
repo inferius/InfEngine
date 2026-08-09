@@ -277,29 +277,26 @@ impl Game {
         }
         self.state.click = Some(point);
 
-        // The room's click hook - the original's script function 1, run
-        // on a click with the point and held item in registers. It
-        // carries the conversations a room's entry only opens: the
-        // willow that speaks for the Land answers here, not in the
-        // greeting. The hook's own position gates did not survive
-        // translation, so running it on every click would talk instead
-        // of walk - it runs once per visit, which plays the opening
-        // conversation and then lets clicks walk as normal.
-        let prefix = room.script_prefix();
-        let hook = format!("{prefix}.entry1");
-        let seen = format!("kyra.hook.{prefix}");
+        // The room's arrival hook - the original's script function 6,
+        // which it runs once the walk started by a click has finished,
+        // with the click's position in registers. Its own gates say
+        // what that spot means: the window, the tree, the way down. So
+        // the walk and the hook are one action list - the walk blocks
+        // until the actor is there, and the gates are read on arrival,
+        // exactly when the original reads them.
+        //
+        // This is why the willow speaks when Brandon crosses to leave
+        // rather than on any click: the conversation sits behind a
+        // gate over the way out.
+        let mut actions = self.actions_for(room, &click);
         if matches!(click, Click::Walk { .. })
-            && self.state.vars.get(&seen).copied().unwrap_or(0) == 0
-            && let Some(script) = self.scripts.get(&hook).cloned()
+            && let Some(hook) = self
+                .scripts
+                .get(&format!("{}.entry6", room.script_prefix()))
+                .cloned()
         {
-            self.state.vars.insert(seen, 1);
-            self.state.vars.insert("kyra.reg1".into(), point.x as i32);
-            self.state.vars.insert("kyra.reg2".into(), point.y as i32);
-            self.runner.start(&script);
-            return click;
+            actions.extend(hook.actions.iter().cloned());
         }
-
-        let actions = self.actions_for(room, &click);
         if !actions.is_empty() {
             self.runner.start_actions(actions);
         }
@@ -356,6 +353,17 @@ impl Game {
                 let mut actions = Vec::new();
                 if let Some(walk_to) = exit.walk_to {
                     actions.push(Action::Walk { to: walk_to });
+                }
+                // The room's leaving hook - the original's script
+                // function 1. It is what stops a player on their way
+                // out: the willow that speaks for the Land has its
+                // whole conversation here, and it belongs to walking
+                // out of the tree, not to any click inside it.
+                if let Some(hook) = self
+                    .scripts
+                    .get(&format!("{}.entry1", room.script_prefix()))
+                {
+                    actions.extend(hook.actions.iter().cloned());
                 }
                 actions.push(Action::GoToRoom {
                     room: exit.target_room.clone(),

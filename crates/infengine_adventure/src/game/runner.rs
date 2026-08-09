@@ -318,6 +318,9 @@ impl Runner {
                         op.holds(state.vars.get(var).copied().unwrap_or(0), *value)
                     }
                     crate::action::Condition::Holding(item) => state.hand == *item,
+                    crate::action::Condition::ClickIn { min, max } => state
+                        .click
+                        .is_some_and(|click| click.cmpge(*min).all() && click.cmple(*max).all()),
                     crate::action::Condition::ClickPastActor => state
                         .click
                         .is_some_and(|click| click.x >= state.actor.position.x),

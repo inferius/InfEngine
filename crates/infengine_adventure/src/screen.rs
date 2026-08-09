@@ -192,6 +192,7 @@ impl Widget {
             // holds never, the same reading a branch gives it.
             Some(
                 Condition::Var { .. }
+                | Condition::ClickIn { .. }
                 | Condition::Holding(_)
                 | Condition::ClickPastActor
                 | Condition::Unresolved { .. },

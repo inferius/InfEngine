@@ -209,6 +209,13 @@ pub enum Condition {
     Var { var: String, op: Compare, value: i32 },
     /// What the actor's hand holds: a particular item, or nothing.
     Holding(Option<String>),
+    /// Whether the last click landed inside a rectangle of the room.
+    ///
+    /// The imported click scripts are built from these: a room's click
+    /// hook asks "was that on the window, the door, the tree" and
+    /// answers accordingly. Without them every hook either fires on any
+    /// click or on none.
+    ClickIn { min: Vec2, max: Vec2 },
     /// Whether the last click fell at or past the actor, left to right.
     ///
     /// Imported scripts ask this to react to the player's intent - a
@@ -234,6 +241,10 @@ impl Condition {
             Condition::Var { var, op, value } => format!("{var} {} {value}", op.sign()),
             Condition::Holding(Some(item)) => format!("holding {item}"),
             Condition::Holding(None) => "empty-handed".into(),
+            Condition::ClickIn { min, max } => format!(
+                "clicked in {:.0},{:.0}-{:.0},{:.0}",
+                min.x, min.y, max.x, max.y
+            ),
             Condition::ClickPastActor => "clicked right of the actor".into(),
             Condition::Unresolved { call, .. } => format!("{call}?"),
         }
@@ -246,6 +257,7 @@ impl Condition {
             Condition::Flag(_)
                 | Condition::Var { .. }
                 | Condition::Holding(_)
+                | Condition::ClickIn { .. }
                 | Condition::ClickPastActor
         )
     }

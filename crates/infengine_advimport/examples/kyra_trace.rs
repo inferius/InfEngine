@@ -24,6 +24,8 @@ fn main() {
     };
     let room = args.next();
     let entry = args.next();
+    let click_x: f32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(160.0);
+    let click_y: f32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(100.0);
 
     let project = Project::open(std::path::Path::new(&project_dir));
     if project.manifest.is_none() {
@@ -53,10 +55,10 @@ fn main() {
 
     // Click in the scene - the way a player carries the conversation on
     // past the greeting - and step through what that opens.
-    println!("== click at (160, 100)");
-    host.click(glam::Vec2::new(160.0, 100.0));
+    println!("== click at ({click_x}, {click_y})");
+    host.click(glam::Vec2::new(click_x, click_y));
     host.tick(0.1);
-    host.click(glam::Vec2::new(160.0, 100.0));
+    host.click(glam::Vec2::new(click_x, click_y));
     drain(&mut host, "on click");
     for second in 0..80 {
         host.tick(0.5);

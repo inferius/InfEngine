@@ -471,6 +471,12 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
                 set("op", op.sign().to_string());
                 set("value", value.to_string());
             }
+            Condition::ClickIn { min, max } => {
+                set("click_min_x", min.x.to_string());
+                set("click_min_y", min.y.to_string());
+                set("click_max_x", max.x.to_string());
+                set("click_max_y", max.y.to_string());
+            }
             // The marker parameter keeps "holding nothing" distinct
             // from "no condition written yet".
             Condition::Holding(Some(item)) => set("held", item.clone()),
@@ -617,6 +623,14 @@ fn condition_of(node: &infengine_blueprint::Node) -> Condition {
     }
     let call = param(node, "call");
     if call.is_empty() {
+        let click_max_x = param(node, "click_max_x");
+        if !click_max_x.is_empty() {
+            let read = |key: &str| param(node, key).parse().unwrap_or(0.0);
+            return Condition::ClickIn {
+                min: glam::Vec2::new(read("click_min_x"), read("click_min_y")),
+                max: glam::Vec2::new(click_max_x.parse().unwrap_or(0.0), read("click_max_y")),
+            };
+        }
         let var = param(node, "var");
         if !var.is_empty() {
             let op = match param(node, "op").as_str() {

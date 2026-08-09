@@ -170,6 +170,27 @@ impl Game {
         Some((animation, frame, look.mirrored(actor.facing), handle))
     }
 
+    /// Which pointer belongs over this spot.
+    ///
+    /// A way out shows the arrow for the direction it leads, which is
+    /// how a player learns there is a way down at all; anything else
+    /// keeps the plain pointer.
+    fn cursor_art(&self) -> (&'static str, bool) {
+        if self.host.screen.is_some() || !self.view.contains(self.cursor) {
+            return ("pointer", false);
+        }
+        match self.host.resolve(self.view.to_room(self.cursor)) {
+            infengine_adventure::game::Click::Exit { id, .. } => match id.as_str() {
+                "north" => ("up", true),
+                "south" => ("down", true),
+                "east" => ("right", true),
+                "west" => ("left", true),
+                _ => ("pointer", false),
+            },
+            _ => ("pointer", false),
+        }
+    }
+
     fn upload(&mut self, image: &str) -> Option<Texture2dHandle> {
         if let Some(handle) = self.textures.get(image) {
             return Some(*handle);
@@ -503,6 +524,10 @@ impl AppHandler for Game {
                 item,
             );
         }
+        let (cursor_name, cursor_centred) = self.cursor_art();
+        let cursor_image = format!("cursors/{cursor_name}.png");
+        self.upload(&cursor_image);
+
         let held = self.host.game.state.hand.clone();
         if let Some(item) = &held {
             item_texture(
@@ -530,6 +555,9 @@ impl AppHandler for Game {
                 && let Some(&handle) = self.textures.get(&icon_path(item))
             {
                 draw::held_item(renderer, &self.view, self.cursor, handle);
+            }
+            if let Some(&handle) = self.textures.get(&cursor_image) {
+                draw::cursor(renderer, &self.view, self.cursor, handle, cursor_centred);
             }
             if let Some((animation, index, Some(handle), placed)) = frame {
                 // Where the script said, or where the animation says
