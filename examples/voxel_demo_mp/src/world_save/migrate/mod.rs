@@ -300,6 +300,14 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         6,
         super::entities::entities_v5_to_v6,
     );
+    // W474: entities v6 -> v7 appends per-mob `sheared: false`
+    // (sheep shearing persistence).
+    reg.register(
+        SaveKind::Entities,
+        6,
+        7,
+        super::entities::entities_v6_to_v7,
+    );
     // W138: containers v3 -> v4 adds doors / chest facings /
     // brewing stands / levers-on (the runtime block-state maps
     // that were never persisted - reloaded doors rendered open-

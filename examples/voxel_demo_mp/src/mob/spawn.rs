@@ -26,15 +26,13 @@ use infengine_voxel::CHUNK_SIZE;
 use crate::net::{MobMsg, NetRole};
 use crate::{DAY_LENGTH_S, Voxel, day_night};
 
-use super::kinds::{
-    KIND_CHICKEN, KIND_PIG, KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE,
-};
+use super::kinds::{KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE};
 use super::light::{
     has_solid_floor, has_standing_room, is_bright_enough_for_passive,
     is_dark_enough_for_hostile, is_grass_below,
 };
 use super::pool::{pool_for, weighted_pick};
-use super::state::{MOB_MAX_HEALTH, MobState, ZOMBIE_MAX_HEALTH};
+use super::state::MobState;
 use crate::worldgen::biome_at;
 
 /// Period (seconds) between spawn attempts. W52 - tightened from
@@ -204,6 +202,7 @@ pub(crate) fn mint_mob(voxel: &mut crate::Voxel, kind: u8, pos: [f32; 3], yaw: f
             head_pitch: 0.0,
             baby: false,
             size,
+            sheared: false,
         },
     );
 }
@@ -239,87 +238,30 @@ pub(crate) fn mint_structure_mob(
 
 /// Initial HP for a freshly spawned mob. Pulled out so the place
 /// site + the wire-init match stay in sync.
+///
+/// W474: reads the generated `attributes::MOB_ATTRIBUTES` table
+/// (per-kind `createAttributes` MAX_HEALTH from the decompiled
+/// source) - this fixed zombie/skeleton 14 -> 20, spider 12 -> 16
+/// and cow 8 -> 10. The arms below are the kinds whose LIVE spawn
+/// HP deviates from the registry base in MC itself:
 pub(crate) fn initial_health_for(kind: u8) -> f32 {
-    if kind == crate::mob::kinds::KIND_CREEPER {
-        return 20.0; // W343: Creeper.createAttributes MAX_HEALTH 20.
-    }
     match kind {
-        KIND_ZOMBIE | KIND_SKELETON => ZOMBIE_MAX_HEALTH,
-        // W300: ZombifiedPiglin.createAttributes MAX_HEALTH 20.
-        x if x == super::kinds::KIND_ZOMBIFIED_PIGLIN => 20.0,
-        // W302: Villager.createAttributes MAX_HEALTH 20.
-        x if x == super::kinds::KIND_VILLAGER => 20.0,
-        // W315: Cat.createAttributes MAX_HEALTH 10.
-        x if x == super::kinds::KIND_CAT => 10.0,
-        // W375: Bee.createAttributes MAX_HEALTH 10.
-        x if x == super::kinds::KIND_BEE => 10.0,
-        // W376: Witch 26; Slime (large) 16.
-        x if x == super::kinds::KIND_WITCH => 26.0,
+        // Slime: HP is size^2 (`Slime.setSize`); the mint path
+        // overrides for rolled sizes > 1 and this 16 stands in for
+        // the un-sized natural-spawn path (a "large" size-4 slime).
+        // Sizing natural spawns is queued with the spawn-pool wave.
         x if x == super::kinds::KIND_SLIME => 16.0,
-        // W377: zombie/skeleton variants share the base 20 HP.
-        x if x == super::kinds::KIND_DROWNED => 20.0,
-        x if x == super::kinds::KIND_HUSK => 20.0,
-        x if x == super::kinds::KIND_STRAY => 20.0,
-        // W378: Pillager/Vindicator 24, Evoker 24.
-        x if x == super::kinds::KIND_PILLAGER => 24.0,
-        x if x == super::kinds::KIND_VINDICATOR => 24.0,
-        x if x == super::kinds::KIND_EVOKER => 24.0,
-        // W379: Blaze 20, WitherSkeleton 20.
-        x if x == super::kinds::KIND_BLAZE => 20.0,
-        x if x == super::kinds::KIND_WITHER_SKELETON => 20.0,
-        // W380: Guardian 30, ElderGuardian 80.
-        x if x == super::kinds::KIND_GUARDIAN => 30.0,
-        x if x == super::kinds::KIND_ELDER_GUARDIAN => 80.0,
-        // W381: Enderman 40, CaveSpider 12, Silverfish 8.
-        x if x == super::kinds::KIND_ENDERMAN => 40.0,
-        x if x == super::kinds::KIND_CAVE_SPIDER => 12.0,
-        x if x == super::kinds::KIND_SILVERFISH => 8.0,
-        // W382: Phantom 20, Bat 6, Mooshroom 10.
-        x if x == super::kinds::KIND_PHANTOM => 20.0,
-        x if x == super::kinds::KIND_BAT => 6.0,
-        x if x == super::kinds::KIND_MOOSHROOM => 10.0,
-        // W388: Squid + GlowSquid 10.
-        x if x == super::kinds::KIND_SQUID => 10.0,
-        x if x == super::kinds::KIND_GLOW_SQUID => 10.0,
-        // W389: SkeletonHorse 15, Mule 22 (horse-range midpoint),
-        // WanderingTrader 20.
-        x if x == super::kinds::KIND_SKELETON_HORSE => 15.0,
-        x if x == super::kinds::KIND_MULE => 22.0,
-        x if x == super::kinds::KIND_WANDERING_TRADER => 20.0,
-        // W390: Fox + Ocelot 10.
-        x if x == super::kinds::KIND_FOX => 10.0,
-        x if x == super::kinds::KIND_OCELOT => 10.0,
-        // W391: Parrot 6.
-        x if x == super::kinds::KIND_PARROT => 6.0,
-        // W392: Goat 10, Turtle 30.
-        x if x == super::kinds::KIND_GOAT => 10.0,
-        x if x == super::kinds::KIND_TURTLE => 30.0,
-        // W393: Panda 20.
-        x if x == super::kinds::KIND_PANDA => 20.0,
-        // W322: IronGolem.createAttributes MAX_HEALTH 100.
-        x if x == super::kinds::KIND_IRON_GOLEM => 100.0,
-        // W322: AbstractHorse generateMaxHealth 15..30, midpoint.
-        x if x == super::kinds::KIND_HORSE => 22.0,
-        // W344: donkey generateMaxHealth averages ~22 like the horse.
-        x if x == super::kinds::KIND_DONKEY => 22.0,
-        // W327: Ghast.createAttributes MAX_HEALTH 10.
-        x if x == super::kinds::KIND_GHAST => 10.0,
-        // W327: magma cube size 2 -> size*size = 4 HP.
+        // Magma cube: engine cubes carry the MC size-2 identity
+        // (hitbox 1.02) -> size^2 = 4 HP, though `MobState.size`
+        // still mints at 1 (size mint queued with the spawn wave).
         x if x == super::kinds::KIND_MAGMA_CUBE => 4.0,
-        // W330: Zombie.createAttributes MAX_HEALTH 20.
-        x if x == super::kinds::KIND_ZOMBIE_VILLAGER => 20.0,
-        KIND_SPIDER => 12.0,
-        KIND_CHICKEN => 4.0,
-        KIND_PIG => 10.0,
-        // W158: MC wild wolf HP.
-        x if x == super::kinds::KIND_WOLF => 8.0,
-        // W161: MC polar bear HP.
-        x if x == super::kinds::KIND_POLAR_BEAR => 30.0,
-        // W162: MC rabbit HP (3 = 1.5 hearts).
-        x if x == super::kinds::KIND_RABBIT => 3.0,
-        // W409: Camel.createAttributes MAX_HEALTH 32.
-        x if x == crate::mob::kinds::KIND_CAMEL => 32.0,
-        _ => MOB_MAX_HEALTH,
+        // Horse family: `randomizeAttributes` rerolls MAX_HEALTH via
+        // generateMaxHealth (15 + rand(8) + rand(9) = 15..30) at
+        // spawn - the table's 53 base never walks. Midpoint 22.
+        x if x == super::kinds::KIND_HORSE => 22.0,
+        x if x == super::kinds::KIND_DONKEY => 22.0,
+        x if x == super::kinds::KIND_MULE => 22.0,
+        _ => super::attributes::mob_attributes(kind).max_health,
     }
 }
 
@@ -558,6 +500,7 @@ pub(crate) fn try_spawn_one(
             head_pitch: 0.0,
             baby: false,
             size: 1,
+            sheared: false,
         },
     );
     voxel.last_mob_spawn_time = day_time;
@@ -701,7 +644,7 @@ mod tests {
                 [0.5, 64.0, 0.5],
                 0.0,
                 0.0,
-                MOB_MAX_HEALTH,
+                initial_health_for(KIND_SHEEP),
             ));
         }
         assert!(mobs_in_chunk(&v, [0, 64, 0]) >= PER_CHUNK_SOFT_CAP);

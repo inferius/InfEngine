@@ -23,6 +23,11 @@ pub(crate) const WATER_ID: u16 = 36;
 /// source).
 pub(crate) const LAVA_ID: u16 = 37;
 
+/// W474: shears item id (`item/mod.rs` row 640). Drives the sheep
+/// shear RMB interaction; `break_pipeline` carries a local alias for
+/// its cobweb-harvest path.
+pub(crate) const SHEARS_ITEM_ID: u16 = 640;
+
 /// Bucket item ids. The empty bucket is the crafted base; the
 /// filled variants come from RMB-scooping the matching liquid.
 pub(crate) const BUCKET_EMPTY_ID: u16 = 38;

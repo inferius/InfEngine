@@ -396,6 +396,20 @@ pub(crate) fn armor_totals(voxel: &Voxel) -> (f32, f32) {
     (def, tough)
 }
 
+/// W474: MC `CombatRules.getDamageAfterAbsorb` - the armor-points
+/// mitigation curve shared by the player (W419 wore it inline) and
+/// by mobs with a nonzero ARMOR attribute (zombie family armor 2).
+/// `def` = armor points, `tough` = armor toughness; def 0 passes the
+/// damage through unchanged.
+pub(crate) fn damage_after_armor_absorb(amount: f32, def: f32, tough: f32) -> f32 {
+    if def <= 0.0 {
+        return amount;
+    }
+    let f = 2.0 + tough / 4.0;
+    let g = (def - amount / f).clamp(def * 0.2, 20.0);
+    amount * (1.0 - g / 25.0)
+}
+
 /// W471: wear every worn damageable armor piece after a hit that
 /// armor mitigates - the `LivingEntity.doHurtEquipment` port
 /// (`durabilityDamage = (int)max(1.0, damage / 4.0)` to each of
@@ -451,14 +465,10 @@ pub(crate) fn apply_damage_kind(voxel: &mut Voxel, amount: f32, kind: DamageKind
         matches!(kind, DamageKind::Generic | DamageKind::Burn);
     let pre_mitigation = amount;
     let amount = if armor_mitigates {
+        // W474: the CombatRules curve moved to the shared
+        // `damage_after_armor_absorb` (mobs with ARMOR use it too).
         let (def, tough) = armor_totals(voxel);
-        if def > 0.0 {
-            let f = 2.0 + tough / 4.0;
-            let g = (def - amount / f).clamp(def * 0.2, 20.0);
-            amount * (1.0 - g / 25.0)
-        } else {
-            amount
-        }
+        damage_after_armor_absorb(amount, def, tough)
     } else {
         amount
     };

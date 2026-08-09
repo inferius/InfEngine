@@ -27,7 +27,8 @@ pub(crate) struct MobState {
     /// new goal; the wander loop re-picks once we cross this.
     pub(crate) retarget_at: f32,
     /// Current hit points. Reaches zero = mob despawns + drops
-    /// loot. Reset on spawn to `MOB_MAX_HEALTH`.
+    /// loot. Set on spawn to `spawn::initial_health_for` (the MC
+    /// attribute table).
     pub(crate) health: f32,
     /// Seconds remaining in the death-fade animation. > 0
     /// means the mob is dying: rendered with falling tint +
@@ -104,6 +105,15 @@ pub(crate) struct MobState {
     /// W459: MC VillagerData accumulated trade XP (Novice..Master
     /// tier unlocks). Persisted (entities v5).
     pub(crate) trade_xp: u32,
+    /// W474: MC `Sheep` sheared flag - true after a shears RMB
+    /// until the sheep eats grass (EatBlockGoal -> `ate()`).
+    /// Persisted (entities v7); rides `MobMsg` so every peer hides
+    /// the wool overlay.
+    pub(crate) sheared: bool,
+    /// W474: seconds left in the EatBlockGoal 40-tick eat animation
+    /// (2.0 s at 20 TPS). Transient - not persisted or wired; the
+    /// graze pass owns the countdown + the bite at 4 ticks left.
+    pub(crate) eat_left: f32,
 }
 
 impl MobState {
@@ -147,6 +157,8 @@ impl MobState {
             tamed: false,
             temper: 0,
             trade_xp: 0,
+            sheared: false,
+            eat_left: 0.0,
         }
     }
 }
@@ -155,6 +167,12 @@ impl MobState {
 /// attribute scaled by the empirical mob-walk factor (~x10: zombie
 /// attr 0.23 walks ~2.3 b/s in vanilla, pig 0.25 ~2.5). One shared
 /// table instead of the old flat MOB_SPEED 1.2 for every passive.
+///
+/// W474: rows reconciled against the generated
+/// `attributes::MOB_ATTRIBUTES` table (x10) - the
+/// `walk_speed_matches_attribute_table` test pins every walking
+/// kind. Exemptions (goal modifiers / size / non-walkers) are
+/// commented inline.
 pub(crate) fn kind_walk_speed(kind: u8) -> f32 {
     use super::kinds::*;
     match kind {
@@ -170,25 +188,59 @@ pub(crate) fn kind_walk_speed(kind: u8) -> f32 {
         k if k == KIND_ZOMBIFIED_PIGLIN => 2.3,
         // W302: villager attr 0.5 x the 0.4 stroll speedModifier
         // (VillagerGoalPackages) - vanilla villagers AMBLE at 0.2.
+        // (Exempt from the raw-attribute pin.)
         k if k == KIND_VILLAGER => 2.0,
         // W315: Cat.createAttributes MOVEMENT_SPEED 0.3.
         k if k == KIND_CAT => 3.0,
         // W322: IronGolem.createAttributes MOVEMENT_SPEED 0.25.
         k if k == KIND_IRON_GOLEM => 2.5,
-        // W322: AbstractHorse generateSpeed averages ~0.225.
+        // W322: AbstractHorse randomizeAttributes generateSpeed
+        // averages ~0.225 = the createBaseHorseAttributes base.
         k if k == KIND_HORSE => 2.25,
-        // W327: ghast drifts slowly (MC flies at ~0.06/tick bursts).
+        // W327: ghast drifts slowly (MC flies at ~0.06/tick bursts;
+        // MOVEMENT_SPEED is the unused registry default - exempt).
         k if k == KIND_GHAST => 1.2,
         // W343: Creeper.createAttributes MOVEMENT_SPEED 0.25.
         k if k == KIND_CREEPER => 2.5,
-        // W344: donkey generateSpeed averages ~0.175.
+        // W344: donkey createBaseChestedHorseAttributes 0.175.
         k if k == KIND_DONKEY => 1.75,
-        // W327: magma cube ground speed attr 0.3 (slime family).
+        // W327/W474: slime family ground speed is size-based
+        // (Slime.setSize: 0.2 + 0.1 * size); 0.3 = the size-1 value.
+        // Exempt from the raw-attribute pin.
         k if k == KIND_MAGMA_CUBE => 3.0,
         // W330: zombie family attr 0.23.
         k if k == KIND_ZOMBIE_VILLAGER => 2.3,
         k if k == KIND_SKELETON => 2.5,     // attr 0.25
         k if k == KIND_SPIDER => 3.0,       // attr 0.30
+        // W474: rows for every kind the attribute sweep covered.
+        k if k == KIND_WITCH => 2.5,            // attr 0.25
+        k if k == KIND_DROWNED => 2.3,          // attr 0.23
+        k if k == KIND_HUSK => 2.3,             // attr 0.23
+        k if k == KIND_STRAY => 2.5,            // attr 0.25
+        k if k == KIND_PILLAGER => 3.5,         // attr 0.35
+        k if k == KIND_VINDICATOR => 3.5,       // attr 0.35
+        k if k == KIND_EVOKER => 5.0,           // attr 0.50
+        k if k == KIND_BLAZE => 2.3,            // attr 0.23
+        k if k == KIND_WITHER_SKELETON => 2.5,  // attr 0.25
+        k if k == KIND_GUARDIAN => 5.0,         // attr 0.50
+        k if k == KIND_ELDER_GUARDIAN => 3.0,   // attr 0.30
+        k if k == KIND_ENDERMAN => 3.0,         // attr 0.30
+        k if k == KIND_CAVE_SPIDER => 3.0,      // attr 0.30
+        k if k == KIND_SILVERFISH => 2.5,       // attr 0.25
+        k if k == KIND_MOOSHROOM => 2.0,        // attr 0.20 (cow)
+        k if k == KIND_SKELETON_HORSE => 2.0,   // attr 0.20
+        k if k == KIND_MULE => 1.75,            // chested-horse 0.175
+        // Wandering trader: registry default 0.7 x the 0.35 stroll
+        // speedModifier (WanderingTrader goals) - like the villager,
+        // the effective amble. Exempt from the raw-attribute pin.
+        k if k == KIND_WANDERING_TRADER => 2.45,
+        k if k == KIND_FOX => 3.0,              // attr 0.30
+        k if k == KIND_OCELOT => 3.0,           // attr 0.30
+        k if k == KIND_PARROT => 2.0,           // attr 0.20 (ground)
+        k if k == KIND_GOAT => 2.0,             // attr 0.20
+        k if k == KIND_TURTLE => 2.5,           // attr 0.25
+        k if k == KIND_PANDA => 1.5,            // attr 0.15
+        k if k == KIND_CAMEL => 0.9,            // attr 0.09
         _ => 2.3,
     }
 }
@@ -219,20 +271,52 @@ pub(crate) const MOB_DEATH_FADE: f32 = 0.55;
 // 128x128 column; the demo runs a single global cap, so 25 keeps
 // the world feeling populated without overwhelming the renderer.
 pub(crate) const MOB_CAP_DEFAULT: usize = 25;
-// W289: superseded by kind_walk_speed (per-kind MC attributes).
-pub(crate) const MOB_MAX_HEALTH: f32 = 8.0;
+/// The unit of the `damage_mob_scaled` multiplier API: callers pass
+/// `mult = absolute_damage / MOB_HIT_DAMAGE`. W474: no longer any
+/// mob's actual damage value - per-kind melee reads
+/// `contact_damage_of` (attribute table) instead.
 pub(crate) const MOB_HIT_DAMAGE: f32 = 2.0;
 
 // ---------------------------------------------------------------
 // Zombie / hostile knobs.
 // ---------------------------------------------------------------
 
-
-pub(crate) const ZOMBIE_MAX_HEALTH: f32 = 14.0;
-pub(crate) const ZOMBIE_TOUCH_DAMAGE: f32 = 2.5;
 pub(crate) const ZOMBIE_ATTACK_COOLDOWN: f32 = 0.9;
 pub(crate) const ZOMBIE_ATTACK_RANGE: f32 = 1.4;
 pub(crate) const ZOMBIE_SIGHT_RANGE: f32 = 22.0;
+
+/// W474: per-kind melee / contact damage, MC
+/// `Attributes.ATTACK_DAMAGE`. Slime family is size-based per
+/// `Slime.setSize` (attack = size; a tiny slime deals NOTHING -
+/// `Slime.isDealsDamage` excludes it, so this returns 0) and the
+/// magma cube adds +2 on top (`MagmaCube.getAttackDamage`, and it
+/// bites even at size 1).
+pub(crate) fn contact_damage_of(m: &MobState) -> f32 {
+    use super::kinds::{KIND_MAGMA_CUBE, KIND_SLIME};
+    match m.kind {
+        k if k == KIND_SLIME => {
+            if m.size > 1 {
+                m.size as f32
+            } else {
+                0.0
+            }
+        }
+        k if k == KIND_MAGMA_CUBE => m.size as f32 + 2.0,
+        _ => super::attributes::mob_attributes(m.kind).attack_damage,
+    }
+}
+
+/// W474: the regen / heal ceiling for a live mob - the attribute
+/// table's MAX_HEALTH with the same spawn-time special cases
+/// `initial_health_for` applies (slime-family size^2, horse-family
+/// generateMaxHealth midpoints).
+pub(crate) fn max_health_of(m: &MobState) -> f32 {
+    use super::kinds::{KIND_MAGMA_CUBE, KIND_SLIME};
+    if (m.kind == KIND_SLIME || m.kind == KIND_MAGMA_CUBE) && m.size > 1 {
+        return (m.size as f32) * (m.size as f32);
+    }
+    super::spawn::initial_health_for(m.kind)
+}
 
 // ---------------------------------------------------------------
 // Despawn + animation knobs.

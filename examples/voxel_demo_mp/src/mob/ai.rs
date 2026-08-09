@@ -21,9 +21,8 @@ use super::despawn;
 use super::kinds::{KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE, KIND_ZOMBIFIED_PIGLIN};
 use super::spawn;
 use super::state::{
-    MOB_LUNGE_TIME, MOB_MAX_HEALTH, MobState, ZOMBIE_ATTACK_COOLDOWN,
-    ZOMBIE_ATTACK_RANGE, ZOMBIE_MAX_HEALTH, ZOMBIE_SIGHT_RANGE,
-    ZOMBIE_TOUCH_DAMAGE,
+    MOB_LUNGE_TIME, MobState, ZOMBIE_ATTACK_COOLDOWN, ZOMBIE_ATTACK_RANGE,
+    ZOMBIE_SIGHT_RANGE, contact_damage_of, max_health_of,
 };
 
 /// W198.7 fixed mob-tick period (MC's 20 Hz). Module-scope since W204:
@@ -127,6 +126,7 @@ fn tick_mobs_once(voxel: &mut Voxel, dt: f32) {
                 head_pitch: m.head_pitch,
                 baby: m.baby_left > 0.0,
                 size: m.size,
+                sheared: m.sheared,
             },
         );
     }
@@ -141,6 +141,10 @@ fn tick_mobs_once(voxel: &mut Voxel, dt: f32) {
     // offspring. Runs before the broadcast so new babies ship this
     // tick.
     super::breed::breed_pass(voxel, dt);
+    // W474: sheep EatBlockGoal - occasional grass bite that regrows
+    // sheared wool. Before the broadcast so a cleared `sheared` flag
+    // ships the same tick.
+    super::graze::graze_pass(voxel, dt, &mut rand_seed);
     broadcast(voxel);
 }
 
@@ -262,6 +266,10 @@ fn head_look_step(
 
 /// HP regen: any mob that hasn't been hit in 6 s slowly
 /// refills toward its kind's max. Heal 1 HP/s.
+///
+/// W474: the ceiling reads the per-kind attribute table (plus the
+/// slime-size / horse-midpoint special cases) instead of the old
+/// two-bucket hostile/passive globals.
 fn hp_regen_pass(voxel: &mut Voxel, dt: f32) {
     for m in voxel.mobs.iter_mut() {
         if m.dying > 0.0 {
@@ -272,11 +280,7 @@ fn hp_regen_pass(voxel: &mut Voxel, dt: f32) {
             .entry(m.id)
             .and_modify(|v| *v += dt)
             .or_insert(dt);
-        let max = if kind_is_hostile(m.kind) {
-            ZOMBIE_MAX_HEALTH
-        } else {
-            MOB_MAX_HEALTH
-        };
+        let max = max_health_of(m);
         if *t > 6.0 && m.health < max {
             m.health = (m.health + 1.0 * dt).min(max);
         }
@@ -548,6 +552,13 @@ fn step_one(
                 }
             }
         }
+    }
+    // W474: EatBlockGoal freeze - an eating sheep stands still for
+    // the 40-tick bite (graze.rs owns the timer + the block edit).
+    // A panic (hit while eating) cancels the eat there.
+    if m.eat_left > 0.0 && m.panic_left <= 0.0 {
+        m.strolling = false;
+        m.target = m.pos;
     }
     let dx = m.target[0] - m.pos[0];
     let dz = m.target[2] - m.pos[2];
@@ -1241,10 +1252,13 @@ fn step_one(
                 && m.attack_cd <= 0.0
             {
                 m.attack_cd = ZOMBIE_ATTACK_COOLDOWN;
+                // W474: the attacker's per-kind ATTACK_DAMAGE
+                // attribute (zombie family 3) instead of a
+                // hardcoded 3.0.
                 voxel.damage_mob_scaled(
                     tid,
                     None,
-                    3.0 / super::state::MOB_HIT_DAMAGE,
+                    contact_damage_of(&m) / super::state::MOB_HIT_DAMAGE,
                 );
                 voxel.mob_lunge.insert(m.id, MOB_LUNGE_TIME);
                 let died_villager = voxel
@@ -1282,14 +1296,13 @@ fn step_one(
         let d2 = dx * dx + dy * dy + dz * dz;
         if d2 <= ZOMBIE_ATTACK_RANGE * ZOMBIE_ATTACK_RANGE && m.attack_cd <= 0.0 {
             m.attack_cd = ZOMBIE_ATTACK_COOLDOWN;
-            // W429: slime contact damage = its size, and the size-1
-            // slime is harmless (Slime.isDealsDamage).
-            let touch = if m.kind == super::kinds::KIND_SLIME {
-                m.size as f32
-            } else {
-                ZOMBIE_TOUCH_DAMAGE
-            };
-            if touch > 1.0 || m.kind != super::kinds::KIND_SLIME {
+            // W474: per-kind melee from the ATTACK_DAMAGE attribute
+            // table (zombie 3, piglin 5, enderman 7, blaze 6, ...)
+            // instead of the flat 2.5 global. Slime stays size-based
+            // (W429; a tiny slime returns 0 = harmless) and the
+            // magma cube bites at size + 2.
+            let touch = contact_damage_of(&m);
+            if touch > 0.0 {
                 voxel.apply_player_damage(touch);
             }
             // Visual lunge: bump the local timer + tell
@@ -1350,6 +1363,7 @@ fn broadcast(voxel: &Voxel) {
                 head_pitch: m.head_pitch,
                 baby: m.baby_left > 0.0,
                 size: m.size,
+                sheared: m.sheared,
             };
             if let Ok(buf) = bincode::serde::encode_to_vec(msg, cfg) {
                 server.broadcast_bytes("vx.mob", buf);

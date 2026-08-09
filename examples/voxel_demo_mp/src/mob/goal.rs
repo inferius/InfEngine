@@ -213,6 +213,11 @@ impl Goal for FleeFromPlayerGoal {
 /// is deferred to a follow-up; the state machine is in place so
 /// the goal selector can pre-empt other goals while a sheep
 /// eats.
+///
+/// W474: the LIVE eat-grass behaviour ships in `mob::graze`
+/// (EatBlockGoal port wired into the monolithic tick - block edit,
+/// wool regrow, the 1/1000 gate). This scaffold stays dormant until
+/// the H.5 goal-selector swap lands.
 #[derive(Debug, Default)]
 pub(crate) struct EatGrassGoal {
     pub(crate) eat_until: f32,

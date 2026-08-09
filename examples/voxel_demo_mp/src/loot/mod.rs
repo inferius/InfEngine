@@ -1185,7 +1185,17 @@ pub(crate) const TRIAL_CHAMBERS_SUPPLY: LootTable = LootTable {
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
 /// skipped (once-logged).
-const LOOT_NAME_MAP: &[(&str, &str)] = &[("redstone", "redstone_dust")];
+const LOOT_NAME_MAP: &[(&str, &str)] = &[
+    ("redstone", "redstone_dust"),
+    // W474: the entity tables drop the MC raw-meat names; our item
+    // rows carry the raw_ prefix.
+    ("beef", "raw_beef"),
+    ("porkchop", "raw_porkchop"),
+    ("chicken", "raw_chicken"),
+    ("mutton", "raw_mutton"),
+    ("cod", "raw_cod"),
+    ("salmon", "raw_salmon"),
+];
 
 fn item_id_for_loot_name(name: &str) -> Option<u16> {
     let mapped = LOOT_NAME_MAP
@@ -1259,6 +1269,12 @@ pub(crate) fn roll(table: &LootTable, rng: &mut SplitMix64) -> Vec<(u16, u8)> {
             // W243: `minecraft:empty` entries (a real no-drop slot in
             // e.g. abandoned_mineshaft pool 1) roll silently.
             if entry.name.is_empty() {
+                continue;
+            }
+            // W474: entity tables carry `set_count` uniforms with a
+            // 0 floor (skeleton arrows 0-2, ...) - a rolled 0 is a
+            // no-drop, never a zero-count stack.
+            if count == 0 {
                 continue;
             }
             match item_id_for_loot_name(entry.name) {

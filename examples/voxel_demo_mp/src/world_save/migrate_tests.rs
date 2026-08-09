@@ -31,7 +31,7 @@ use super::chunks::{
 use super::entities::{
     DimensionEntities, ENTITIES_FORMAT_VERSION, ENTITIES_MAGIC, entities_path_in_dir,
     entities_v1_to_v2, entities_v2_to_v3, entities_v3_to_v4,
-    entities_v4_to_v5, entities_v5_to_v6,
+    entities_v4_to_v5, entities_v5_to_v6, entities_v6_to_v7,
     read_entities_in_dir_with_registry,
     write_entities_in_dir,
 };
@@ -381,6 +381,8 @@ fn entities_migration_v0_to_v1_round_trip() {
     registry.register(SaveKind::Entities, 4, 5, entities_v4_to_v5);
     // W468: ...and on to v6 (stack-typed drops).
     registry.register(SaveKind::Entities, 5, 6, entities_v5_to_v6);
+    // W474: ...and on to v7 (sheep sheared flag).
+    registry.register(SaveKind::Entities, 6, 7, entities_v6_to_v7);
 
     let loaded = read_entities_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()

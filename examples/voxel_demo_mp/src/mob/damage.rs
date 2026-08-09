@@ -1,17 +1,16 @@
 //! Authoritative mob damage application + death + loot drop.
 //!
 //! Owns the path from "player swing connects" through "HP -= n" to
-//! "broadcast hurt / death + drop loot". Pure refactor of the
-//! original `mob_ai::damage_mob` + `damage_mob_scaled` - no logic
-//! changes here; H.1 just splits the file.
+//! "broadcast hurt / death + drop loot".
 //!
 //! MC mirror:
 //! - `net/minecraft/world/entity/LivingEntity.java::actuallyHurt` -
-//!   the canonical damage application path: clamp by armour, fire
-//!   the death event when HP <= 0, drop loot tables.
+//!   the canonical damage application path: clamp by armour
+//!   (W474: `CombatRules.getDamageAfterAbsorb` over the mob's ARMOR
+//!   attribute), fire the death event when HP <= 0, drop loot.
 //! - `net/minecraft/world/entity/Mob.java::dropFromLootTable` -
-//!   per-kind drop tables. The InfEngine demo carries a much
-//!   simpler hand-rolled drop table (1-3 wool, 1-2 meat, ...).
+//!   per-kind drop tables. W474: `mob_loot` rolls the generated
+//!   `mob::loot_table` ports of `loot_table/entities/<kind>.json`.
 
 use infengine_voxel::BlockId;
 
@@ -20,23 +19,24 @@ use crate::inventory::inv_pickup;
 use crate::net::{MobEventMsg, NetRole};
 
 use super::kinds::{
-    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE,
-    KIND_ZOMBIFIED_PIGLIN,
+    KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE, KIND_ZOMBIFIED_PIGLIN,
 };
 use super::state::{MOB_DEATH_FADE, MOB_HIT_DAMAGE};
 
-/// Authoritative damage application. Caller must own the
-/// world simulation (offline or host server). Subtracts
-/// `MOB_HIT_DAMAGE` from the mob's health, broadcasts a hurt
-/// or death event, and on death drops loot. `attacker_client_id`
-/// is `None` for "no inventory credit" (e.g. fall damage path
-/// later).
+/// Authoritative damage application at the 1.0 baseline (=
+/// `MOB_HIT_DAMAGE` raw). Caller must own the world simulation
+/// (offline or host server). Broadcasts a hurt or death event and
+/// on death drops loot. `attacker_client_id` is `None` for "no
+/// player credit" (blast / mob-vs-mob / command kills - those also
+/// skip the killed_by_player loot pools).
 pub(crate) fn damage_mob(voxel: &mut Voxel, mob_id: u32, attacker_client_id: Option<u32>) {
     damage_mob_scaled(voxel, mob_id, attacker_client_id, 1.0);
 }
 
-/// Same as `damage_mob` but applies a multiplier to
-/// `MOB_HIT_DAMAGE` so sword-tier weapons can swing harder.
+/// The scaled damage entry: callers express an absolute MC damage
+/// as `mult = damage / MOB_HIT_DAMAGE`. W474: the raw amount then
+/// passes through the target's ARMOR attribute (CombatRules) before
+/// it lands.
 pub(crate) fn damage_mob_scaled(
     voxel: &mut Voxel,
     mob_id: u32,
@@ -51,11 +51,23 @@ pub(crate) fn damage_mob_scaled(
     let killed;
     let already_dying;
     let kind;
+    let mob_sheared;
+    let mob_size;
     {
         let m = &mut voxel.mobs[idx];
         already_dying = m.dying > 0.0;
+        mob_sheared = m.sheared;
+        mob_size = m.size;
         if !already_dying {
-            m.health -= MOB_HIT_DAMAGE * mult.max(0.1);
+            // W474: MC `getDamageAfterArmorAbsorb` - the mob's ARMOR
+            // attribute (zombie family 2, everything else 0) shaves
+            // the incoming damage through the same CombatRules curve
+            // the player armor path uses. Mob ARMOR_TOUGHNESS is 0
+            // for every ported kind.
+            let raw = MOB_HIT_DAMAGE * mult.max(0.1);
+            let armor = super::attributes::mob_attributes(m.kind).armor;
+            m.health -=
+                crate::player::damage_after_armor_absorb(raw, armor, 0.0);
         }
         mob_pos = m.pos;
         kind = m.kind;
@@ -215,6 +227,7 @@ pub(crate) fn damage_mob_scaled(
                         head_pitch: 0.0,
                         baby: false,
                         size: half,
+                        sheared: false,
                     },
                 );
             }
@@ -229,12 +242,20 @@ pub(crate) fn damage_mob_scaled(
             .player_xp
             .saturating_add(crate::xp::mob_kill_xp(kind, xp_seed));
     }
-    // Per-kind hand-rolled loot table (see `mob_loot`). Quantities
-    // are seeded from the mob id so save / replay matches. The kill
-    // either auto-collects to the host inventory or credits the
-    // attacking client's server-side inventory.
+    // W474: real MC entity loot tables (see `mob_loot`), seeded from
+    // the mob id so save / replay matches. The kill either
+    // auto-collects to the host inventory or credits the attacking
+    // client's server-side inventory. `killed_by_player` pools roll
+    // only when the kill credits a player (host or client) - fall /
+    // blast / mob-vs-mob deaths pass `None` and skip them, like MC.
     let seed = mob_id.wrapping_mul(2654435761);
-    let loot = mob_loot(kind, seed);
+    let loot = mob_loot(
+        kind,
+        seed,
+        attacker_client_id.is_some(),
+        mob_sheared,
+        mob_size,
+    );
     match attacker_client_id {
         None | Some(0) => {
             for (id, qty) in &loot {
@@ -271,61 +292,207 @@ pub(crate) fn damage_mob_scaled(
     voxel.spawn_break_particles(target_voxel);
 }
 
-/// Per-kind drop table. Returns `(item_id, qty)` pairs auto-collected
-/// on the kill. Ids cover block-form drops (wool 11, meat 12, feather
-/// 19) and item-only drops (rotten_flesh 293, bone 294, string 301,
-/// leather 303, arrow 643). `seed` is the mob-id hash so quantities
-/// replay deterministically.
+/// W474: roll a kind's real MC entity loot tables into `(item_id,
+/// qty)` stacks. Deterministic per `seed` (the mob-id hash) so save /
+/// replay matches. `player_kill` gates the `killed_by_player` pools;
+/// `sheared` gates the sheep wool pool; `size` gates the magma-cream
+/// pool (tiny cubes drop none).
 ///
-/// MC mirror: each `EntityType` ships a loot-table JSON; we hand-roll
-/// the common drops. Hostiles yield their signature item and no meat;
-/// passives yield produce + meat.
-fn mob_loot(kind: u8, seed: u32) -> Vec<(u16, u8)> {
-    let one_or_two = 1 + ((seed >> 4) & 0x1) as u8;
-    let zero_to_two = (((seed >> 8) & 0x3) as u8) % 3;
-    match kind {
-        KIND_CHICKEN => vec![(19, one_or_two), (12, one_or_two)],
-        KIND_PIG => vec![(12, 2 + (seed & 0x1) as u8)],
-        KIND_COW => vec![(303, one_or_two), (12, one_or_two)],
-        KIND_ZOMBIE => vec![(293, one_or_two)],
-        KIND_SKELETON => vec![(294, one_or_two), (643, zero_to_two)],
-        KIND_SPIDER => vec![(301, zero_to_two)],
-        // W343: creeper drops gunpowder (a blast leaves nothing -
-        // the AI removes the mob without the kill path).
-        k if k == crate::mob::kinds::KIND_CREEPER => {
-            vec![(299, zero_to_two)]
+/// The old wool+meat fallback is dead: kinds whose MC table is empty
+/// (wolf) or entirely unresolvable (rabbit, until the items exist)
+/// drop NOTHING, exactly like the data says. Unresolvable item names
+/// skip with the once-per-name log in `crate::loot`.
+fn mob_loot(
+    kind: u8,
+    seed: u32,
+    player_kill: bool,
+    sheared: bool,
+    size: u8,
+) -> Vec<(u16, u8)> {
+    use crate::worldgen::mcgen::noise::SplitMix64;
+    let mut rng = SplitMix64::new(
+        (seed as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x004D_4F42_4C4F_4F54,
+    );
+    let mut out: Vec<(u16, u8)> = Vec::new();
+    if kind == crate::mob::kinds::KIND_SHEEP {
+        out.extend(crate::loot::roll(
+            &super::loot_table::SHEEP_BASE,
+            &mut rng,
+        ));
+        // `entities/sheep.json` pool 2 rolls only for an unsheared
+        // sheep (the `sheared: false` predicate on every color ref).
+        if !sheared {
+            out.extend(crate::loot::roll(
+                &super::loot_table::SHEEP_WOOL,
+                &mut rng,
+            ));
         }
-        // Sheep (and any other passive default): wool + meat.
-        _ => vec![(11, 1 + ((seed & 0x3) as u8) % 3), (12, one_or_two)],
+        return out;
     }
+    if kind == crate::mob::kinds::KIND_MAGMA_CUBE {
+        // `entities/magma_cube.json`: magma cream only for size > 1
+        // (the inverted size-1 predicate). Engine cubes mint at
+        // size 1 today, so no cream until the spawn wave sizes them.
+        if size > 1 {
+            out.extend(crate::loot::roll(
+                &super::loot_table::MAGMA_CUBE_SIZED,
+                &mut rng,
+            ));
+        }
+        return out;
+    }
+    let (base, player_only) = super::loot_table::entity_tables(kind);
+    out.extend(crate::loot::roll(base, &mut rng));
+    if player_kill {
+        out.extend(crate::loot::roll(player_only, &mut rng));
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mob::kinds::{
+        KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_SHEEP,
+        KIND_SKELETON, KIND_SPIDER, KIND_WOLF, KIND_ZOMBIE,
+    };
 
+    /// Item ids the loot names resolve to (item/mod.rs rows).
+    const RAW_MUTTON: u16 = 286;
+    const WOOL: u16 = 11;
+    const RAW_COD: u16 = 288;
+    const RAW_SALMON: u16 = 290;
+    const ROTTEN_FLESH: u16 = 293;
+    const LEGACY_MEAT: u16 = 12;
+
+    /// W474: the wolf's MC table has NO pools - a dead wolf drops
+    /// nothing (the old fallback gave every unlisted kind wool+meat).
     #[test]
-    fn hostiles_drop_signature_item_and_no_meat() {
+    fn wolf_drops_nothing() {
         for seed in 0u32..64 {
-            let z = mob_loot(KIND_ZOMBIE, seed);
-            assert!(z.iter().any(|(id, q)| *id == 293 && *q >= 1));
-            assert!(!z.iter().any(|(id, _)| *id == 12), "zombie meat-free");
-            let s = mob_loot(KIND_SKELETON, seed);
-            assert!(s.iter().any(|(id, q)| *id == 294 && *q >= 1));
-            assert!(!s.iter().any(|(id, _)| *id == 12), "skeleton meat-free");
-            let sp = mob_loot(KIND_SPIDER, seed);
-            assert!(!sp.iter().any(|(id, _)| *id == 12), "spider meat-free");
+            assert!(
+                mob_loot(KIND_WOLF, seed, true, false, 1).is_empty(),
+                "wolf.json is pool-free"
+            );
         }
     }
 
+    /// W474: polar bear rolls the cod-w3 / salmon-w1 pool (0-2 of
+    /// the picked fish); nothing outside those two items ever drops.
     #[test]
-    fn passives_drop_meat_and_cow_yields_leather() {
-        for kind in [KIND_COW, KIND_CHICKEN, KIND_PIG] {
+    fn polar_bear_drops_cod_or_salmon_per_weights() {
+        let mut cod = 0u32;
+        let mut salmon = 0u32;
+        for seed in 0u32..2000 {
+            for (id, q) in mob_loot(KIND_POLAR_BEAR, seed, false, false, 1) {
+                assert!(
+                    id == RAW_COD || id == RAW_SALMON,
+                    "unexpected polar bear drop {id}"
+                );
+                assert!((1..=2).contains(&q));
+                if id == RAW_COD {
+                    cod += 1;
+                } else {
+                    salmon += 1;
+                }
+            }
+        }
+        assert!(cod > 0 && salmon > 0, "both fish must appear");
+        assert!(cod > salmon * 2, "cod weight 3 vs salmon 1: {cod}/{salmon}");
+    }
+
+    /// W474: sheep = 1-2 mutton always; wool ONLY while unsheared.
+    #[test]
+    fn sheep_wool_gates_on_sheared() {
+        for seed in 0u32..64 {
+            let full = mob_loot(KIND_SHEEP, seed, true, false, 1);
             assert!(
-                mob_loot(kind, 0x1234).iter().any(|(id, _)| *id == 12),
-                "kind {kind} drops meat",
+                full.iter().any(|(id, q)| *id == RAW_MUTTON && (1..=2).contains(q)),
+                "mutton always drops"
+            );
+            assert!(
+                full.iter().any(|(id, q)| *id == WOOL && *q == 1),
+                "unsheared sheep drops 1 wool"
+            );
+            let shorn = mob_loot(KIND_SHEEP, seed, true, true, 1);
+            assert!(
+                shorn.iter().any(|(id, _)| *id == RAW_MUTTON),
+                "mutton still drops sheared"
+            );
+            assert!(
+                !shorn.iter().any(|(id, _)| *id == WOOL),
+                "sheared sheep drops no wool"
             );
         }
-        assert!(mob_loot(KIND_COW, 0).iter().any(|(id, _)| *id == 303));
+    }
+
+    /// W474: killed_by_player pools (spider_eye) roll only on player
+    /// kills; the base string pool is unconditional. And no kind
+    /// drops the legacy generic meat id anymore.
+    #[test]
+    fn spider_eye_needs_player_kill() {
+        const SPIDER_EYE: u16 = 300;
+        let eye_id = crate::item::ITEM_TYPES
+            .iter()
+            .find(|it| it.name == "spider_eye")
+            .map(|it| it.id)
+            .expect("spider_eye item exists");
+        assert_eq!(eye_id, SPIDER_EYE, "test constant tracks the registry");
+        let mut eyes_player = 0u32;
+        for seed in 0u32..2000 {
+            for (id, _) in mob_loot(KIND_SPIDER, seed, false, false, 1) {
+                assert_ne!(id, SPIDER_EYE, "no eye without player credit");
+            }
+            if mob_loot(KIND_SPIDER, seed, true, false, 1)
+                .iter()
+                .any(|(id, _)| *id == SPIDER_EYE)
+            {
+                eyes_player += 1;
+            }
+        }
+        // The eye entry wins 1-in-3 of its pool (weighted blank).
+        assert!(
+            (400..=1000).contains(&eyes_player),
+            "eye rate off: {eyes_player}/2000"
+        );
+    }
+
+    /// W474: the old wool+meat `_ =>` fallback is gone - hostiles
+    /// stay meat-free and drop their table items only.
+    #[test]
+    fn hostiles_drop_table_items_and_no_meat() {
+        for seed in 0u32..64 {
+            let z = mob_loot(KIND_ZOMBIE, seed, true, false, 1);
+            assert!(z.iter().all(|(id, _)| *id == ROTTEN_FLESH));
+            let s = mob_loot(KIND_SKELETON, seed, true, false, 1);
+            assert!(
+                !s.iter().any(|(id, _)| *id == LEGACY_MEAT),
+                "skeleton meat-free"
+            );
+        }
+    }
+
+    /// Passive staples keep their MC produce: chicken feather+meat,
+    /// pig 1-3 porkchop, cow leather+beef.
+    #[test]
+    fn passives_drop_mc_produce() {
+        const RAW_BEEF: u16 = 342;
+        const RAW_PORKCHOP: u16 = 284;
+        const RAW_CHICKEN: u16 = 165;
+        let mut beef_seen = false;
+        let mut chicken_seen = false;
+        let mut pork_seen = false;
+        for seed in 0u32..64 {
+            beef_seen |= mob_loot(KIND_COW, seed, true, false, 1)
+                .iter()
+                .any(|(id, _)| *id == RAW_BEEF);
+            chicken_seen |= mob_loot(KIND_CHICKEN, seed, true, false, 1)
+                .iter()
+                .any(|(id, _)| *id == RAW_CHICKEN);
+            pork_seen |= mob_loot(KIND_PIG, seed, true, false, 1)
+                .iter()
+                .any(|(id, q)| *id == RAW_PORKCHOP && (1..=3).contains(q));
+        }
+        assert!(beef_seen && chicken_seen && pork_seen);
     }
 }

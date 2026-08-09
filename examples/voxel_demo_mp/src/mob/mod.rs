@@ -23,19 +23,23 @@
 //! split is invisible to them.
 
 pub(crate) mod ai;
+pub(crate) mod attributes;
 pub(crate) mod audio;
 pub(crate) mod breed;
 pub(crate) mod damage;
 pub(crate) mod despawn;
 pub(crate) mod goal;
+pub(crate) mod graze;
 pub(crate) mod hud;
 pub(crate) mod kinds;
 pub(crate) mod light;
 pub(crate) mod fangs;
+pub(crate) mod loot_table;
 pub(crate) mod pathfind;
 pub(crate) mod pool;
 pub(crate) mod riding;
 pub(crate) mod raycast;
+pub(crate) mod shear;
 pub(crate) mod spawn;
 pub(crate) mod spawner;
 pub(crate) mod state;
@@ -59,7 +63,7 @@ pub(crate) use kinds::{
 pub(crate) use raycast::raycast_mob;
 pub(crate) use state::{
     MOB_ATTACK_REACH, MOB_CAP_DEFAULT, MOB_DEATH_FADE, MOB_HIT_DAMAGE,
-    MOB_LUNGE_TIME, MobState, ZOMBIE_MAX_HEALTH,
+    MOB_LUNGE_TIME, MobState,
 };
 
 #[cfg(test)]

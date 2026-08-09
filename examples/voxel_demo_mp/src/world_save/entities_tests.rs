@@ -52,6 +52,7 @@ fn sample_sheep(id: u32) -> MobSave {
         tamed: false,
         temper: 0,
         trade_xp: 0,
+        sheared: false,
     }
 }
 
@@ -69,6 +70,7 @@ fn sample_zombie(id: u32) -> MobSave {
         tamed: false,
         temper: 0,
         trade_xp: 0,
+        sheared: false,
     }
 }
 
@@ -86,6 +88,7 @@ fn sample_cow(id: u32) -> MobSave {
         tamed: false,
         temper: 0,
         trade_xp: 0,
+        sheared: false,
     }
 }
 

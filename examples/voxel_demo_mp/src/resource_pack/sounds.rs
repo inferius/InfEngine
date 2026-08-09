@@ -246,6 +246,8 @@ pub(crate) const ENGINE_TO_MC: &[(&str, &str)] = &[
     ("mob/sheep/step", "entity.sheep.step"),
     ("mob/sheep/hurt", "entity.sheep.hurt"),
     ("mob/sheep/death", "entity.sheep.death"),
+    // W474: the shears interaction (Sheep.shear plays SHEEP_SHEAR).
+    ("mob/sheep/shear", "entity.sheep.shear"),
     // W55.4 - per-mob ambient + step + hurt + death events.
     ("mob/zombie/say", "entity.zombie.ambient"),
     // W315: cat (stray meows for the village prowlers).

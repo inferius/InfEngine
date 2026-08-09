@@ -239,7 +239,17 @@ pub fn draw_remote_mobs(
                             // the same pose (vanilla layers the fur
                             // over the skin; dye tint is a follow-up -
                             // natural sheep render white).
-                            if let Some(fur) = &mob_meshes.sheep_fur_model {
+                            // W474: a sheared sheep hides the wool
+                            // layer, exactly like MC SheepWoolLayer
+                            // (`if (!state.isSheared)`). The pack has
+                            // no dedicated sheared texture - only
+                            // sheep.png / sheep_wool.png (+ the
+                            // undercoat layer, queued with wool
+                            // colors) - so hiding the overlay IS the
+                            // MC look.
+                            if !mob.sheared
+                                && let Some(fur) = &mob_meshes.sheep_fur_model
+                            {
                                 crate::entity_model::draw_scaled(
                                     renderer,
                                     fur,

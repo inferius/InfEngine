@@ -1089,6 +1089,25 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
                 vx.rmb_pending = false;
             }
         }
+        // W474: RMB with shears on an adult unsheared sheep shears
+        // it - the MC `Sheep.mobInteract` port: 1-3 wool drops at
+        // the sheep (`shearing/sheep/<color>` table, one item
+        // entity per wool), the shear sound, `setSheared(true)`,
+        // and the shears wear 1 via hurtAndBreak. Routed through
+        // the W395 `interact_mob` RMB pick; host/offline only like
+        // the feed branch (client mobs are render mirrors).
+        let mut sheep_sheared = false;
+        if rmb
+            && !fed
+            && !bucket_scooped
+            && !vx.any_panel_open()
+            && !matches!(vx.net, NetRole::Client { .. })
+            && selected_block.map(|b| b.0)
+                == Some(crate::block::SHEARS_ITEM_ID)
+            && let Some(mid) = attack_mob.or(interact_mob)
+        {
+            sheep_sheared = crate::mob::shear::try_shear_sheep(vx, mid);
+        }
         // W134: RMB on a cart mounts it (priority over the block
         // cascade, mirroring the feed branch above). Shift hops
         // back off; host/offline only - client riding is part of
@@ -1165,6 +1184,7 @@ pub(crate) fn on_update(vx: &mut Voxel, window: &EngineWindow, ctx: &FrameContex
             && !bucket_scooped
             && !cart_mounted
             && !trade_opened
+            && !sheep_sheared
             && !vx.any_panel_open()
             && attack_mob.is_none()
             && let Some(hit) = vx.target

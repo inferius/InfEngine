@@ -150,6 +150,12 @@ pub(crate) struct MobMsg {
     /// renders it at half scale (MC AgeableMob).
     #[serde(default)]
     pub(crate) baby: bool,
+    /// W474: true after a shears RMB until the sheep regrows (eat
+    /// grass). Every peer hides the wool overlay. Old snapshots
+    /// default to false. Session-transient on the wire; the save
+    /// layer persists it separately (entities v7).
+    #[serde(default)]
+    pub(crate) sheared: bool,
 }
 
 /// W134: snapshot of one host-side minecart. Sent as `vx.cart` at

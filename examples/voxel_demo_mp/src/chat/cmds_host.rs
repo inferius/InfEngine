@@ -14,7 +14,6 @@ use crate::block::{BLOCK_TYPES, is_tool_block};
 use crate::net::{DamageMsg, MobMsg, NetRole, TeleportMsg};
 use crate::{
     DAY_LENGTH_S, KIND_ZOMBIE, MOB_HIT_DAMAGE, MobState, PLAYER_MAX_HEALTH,
-    ZOMBIE_MAX_HEALTH,
 };
 
 /// `/motd`. Print the MOTD file next to the binary (if any).
@@ -226,7 +225,9 @@ pub(crate) fn cmd_horde(
         voxel.next_mob_id =
             voxel.next_mob_id.wrapping_add(1).max(1);
         // Horde mobs are command-spawned - mark them persistent
-        // so they survive the despawn pass.
+        // so they survive the despawn pass. W474: HP reads the
+        // attribute table (zombie 20).
+        let hp = crate::mob::spawn::initial_health_for(KIND_ZOMBIE);
         let mut mob = MobState::new_natural(
             id,
             KIND_ZOMBIE,
@@ -234,7 +235,7 @@ pub(crate) fn cmd_horde(
             pos,
             0.0,
             (voxel.day_time + 1.0).rem_euclid(DAY_LENGTH_S),
-            ZOMBIE_MAX_HEALTH,
+            hp,
         );
         mob.persistent = true;
         voxel.mobs.push(mob);
@@ -245,11 +246,12 @@ pub(crate) fn cmd_horde(
                 kind: KIND_ZOMBIE,
                 pos,
                 yaw: 0.0,
-                health: ZOMBIE_MAX_HEALTH as u8,
+                health: hp as u8,
                 head_yaw: 0.0,
                 head_pitch: 0.0,
-            baby: false,
+                baby: false,
                 size: 1,
+                sheared: false,
             },
         );
         spawned += 1;
@@ -327,6 +329,7 @@ fn spawn_named_mob(
             head_pitch: 0.0,
             baby: false,
             size: 1,
+            sheared: false,
         },
     );
     lines.push(format!(
