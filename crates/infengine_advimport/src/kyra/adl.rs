@@ -1,16 +1,30 @@
 //! A26.4: Westwood's AdLib music file.
 //!
 //! The layout, established by reading all ten of Kyrandia's `.ADL`
-//! files rather than by assumption:
+//! files and corrected against the driver's own address arithmetic:
 //!
 //! ```text
-//!   0..120     one byte per track: which program plays it, 0xFF = none
-//!   120..1000  440 little-endian offsets, one per program, 0xFFFF = none
-//!   1000..     the programs themselves
+//!   0..120   one byte per track: which program plays it, 0xFF = none
+//!   120..    the sound data: little-endian program offsets first,
+//!            then the programs - and the offsets are relative to
+//!            byte 120, not to any fixed table end
 //! ```
 //!
-//! Every file agrees: the lowest offset in each of the ten is exactly
-//! 1000, which is what a 120-byte table followed by 440 words comes to.
+//! The relative base is the fact everything else hangs on. The driver
+//! reads `soundData + offset` where `soundData` is the file after its
+//! track table, so an offset table only reaches as far as the file's
+//! own program count needs and the programs begin right after it.
+//! Reading the programs at a fixed 1000-byte header instead - which
+//! every one of the ten files *appears* to support, their lowest
+//! offset being 880, i.e. 1000 from the file's start - lands 880
+//! bytes past every program and executes score data as code. That
+//! mistake rendered an entire effects bank as near-silence and took
+//! the longest of anything here to find.
+//!
+//! A program's first two bytes are its header: the channel it runs on
+//! (0..9, where 9 is the driver's control channel) and its priority.
+//! The stream follows. Programs numbered [`INSTRUMENT_BASE`] and up
+//! are instruments - eleven register bytes, not sequences.
 //!
 //! A program is read **a word at a time**, and that is not a guess: the
 //! floppy release ships the driver that plays these files, `ALFX.DRV`,
@@ -42,16 +56,11 @@
 //! Some handlers then read further bytes of their own - a jump reads a
 //! 16-bit displacement, a patch change reads a patch - so a step is not
 //! always two bytes. [`ARGUMENT_BYTES`] says how many each takes, and
-//! it was not guessed: the 75 handlers were disassembled and their
-//! effect on `si` counted, `lodsb` as one and `lodsw` as two, against
-//! the `inc si` and `dec si` that some of them use to push a byte back.
-//!
-//! Reading with that table instead of assuming two bytes everywhere
-//! cuts the reads that fall past the last handler from 9% of commands
-//! to 5%, and what is left is not drift in the middle of a stream: of
-//! the 7919 remaining, not one is the real opcode 74, and 4903 are
-//! `0xFF`, which is the padding after a program ends. Finding the
-//! terminator is what would account for those.
+//! it is the driver's own dispatch table, not a reconstruction: a
+//! first table counted from `ALFX.DRV`'s effect on `si` disagreed in a
+//! handful of slots and left 5% of command reads falling past the last
+//! handler. With the dispatch table's counts a walk over every
+//! referenced track in all ten files stays aligned to its terminator.
 //!
 //! Two searches were run before the driver turned up and neither
 //! settled it. Recorded so they are not repeated: hill-climbing the
@@ -97,8 +106,9 @@
 //! reading a displacement out of the stream and adding it to the read
 //! pointer; 0x08 silences the channel and zeroes the stream pointer;
 //! 0x09 rests until the next tick; 0x10 loads an instrument, indexing
-//! the file's own program table at +0x1F4, which is program 190 onward
-//! - so the later programs are patches rather than sequences.
+//! the file's own program table at +0x1F4 - 500 bytes, i.e. entry 250
+//! of a table of words, which is [`INSTRUMENT_BASE`] - so the later
+//! programs are patches rather than sequences.
 //!
 //! What is left is the rest of the register writes. Three opcodes cover
 //! 43% of every command the effect programs issue, ten cover 78% and
@@ -107,21 +117,24 @@
 
 use std::fmt;
 
-/// Bytes of header before the first program.
-pub const HEADER_LEN: usize = 1000;
-/// Entries in the track table.
+/// Entries in the track table, which is also where the sound data -
+/// the address space every program offset is relative to - begins.
 pub const TRACKS: usize = 120;
-/// Entries in the program offset table.
+/// Most program slots any file's table could hold; a read bound, not
+/// a claim that any file defines that many.
 pub const PROGRAMS: usize = 440;
-/// How many of those are tracks; the rest are instruments.
+/// First program number that is an instrument rather than a sequence.
 ///
-/// The split is what the driver's own instrument lookup implies:
-/// it indexes at 500 bytes in, which is the 120-byte track table
-/// plus 190 pointers of two bytes each.
-pub const TRACK_PROGRAMS: usize = 190;
+/// The driver's instrument lookup is `getProgram(250 + n)`, and the
+/// number was confirmed against the data: every instrument reference
+/// in the intro and chapter-one banks resolves to instrument-sized
+/// bytes at base 250, and none do at the 150 and 190 bases tried
+/// before it.
+pub const INSTRUMENT_BASE: usize = 250;
 /// Marker for an unused track entry.
 pub const NO_PROGRAM: u8 = 0xFF;
-/// Marker for an unused program offset.
+/// Marker for an unused program offset. Zero is invalid too: offset 0
+/// is the offset table itself.
 pub const NO_OFFSET: u16 = 0xFFFF;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,7 +147,10 @@ impl fmt::Display for AdlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AdlError::TooSmall { len } => {
-                write!(f, "an ADL file is at least {HEADER_LEN} bytes; this is {len}")
+                write!(
+                    f,
+                    "an ADL file is a {TRACKS}-byte track table and sound data; this is {len} bytes"
+                )
             }
         }
     }
@@ -190,22 +206,23 @@ pub const HANDLER_NAMES: [&str; HANDLERS] = [
 
 /// Argument bytes each command takes after its opcode byte.
 ///
-/// Read out of `ALFX.DRV` by disassembling every handler and counting
-/// what it does to `si`: `lodsb` takes one, `lodsw` two, and the `inc
-/// si` and `dec si` some of them use to unread a byte count against
-/// that. Most take one - the byte the dispatcher has already loaded
-/// into `ah` - which is why reading everything as a two-byte pair gets
-/// so close. Seven take none, having pushed their byte back, and
-/// opcode 0x0D takes five.
+/// This is the driver's dispatch table entry for entry - the `values`
+/// count each handler declares. An earlier table was reconstructed by
+/// counting `ALFX.DRV`'s effect on `si` and disagreed in a handful of
+/// slots (`setupProgram` took three there, one here), and each
+/// disagreement desynchronized every stream that used the opcode:
+/// those were the 5% of reads that kept falling past the last
+/// handler. With these counts a walk over every referenced track in
+/// all ten retail files stays aligned to its terminator.
 pub const ARGUMENT_BYTES: [u8; HANDLERS] = [
-    1, 2, 3, 1, 2, 2, 1, 1, 1, 1, //
-    2, 2, 1, 5, 1, 2, 1, 3, 0, 1, //
-    1, 4, 1, 1, 1, 1, 1, 1, 1, 1, //
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 0, //
-    1, 1, 1, 1, 2, 2, 1, 1, 1, 1, //
-    1, 1, 1, 2, 0, 1, 1, 1, 0, 0, //
-    1, 1, 1, 2, 0, 3, 1, 0, 2, 2, //
-    2, 1, 1, 2, 1,
+    1, 2, 1, 1, 2, 2, 0, 1, 0, 1, //
+    2, 2, 1, 5, 1, 1, 1, 3, 0, 1, //
+    0, 4, 0, 0, 0, 0, 1, 0, 1, 1, //
+    1, 0, 1, 1, 0, 0, 1, 0, 1, 0, //
+    0, 1, 0, 1, 2, 2, 1, 1, 1, 0, //
+    0, 1, 0, 2, 0, 0, 0, 1, 0, 0, //
+    1, 1, 0, 2, 0, 9, 1, 0, 2, 2, //
+    2, 1, 1, 2, 0,
 ];
 
 /// How many bytes a command's arguments take.
@@ -274,7 +291,9 @@ pub struct AdlFile<'a> {
 
 impl<'a> AdlFile<'a> {
     pub fn parse(data: &'a [u8]) -> Result<Self, AdlError> {
-        if data.len() < HEADER_LEN {
+        // A track table and at least one offset slot; the retail files
+        // are all far past this.
+        if data.len() < TRACKS + 2 {
             return Err(AdlError::TooSmall { len: data.len() });
         }
         Ok(Self { data })
@@ -293,55 +312,55 @@ impl<'a> AdlFile<'a> {
             .collect()
     }
 
-    /// Byte offset of a program, if it has one.
+    /// The sound data: the file past its track table, which is the
+    /// address space every program offset is relative to.
+    pub fn sound(&self) -> &'a [u8] {
+        &self.data[TRACKS..]
+    }
+
+    /// A program's offset into [`Self::sound`], if it has one.
     pub fn program_offset(&self, program: usize) -> Option<usize> {
         if program >= PROGRAMS {
             return None;
         }
         let at = TRACKS + program * 2;
         let offset = u16::from_le_bytes([*self.data.get(at)?, *self.data.get(at + 1)?]);
-        if offset == NO_OFFSET {
+        // Zero would be the offset table itself; 0xFFFF is the
+        // explicit "none". Past the end is a slot the file never
+        // wrote, read as table only because the program before it is
+        // long enough to reach it.
+        if offset == NO_OFFSET || offset == 0 {
             return None;
         }
         let offset = offset as usize;
-        // An offset inside the header or past the end is not a program;
-        // both happen in the retail files, where the table has room for
-        // more programs than any one score uses.
-        (HEADER_LEN..self.data.len()).contains(&offset).then_some(offset)
+        (offset < self.sound().len()).then_some(offset)
     }
 
-    /// A program's bytes.
+    /// A program's bytes: channel, priority, then its stream.
     ///
     /// Bounded by the next program that starts after it, which is what
     /// keeps a malformed file from being read to the end of the world.
     /// Programs are not stored in offset order, so the bound has to be
-    /// looked up rather than taken from the next table entry.
+    /// looked up rather than taken from the next table entry. The
+    /// driver itself does not use this bound - its parser stops at the
+    /// program's own terminator - so this is for tools that list.
     pub fn program(&self, program: usize) -> Option<&'a [u8]> {
         let start = self.program_offset(program)?;
         let end = (0..PROGRAMS)
             .filter_map(|other| self.program_offset(other))
             .filter(|offset| *offset > start)
             .min()
-            .unwrap_or(self.data.len());
-        Some(&self.data[start..end])
+            .unwrap_or(self.sound().len());
+        Some(&self.sound()[start..end])
     }
 
     /// One instrument's register bytes.
     ///
-    /// The pointer array is not 440 programs but 190 tracks followed by
-    /// 250 instruments, which is why the driver reaches instruments at
-    /// an offset of 500 bytes into the header rather than at its start:
-    /// 120 for the track table plus 190 pointers of two bytes each.
+    /// Instruments are the programs from [`INSTRUMENT_BASE`] up;
+    /// eleven bytes is what the driver reads of one.
     pub fn instrument(&self, instrument: usize) -> Option<&'a [u8]> {
-        // Where the instrument table starts depends on the file's
-        // vintage: 150 programs in the floppy-era files, 190 in the
-        // later ones (ScummVM's AdLibDriver keeps the same split by
-        // version). The right base is the one whose slot holds
-        // instrument-sized data.
-        [150usize, TRACK_PROGRAMS]
-            .into_iter()
-            .filter_map(|base| self.program(base + instrument))
-            .find(|data| (11..=64).contains(&data.len()))
+        self.program(INSTRUMENT_BASE + instrument)
+            .filter(|data| data.len() >= 11)
     }
 
     /// How many programs the file actually defines.
@@ -362,15 +381,15 @@ pub fn disassemble(program: &[u8]) -> Vec<Step> {
     let mut at = 0;
     while at < program.len() {
         let byte = program[at];
-        let Some(argument) = program.get(at + 1).copied() else {
-            steps.push(Step::Truncated);
-            break;
-        };
         if byte & 0x80 == 0 {
+            let Some(duration) = program.get(at + 1).copied() else {
+                steps.push(Step::Truncated);
+                break;
+            };
             at += 2;
             steps.push(Step::Note {
                 note: byte,
-                duration: argument,
+                duration,
             });
             continue;
         }
@@ -381,6 +400,10 @@ pub fn disassemble(program: &[u8]) -> Vec<Step> {
             steps.push(Step::Truncated);
             break;
         }
+        // Commands with no value bytes - the terminator above all -
+        // still get shown with a zero rather than with the byte after
+        // them, which belongs to the next step.
+        let argument = if width > 1 { program[at + 1] } else { 0 };
         at += width;
         steps.push(Step::Command { opcode, argument });
     }
@@ -399,17 +422,19 @@ mod tests {
     /// Build a file by spelling the layout out, not by using the
     /// constants the parser uses - a builder that shares its numbers
     /// with the code under test cannot catch an offset being wrong.
+    ///
+    /// 120 track bytes, then an 880-byte offset area (what a real
+    /// file's table region looks like), then the programs. Offsets are
+    /// written relative to byte 120, because that is what the driver
+    /// reads them as.
     fn build(tracks: &[(usize, u8)], programs: &[(usize, Vec<u8>)]) -> Vec<u8> {
         let mut data = vec![0xFFu8; 1000];
-        for byte in data.iter_mut().take(120) {
-            *byte = 0xFF;
-        }
         for (track, program) in tracks {
             data[*track] = *program;
         }
         let mut body = Vec::new();
         for (index, bytes) in programs {
-            let offset = 1000 + body.len();
+            let offset = (1000 - 120) + body.len();
             let at = 120 + index * 2;
             data[at] = (offset & 0xFF) as u8;
             data[at + 1] = (offset >> 8) as u8;
@@ -450,13 +475,29 @@ mod tests {
     }
 
     #[test]
-    fn an_offset_pointing_into_the_header_is_not_a_program() {
+    fn the_zero_and_ffff_offsets_are_not_programs() {
         let mut data = build(&[(0, 0)], &[(0, vec![0x40, 0x05])]);
-        // Point program 1 at the middle of the header.
-        data[120 + 2] = 0x10;
+        // Zero would point a program at the offset table itself.
+        data[120 + 2] = 0x00;
         data[120 + 3] = 0x00;
         let file = AdlFile::parse(&data).expect("parse");
         assert_eq!(file.program(1), None);
+        assert_eq!(file.program(3), None, "0xFFFF is the explicit none");
+    }
+
+    #[test]
+    fn an_offset_early_in_the_sound_data_is_a_program() {
+        // Real files put programs right after however much offset
+        // table they actually use, so a small offset is data, not an
+        // error - there is no fixed table size to be "inside" of.
+        let mut data = build(&[(0, 0)], &[]);
+        data[120] = 0x10; // program 0 at sound offset 0x10
+        data[121] = 0x00;
+        data[120 + 0x10] = 0x07;
+        data[120 + 0x11] = 0x42;
+        let file = AdlFile::parse(&data).expect("parse");
+        let program = file.program(0).expect("a small offset is valid");
+        assert_eq!(&program[..2], &[0x07, 0x42], "channel 7, priority 0x42");
     }
 
     #[test]
@@ -498,20 +539,40 @@ mod tests {
 
     #[test]
     fn a_command_consumes_what_its_handler_reads() {
-        // Opcode 0x02 reads three bytes after its own, so the note
-        // after it starts four bytes along and not two.
-        assert_eq!(argument_bytes(0x02), 3);
-        let steps = disassemble(&[0x82, 0x11, 0x22, 0x33, 0x40, 0x05]);
+        // The slide setup reads three bytes after its opcode, so the
+        // note after it starts four bytes along and not two.
+        assert_eq!(argument_bytes(0x11), 3);
+        let steps = disassemble(&[0x91, 0x11, 0x22, 0x33, 0x40, 0x05]);
         assert_eq!(
             steps,
             vec![
                 Step::Command {
-                    opcode: 0x02,
+                    opcode: 0x11,
                     argument: 0x11
                 },
                 Step::Note {
                     note: 0x40,
                     duration: 5
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_terminator_at_the_end_of_a_stream_is_a_step_not_a_truncation() {
+        // stopChannel takes no values, so a program may end on its
+        // very last byte - and nearly every real one does.
+        let steps = disassemble(&[0x40, 0x05, 0x88]);
+        assert_eq!(
+            steps,
+            vec![
+                Step::Note {
+                    note: 0x40,
+                    duration: 5
+                },
+                Step::Command {
+                    opcode: 0x08,
+                    argument: 0
                 },
             ]
         );
@@ -529,10 +590,10 @@ mod tests {
         // The driver does `cmp al, 0x4a` then `mov al, 0x4a` rather
         // than refusing, so 0xFF is opcode 74 and not opcode 127.
         assert_eq!(
-            disassemble(&[0xFF, 0x01]),
+            disassemble(&[0xFF]),
             vec![Step::Command {
                 opcode: MAX_OPCODE,
-                argument: 1,
+                argument: 0,
             }]
         );
         assert_eq!(

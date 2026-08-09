@@ -63,10 +63,9 @@ fn main() {
             if only.is_some_and(|want| want != track) || !done.insert(track) {
                 continue;
             }
-            let Some(code) = file.program(program as usize) else {
+            let Some(audio) = adlplay::render_track(&file, program as usize, RATE) else {
                 continue;
             };
-            let audio = adlplay::render_program(code, Some(&file), RATE);
             ignored += audio.ignored;
             if audio.is_silent() {
                 silent += 1;
