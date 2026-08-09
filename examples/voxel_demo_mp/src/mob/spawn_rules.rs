@@ -4,7 +4,9 @@
 //!
 //! MC mirror:
 //! - `net/minecraft/world/entity/SpawnPlacements.java` - the
-//!   per-type predicate registry `validate_member` dispatches over.
+//!   per-type predicate registry `validate_member` dispatches over
+//!   (W479 adds the pillager block-light rule + the guardian water
+//!   rule for the structure-override tables).
 //! - `net/minecraft/world/entity/monster/Slime.java::checkSlimeSpawnRules`
 //!   - swamp surface band + moon factor, slime-chunk y<40 branch.
 //! - `net/minecraft/world/entity/ambient/Bat.java::checkBatSpawnRules`
@@ -20,9 +22,10 @@ use infengine_voxel::CHUNK_SIZE;
 use crate::{DAY_LENGTH_S, Voxel};
 
 use super::kinds::{
-    KIND_BAT, KIND_CAMEL, KIND_DROWNED, KIND_FOX, KIND_GLOW_SQUID,
-    KIND_GOAT, KIND_MOOSHROOM, KIND_OCELOT, KIND_PARROT, KIND_POLAR_BEAR,
-    KIND_RABBIT, KIND_SLIME, KIND_SQUID, KIND_TURTLE, KIND_WOLF,
+    KIND_BAT, KIND_CAMEL, KIND_DROWNED, KIND_ELDER_GUARDIAN, KIND_FOX,
+    KIND_GLOW_SQUID, KIND_GOAT, KIND_GUARDIAN, KIND_MOOSHROOM, KIND_OCELOT,
+    KIND_PARROT, KIND_PILLAGER, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SLIME,
+    KIND_SQUID, KIND_TURTLE, KIND_WOLF,
 };
 use super::light::{
     block_light_at, effective_sky_light, has_solid_floor, has_standing_room,
@@ -207,7 +210,18 @@ pub(crate) fn validate_member(
     if kind == KIND_DROWNED {
         // SpawnPlacements: drowned is an IN_WATER monster.
         return is_water_at(voxel, wpos)
-            && (ceiled || is_dark_enough_for_hostile(voxel, wpos));
+            && (ceiled || is_dark_enough_for_hostile(voxel, wpos, rng));
+    }
+    if kind == KIND_GUARDIAN || kind == KIND_ELDER_GUARDIAN {
+        // W479 `Guardian.checkGuardianSpawnRules`: IN_WATER (water at
+        // the cell AND below), plus `rand(20) == 0 ||
+        // !canSeeSkyFromBelowWater` - NO darkness gate; guardians
+        // hunt around the clock. Engine sky probe: raw sky light 15
+        // means an unobstructed column (open water surface).
+        return is_water_at(voxel, wpos)
+            && is_water_at(voxel, [wpos[0], wpos[1] - 1, wpos[2]])
+            && (rng.next_u32().is_multiple_of(20)
+                || sky_light_at(voxel, wpos) < 15);
     }
     // ON_GROUND placements: solid floor + two air cells
     // (NaturalSpawner.isValidPositionForMob's obstruction check).
@@ -227,11 +241,18 @@ pub(crate) fn validate_member(
         return !rng.next_u32().is_multiple_of(3)
             && matches!(floor_block(voxel, wpos), 3 | 6 | 90);
     }
+    if kind == KIND_PILLAGER {
+        // W479 `PatrollingMonster.checkPatrollingMonsterSpawnRules`:
+        // block light <= 8, NO sky-darkness gate - the outpost yard
+        // breeds pillagers in broad daylight, exactly like MC.
+        return block_light_at(voxel, wpos) <= 8;
+    }
     match cat {
         SpawnCategory::Monster => {
             // Nether monsters spawn at any light level in vanilla
-            // (zombified piglins under full glowstone light).
-            ceiled || is_dark_enough_for_hostile(voxel, wpos)
+            // (zombified piglins under full glowstone light; the MC
+            // nether block-light limit is 15 = no check).
+            ceiled || is_dark_enough_for_hostile(voxel, wpos, rng)
         }
         SpawnCategory::Creature => {
             if !is_bright_enough_for_passive(voxel, wpos) {

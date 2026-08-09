@@ -36,6 +36,7 @@ pub(crate) mod light;
 pub(crate) mod fangs;
 pub(crate) mod loot_table;
 pub(crate) mod pathfind;
+pub(crate) mod phantom_spawner;
 pub(crate) mod pool;
 pub(crate) mod pool_table;
 pub(crate) mod riding;
@@ -45,6 +46,8 @@ pub(crate) mod spawn;
 pub(crate) mod spawn_rules;
 pub(crate) mod spawner;
 pub(crate) mod state;
+pub(crate) mod structure_overrides;
+pub(crate) mod trader_spawner;
 
 // ----------------------------------------------------------------
 // Re-exports.

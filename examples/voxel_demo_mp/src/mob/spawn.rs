@@ -12,10 +12,16 @@
 //! - `net/minecraft/world/level/NaturalSpawner.java` -
 //!   `spawnCategoryForPosition`: pack roll + scatter + per-member
 //!   validation; `SpawnState` - per-category caps.
-//! - `net/minecraft/world/entity/monster/Monster.java::checkMonsterSpawnRules`
-//!   - block_light <= 7 gate (light-driven spawn).
+//! - `net/minecraft/world/entity/monster/Monster.java::isDarkEnoughToSpawn`
+//!   the W479 light gate (block light 0 + darkened-sky sample);
+//!   monsters are gated by LIGHT, not the clock, so dark caves spawn
+//!   at noon (`light::is_dark_enough_for_hostile` documents the
+//!   channel mapping).
 //! - `net/minecraft/world/entity/animal/Animal.java::checkAnimalSpawnRules`
-//!   - sky_light >= 9 + spawnable-floor gate (per-kind block tags).
+//!   - raw brightness > 8 + spawnable-floor gate (per-kind block tags).
+//! - `net/minecraft/world/level/levelgen/structure/Structure.java`
+//!   `spawnOverrides` - the W479 per-structure category replacements
+//!   (`structure_overrides.rs`).
 //!
 //! The per-species placement predicates (slime / bat / glow squid /
 //! floor tags) live in `spawn_rules.rs`.
@@ -24,10 +30,10 @@ use infengine_voxel::CHUNK_SIZE;
 
 use crate::net::{MobMsg, NetRole};
 use crate::worldgen::biome_at;
-use crate::{DAY_LENGTH_S, Voxel, day_night};
+use crate::{DAY_LENGTH_S, Voxel};
 
 use super::kinds::{KIND_MAGMA_CUBE, KIND_SLIME};
-use super::light::{has_solid_floor, has_standing_room};
+use super::light::is_dark_enough_for_hostile;
 use super::pool::{
     ALL_CATEGORIES, CategoryPools, SpawnCategory, SpawnRow, category_of_kind,
     pool_for, rows_of, weighted_pick,
@@ -35,6 +41,7 @@ use super::pool::{
 use super::pool_table;
 use super::spawn_rules::{is_water_at, validate_member};
 use super::state::MobState;
+use super::structure_overrides::{StructureSpawnOverrides, overrides_at};
 
 /// Period (seconds) between spawn attempts. W52 - tightened from
 /// 6.0 to 2.0. Each attempt now tries SPAWN_ATTEMPTS_PER_TICK
@@ -307,6 +314,15 @@ pub(crate) fn spawn_bucket(
         if name.contains("ocean") {
             return (&pool_table::OCEAN, false, false);
         }
+        // W479: rivers run the river.json pools (drowned 100 in
+        // water). `frozen_river` stays in the tundra bucket per the
+        // snowy-collapse policy; stony_shore keeps the beach bucket -
+        // its monster list matches beach.json's and its empty
+        // creature list differs only by the turtle row, which the
+        // sand-floor rule already rejects on stone shores.
+        if name.contains("river") && !name.contains("frozen") {
+            return (&pool_table::RIVER, false, false);
+        }
         let bucket = mc_biome_to_pool(name);
         let in_swamp = matches!(bucket, crate::worldgen::Biome::Swamp);
         (pool_for(bucket), in_swamp, false)
@@ -317,67 +333,44 @@ pub(crate) fn spawn_bucket(
     }
 }
 
-/// W378 structure spawn overrides (MC per-structure monster pools).
-/// The outpost yard breeds pillagers day and night; the monument
-/// waters teem with guardians (1-in-20 an elder); the mansion
-/// grounds vindicators + the odd evoker.
-fn structure_override(
-    voxel: &Voxel,
-    wpos: [i32; 3],
-    rng: &mut SpawnRng<'_>,
-) -> Option<u8> {
-    let ctx = voxel.current_worldgen_ctx();
-    if !matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
-        return None;
-    }
-    crate::worldgen::mcgen::probe_budget::mark_frame_thread();
-    if crate::worldgen::mcgen::outpost::pos_in_outpost(&ctx, wpos) {
-        return Some(super::kinds::KIND_PILLAGER);
-    }
-    if crate::worldgen::mcgen::monument::pos_in_monument(&ctx, wpos) {
-        return Some(if rng.next_u32().is_multiple_of(20) {
-            super::kinds::KIND_ELDER_GUARDIAN
-        } else {
-            super::kinds::KIND_GUARDIAN
-        });
-    }
-    if crate::worldgen::mcgen::mansion::pos_in_mansion(&ctx, wpos) {
-        return Some(if rng.next_u32().is_multiple_of(5) {
-            super::kinds::KIND_EVOKER
-        } else {
-            super::kinds::KIND_VINDICATOR
-        });
-    }
-    None
+/// The spawner rows in effect for `cat` at a spot: the structure
+/// override's replacement list when one is declared (W479, MC
+/// `ChunkGenerator.getMobsAt`), the biome pool otherwise.
+pub(crate) fn effective_rows(
+    pools: &'static CategoryPools,
+    ovr: Option<&'static StructureSpawnOverrides>,
+    cat: SpawnCategory,
+) -> &'static [SpawnRow] {
+    ovr.and_then(|o| o.rows_for(cat))
+        .unwrap_or_else(|| rows_of(pools, cat))
 }
 
 /// The categories a spawn attempt may draw from right now.
 ///
-/// R24 NOTE (the engine's monster gate approximation): MC gates
-/// monster spawning by LIGHT only - monsters spawn in dark caves at
-/// noon. The engine approximates with the day / night clock (night
-/// == dark surface) because its column probe lands on the surface;
-/// keeping the clock gate preserves the pre-W475 spawning cadence.
-/// Ceiled dims (nether) have no sun, so Monster stays active around
-/// the clock there. Creature keeps the inverse day gate; ambient +
-/// water categories run any time (bats + glow squids probe
-/// underground where the clock does not reach).
+/// W479: the MONSTER category is no longer clock-gated - MC gates
+/// monsters by LIGHT at the candidate cell (`Monster.
+/// isDarkEnoughToSpawn`), which `try_spawn_one`'s anchor pick + the
+/// per-member validation apply. Dark caves therefore spawn monsters
+/// at noon again (the R24 clock approximation is gone). Creature
+/// keeps the day-clock gate so the passive cadence is unchanged
+/// (their light rule needs brightness > 8 anyway); ambient + water
+/// categories run any time (bats + glow squids probe underground
+/// where the clock does not reach).
 pub(crate) fn eligible_categories(
     voxel: &Voxel,
     pools: &'static CategoryPools,
+    ovr: Option<&'static StructureSpawnOverrides>,
     is_night: bool,
-    ceiled: bool,
 ) -> ([SpawnCategory; 6], usize) {
     let mut cats = [SpawnCategory::Monster; 6];
     let mut n = 0;
     for c in ALL_CATEGORIES {
         let clock_ok = match c {
-            SpawnCategory::Monster => is_night || ceiled,
             SpawnCategory::Creature => !is_night,
             _ => true,
         };
         if clock_ok
-            && !rows_of(pools, c).is_empty()
+            && !effective_rows(pools, ovr, c).is_empty()
             && category_count(voxel, c) < c.cap()
         {
             cats[n] = c;
@@ -573,40 +566,39 @@ pub(crate) fn try_spawn_one(
     if mobs_in_chunk(voxel, surface_anchor) >= PER_CHUNK_SOFT_CAP {
         return next_id;
     }
-    // W378 structure overrides stay single-mob mints (their MC
-    // spawner data is a follow-up; the override IS the pool here).
-    if let Some(kind) = structure_override(voxel, surface_anchor, rng) {
-        if !has_solid_floor(voxel, surface_anchor)
-            || !has_standing_room(voxel, surface_anchor)
-        {
-            return next_id;
-        }
-        next_id = mint_pack_member(
-            voxel,
-            kind,
-            surface_anchor,
-            day_time,
-            next_id,
-            rng,
-        );
-        voxel.last_mob_spawn_time = day_time;
-        return next_id;
-    }
+    // W479: structure spawn overrides replace category POOLS now
+    // (outpost / monument / fortress tables from the structure
+    // jsons), pack-spawned through the same loop as biome rows.
+    let ovr = overrides_at(voxel, surface_anchor);
     let (pools, in_swamp, ceiled) = spawn_bucket(voxel, wx, wz);
-    let (sun_dir, _sky) = day_night(day_time);
-    let is_night = sun_dir.y < 0.0;
-    let (cats, n) = eligible_categories(voxel, pools, is_night, ceiled);
+    // W479: night = raw sun elevation below the horizon, the SAME
+    // convention the bed night-skip validates (`try_sleep_bed`).
+    // The old `day_night(t).0.y < 0.0` check was DEAD - that fn
+    // clamps the returned vector to a +0.95y "moon" direction below
+    // the horizon, so the W475 clock gate never fired at all.
+    let phase = (day_time / DAY_LENGTH_S).rem_euclid(1.0);
+    let is_night = (phase * std::f32::consts::TAU).sin() < -0.05;
+    let (cats, n) = eligible_categories(voxel, pools, ovr, is_night);
     if n == 0 {
         return next_id;
     }
     let cat = cats[(rng.next_u32() as usize) % n];
-    let Some(row) = weighted_pick(rows_of(pools, cat), rng.next_f32()) else {
+    let Some(row) = weighted_pick(effective_rows(pools, ovr, cat), rng.next_f32())
+    else {
         return next_id;
     };
     // Category-specific anchor: ambient (bat) + underground water
     // (glow squid) probe BELOW the surface; everyone else uses the
     // surface column cell (water_creature lands one above the ocean
-    // floor = submerged, the W388 squid spot).
+    // floor = submerged, the W388 squid spot). W479: the MONSTER
+    // anchor follows the light - MC rolls a random y over the whole
+    // column (`NaturalSpawner.getRandomPosWithin`), which is what
+    // puts daytime monsters into caves; the engine keeps its
+    // surface-first probe and falls back to the cave probe when the
+    // surface cell is too bright, so dark caves spawn at any hour
+    // while lit surfaces never do. Structure overrides + ceiled dims
+    // keep the surface cell (their interiors ARE the probe target;
+    // member validation still applies each kind's own light rule).
     let anchor = match cat {
         SpawnCategory::Ambient => {
             let Some(a) = probe_cave(voxel, wx, wz, rng) else {
@@ -616,6 +608,16 @@ pub(crate) fn try_spawn_one(
         }
         SpawnCategory::UndergroundWaterCreature => {
             let Some(a) = probe_underground_water(voxel, wx, wz, rng) else {
+                return next_id;
+            };
+            a
+        }
+        SpawnCategory::Monster
+            if ovr.is_none()
+                && !ceiled
+                && !is_dark_enough_for_hostile(voxel, surface_anchor, rng) =>
+        {
+            let Some(a) = probe_cave(voxel, wx, wz, rng) else {
                 return next_id;
             };
             a
@@ -663,7 +665,11 @@ pub(crate) fn spawn_pass(voxel: &mut Voxel, day_time: f32, rng_state: &mut u32) 
 
 /// W354: MC biome name -> spawn-pool bucket. Substring matching over
 /// the vanilla biome ids; order matters (snowy_taiga is a TAIGA, not
-/// a tundra).
+/// a tundra). The off-`Biome`-enum buckets (mushroom / ocean / W479
+/// river) are routed by `spawn_bucket` BEFORE this collapses the
+/// rest; `shore` stays a beach on purpose (stony_shore.json's
+/// monster list equals beach.json's, and the beach turtle row cannot
+/// validate on a stone floor).
 pub(crate) fn mc_biome_to_pool(name: &str) -> crate::worldgen::Biome {
     use crate::worldgen::Biome;
     let n = name;
@@ -922,12 +928,12 @@ mod tests {
         let pools = pool_for(crate::worldgen::Biome::Plains);
         // Night: monster is capped out, but ambient (bat) + the
         // underground water category stay eligible.
-        let (cats, n) = eligible_categories(&v, pools, true, false);
+        let (cats, n) = eligible_categories(&v, pools, None, true);
         assert!(!cats[..n].contains(&SpawnCategory::Monster));
         assert!(cats[..n].contains(&SpawnCategory::Ambient));
         // Day: creature spawning is NOT blocked by the full monster
         // cap.
-        let (cats, n) = eligible_categories(&v, pools, false, false);
+        let (cats, n) = eligible_categories(&v, pools, None, false);
         assert!(cats[..n].contains(&SpawnCategory::Creature));
         // MISC kinds never count toward any cap.
         v.mobs.push(MobState::new_natural(
@@ -943,26 +949,123 @@ mod tests {
     }
 
     #[test]
-    fn eligible_categories_gate_monster_by_clock() {
+    fn eligible_categories_monster_is_clock_free_creature_is_not() {
+        // W479: the MONSTER category is eligible day AND night (the
+        // light rule at the anchor / member decides, not the clock);
+        // Creature keeps the day gate.
         let v = Voxel::new();
         let pools = pool_for(crate::worldgen::Biome::Plains);
-        // Day: no Monster, Creature present.
-        let (cats, n) = eligible_categories(&v, pools, false, false);
-        assert!(!cats[..n].contains(&SpawnCategory::Monster));
+        // Day: Monster present now (light decides later), Creature
+        // present.
+        let (cats, n) = eligible_categories(&v, pools, None, false);
+        assert!(cats[..n].contains(&SpawnCategory::Monster));
         assert!(cats[..n].contains(&SpawnCategory::Creature));
         // Night: Monster present, Creature gone.
-        let (cats, n) = eligible_categories(&v, pools, true, false);
+        let (cats, n) = eligible_categories(&v, pools, None, true);
         assert!(cats[..n].contains(&SpawnCategory::Monster));
         assert!(!cats[..n].contains(&SpawnCategory::Creature));
-        // Ceiled dim (nether pools): Monster active regardless of
-        // the clock.
+        // Nether pools: Monster active regardless of the clock.
         let (cats, n) =
-            eligible_categories(&v, &pool_table::NETHER, false, true);
+            eligible_categories(&v, &pool_table::NETHER, None, false);
         assert!(cats[..n].contains(&SpawnCategory::Monster));
         // Empty pools never become eligible: mushroom fields have
         // no monster category at all.
         let (cats, n) =
-            eligible_categories(&v, &pool_table::MUSHROOM, true, false);
+            eligible_categories(&v, &pool_table::MUSHROOM, None, true);
         assert!(!cats[..n].contains(&SpawnCategory::Monster));
+    }
+
+    #[test]
+    fn structure_overrides_replace_the_monster_rows() {
+        // W479: inside a structure's bounds the monster category
+        // draws from the override table, not the biome pool; other
+        // categories fall through, and the monument's EMPTY
+        // underground-water replacement silences that category.
+        use super::super::structure_overrides::{FORTRESS, MONUMENT, OUTPOST};
+        let pools = pool_for(crate::worldgen::Biome::Plains);
+        let rows = effective_rows(pools, Some(&OUTPOST), SpawnCategory::Monster);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, super::super::kinds::KIND_PILLAGER);
+        // Weighted pick over the single-row table always lands on it.
+        for roll in [0.0, 0.5, 0.99] {
+            assert_eq!(
+                weighted_pick(rows, roll).map(|r| r.kind),
+                Some(super::super::kinds::KIND_PILLAGER)
+            );
+        }
+        // Non-overridden categories keep the biome rows.
+        assert_eq!(
+            effective_rows(pools, Some(&OUTPOST), SpawnCategory::Creature),
+            rows_of(pools, SpawnCategory::Creature)
+        );
+        // Monument: monster -> guardian pack 2-4; underground water
+        // silenced (empty replacement -> category not eligible).
+        let m = effective_rows(pools, Some(&MONUMENT), SpawnCategory::Monster);
+        assert_eq!(m[0].kind, super::super::kinds::KIND_GUARDIAN);
+        assert_eq!((m[0].min_count, m[0].max_count), (2, 4));
+        assert!(
+            effective_rows(
+                pools,
+                Some(&MONUMENT),
+                SpawnCategory::UndergroundWaterCreature
+            )
+            .is_empty()
+        );
+        let v = Voxel::new();
+        let (cats, n) = eligible_categories(&v, pools, Some(&MONUMENT), true);
+        assert!(!cats[..n].contains(&SpawnCategory::UndergroundWaterCreature));
+        // Fortress: the five-row table replaces the nether pool.
+        let f = effective_rows(
+            &pool_table::NETHER,
+            Some(&FORTRESS),
+            SpawnCategory::Monster,
+        );
+        assert_eq!(f.len(), 5);
+        let total: u32 = f.iter().map(|r| r.weight).sum();
+        assert_eq!(total, 28, "fortress weights 10+5+8+2+3");
+        // Outside any structure: the biome pool applies.
+        assert_eq!(
+            effective_rows(pools, None, SpawnCategory::Monster),
+            rows_of(pools, SpawnCategory::Monster)
+        );
+    }
+
+    #[test]
+    fn outpost_pack_spawns_pillagers_in_daylight() {
+        // W479: the override rows run through the SAME pack loop as
+        // biome rows, and the pillager placement rule is block-light
+        // <= 8 with NO sky gate - a full-sun outpost yard mints the
+        // pack (the old single-mint arm is gone).
+        use super::super::structure_overrides::OUTPOST;
+        let mut v = Voxel::new();
+        v.day_time = 0.0; // noon
+        stamp_platform(&mut v, 0, 0, 59, 30, 1, 15);
+        let row = &OUTPOST.monster.unwrap()[0];
+        let mut seed = 0xABCDu32;
+        let mut rng = SpawnRng::new(&mut seed);
+        let ctx = PackCtx {
+            cat: SpawnCategory::Monster,
+            in_swamp: false,
+            ceiled: false,
+            day_time: 0.0,
+        };
+        let (_, minted) = spawn_pack(&mut v, row, &ctx, [0, 60, 0], 1, &mut rng);
+        assert_eq!(minted, 1, "pillager pack (1-1) mints at noon");
+        assert_eq!(v.mobs[0].kind, super::super::kinds::KIND_PILLAGER);
+        // A zombie row on the same lit platform mints nothing.
+        static ZROW: SpawnRow = SpawnRow {
+            kind: KIND_ZOMBIE,
+            weight: 95,
+            min_count: 4,
+            max_count: 4,
+        };
+        let mut v2 = Voxel::new();
+        v2.day_time = 0.0;
+        stamp_platform(&mut v2, 0, 0, 59, 30, 1, 15);
+        let mut seed2 = 0xABCDu32;
+        let mut rng2 = SpawnRng::new(&mut seed2);
+        let (_, minted2) =
+            spawn_pack(&mut v2, &ZROW, &ctx, [0, 60, 0], 1, &mut rng2);
+        assert_eq!(minted2, 0, "zombies never mint on a noon surface");
     }
 }

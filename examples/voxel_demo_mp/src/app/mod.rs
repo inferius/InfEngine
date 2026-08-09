@@ -1157,6 +1157,24 @@ pub(crate) struct Voxel {
     /// Counter for the next mob id. Reset to 1 because 0 is the
     /// host player's id in the pose table - no point in collisions.
     pub(crate) next_mob_id: u32,
+    /// W479: MC `PhantomSpawner` runtime state (the 60-120 s
+    /// cooldown). Host-side, overworld-only, transient like MC's.
+    pub(crate) phantom_spawner: crate::mob::phantom_spawner::PhantomSpawnerState,
+    /// W479: MC `WanderingTraderSpawner` runtime state (tick delay +
+    /// spawn delay + the 25/50/75 chance ladder). Host-side,
+    /// overworld-only; MC persists it in saved data, the engine
+    /// restarts the ladder per boot (documented divergence).
+    pub(crate) trader_spawner: crate::mob::trader_spawner::TraderSpawnerState,
+    /// W479: the HOST player's MC `TIME_SINCE_REST` stat in game
+    /// ticks - +1 per 20 Hz mob tick, reset to 0 by a successful bed
+    /// night-skip. Drives the phantom insomnia roll. Persisted
+    /// (players.bin v7).
+    pub(crate) ticks_since_rest: u32,
+    /// W479: host-side approximation of each REMOTE player's rest
+    /// clock (`client_id -> ticks`): +1 per tick, zeroed when that
+    /// client's validated `vx.sleep` skips the night. Not persisted
+    /// (a reconnect starts rested) - documented divergence.
+    pub(crate) remote_ticks_since_rest: HashMap<u32, u32>,
     /// Per-mob step-sound cooldown (seconds). Drained while the
     /// mob is moving; sound fires + resets when it reaches zero.
     pub(crate) mob_step_timers: HashMap<u32, f32>,

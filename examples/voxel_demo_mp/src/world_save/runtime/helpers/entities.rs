@@ -44,6 +44,8 @@ pub(in crate::world_save::runtime) fn build_dimension_entities_from(
             sheared: m.sheared,
             // W476.1 (v8): slime / magma-cube size reloads intact.
             size: m.size,
+            // W479 (v9): the trader's despawn budget reloads intact.
+            despawn_delay: m.despawn_delay,
         })
         .collect();
     // Deterministic order keeps identical saves byte-identical.
@@ -142,6 +144,9 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
         // clamped onto the MC `1 << rng(3)` domain (1|2|4) so an
         // edited save can't mint a size-0 or size-255 blob.
         mob.size = clamp_mob_size(m.size);
+        // W479 (v9): the wandering trader's despawn budget keeps
+        // counting where it left off.
+        mob.despawn_delay = m.despawn_delay;
         voxel.mobs.push(mob);
     }
     // W302: the spawned-anchor set (v2 saves migrate with an empty
@@ -339,6 +344,7 @@ mod tests {
             trade_xp: 0,
             sheared: false,
             size: 3,
+            despawn_delay: 0,
         });
         bundle.next_mob_id = 2;
         apply_dimension_entities(&mut v, bundle);

@@ -67,15 +67,23 @@ pub(crate) const PLAYER_MAGIC: &[u8; 4] = b"INFP";
 ///   for the release-time migration work, but currently dead-ends
 ///   at 5). Real cross-version compatibility is deferred to the
 ///   final release.
-pub(crate) const PLAYER_FORMAT_VERSION: u32 = 6;
+/// - v7: W479 - adds `ticks_since_rest` (the MC TIME_SINCE_REST
+///   stat driving phantom insomnia). Per the W474/W476.1 precedent
+///   this bump SHIPS a trivial append arrow
+///   (`players_v7::player_v6_to_v7`, default 0 = well rested) so
+///   the user's un-verified v6 world stays loadable; the chain
+///   still dead-ends at 5 for anything older.
+pub(crate) const PLAYER_FORMAT_VERSION: u32 = 7;
 
 /// Default zstd compression level. Matches `chunks.rs` - level 3 is
-/// the documented "balanced" setting from the design doc.
-const ZSTD_LEVEL: i32 = 3;
+/// the documented "balanced" setting from the design doc. W479:
+/// `pub(super)` so the `players_v7` arrow module shares the envelope
+/// helpers instead of copying them.
+pub(super) const ZSTD_LEVEL: i32 = 3;
 
 /// Compression-kind discriminant byte stored in the envelope.
-const COMP_NONE: u8 = 0;
-const COMP_ZSTD: u8 = 1;
+pub(super) const COMP_NONE: u8 = 0;
+pub(super) const COMP_ZSTD: u8 = 1;
 
 /// Default inventory size - 9 hotbar + 27 storage = 36 slots. Mirrors
 /// vanilla MC + this crate's `INVENTORY_SLOTS` so a fresh save loads
@@ -166,6 +174,10 @@ pub(crate) struct PlayerSave {
     /// W419: worn armor `[helmet, chest, legs, boots]`. W469 (v6):
     /// stack-typed - an equipped piece's components persist.
     pub armor: Vec<Option<crate::item::ItemStack>>,
+    /// W479 (v7): MC `TIME_SINCE_REST` stat in game ticks - +1 per
+    /// tick, reset to 0 by a bed night-skip. 72000+ arms the
+    /// phantom insomnia roll. Migrated v6 saves start well rested.
+    pub ticks_since_rest: u32,
 }
 
 /// Build a fresh `PlayerSave` for a brand-new player. `spawn` is a
@@ -198,6 +210,7 @@ pub(crate) fn fresh_player(spawn: [i32; 3]) -> PlayerSave {
         saturation: 5.0,
         xp: 0,
         armor: vec![None; 4],
+        ticks_since_rest: 0, // W479: fresh players are well rested
     }
 }
 
@@ -468,7 +481,7 @@ fn decode_player_bytes(
 /// `expected_len` bytes. Mirrors the chunks.rs helper - bounds the
 /// output so a maliciously inflated header can't trigger an
 /// unbounded allocation.
-fn decode_zstd(body: &[u8], expected_len: usize) -> io::Result<Vec<u8>> {
+pub(super) fn decode_zstd(body: &[u8], expected_len: usize) -> io::Result<Vec<u8>> {
     let mut decoder = zstd::stream::Decoder::new(body)?;
     let mut out: Vec<u8> = Vec::with_capacity(expected_len);
     let mut buf = [0u8; 4096];
@@ -490,7 +503,7 @@ fn decode_zstd(body: &[u8], expected_len: usize) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-fn invalid(msg: impl Into<String>) -> io::Error {
+pub(super) fn invalid(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
 }
 

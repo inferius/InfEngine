@@ -238,6 +238,9 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         inv_ops: &mut inv_ops_outer,
                         inv_drags: &mut inv_drags_outer,
                         gamemode_updates: &mut gamemode_updates_outer,
+                        // W479: validated vx.sleep zeroes the
+                        // sender's insomnia clock.
+                        remote_ticks_since_rest: &mut vx.remote_ticks_since_rest,
                     };
                     net::process_server_inbox(
                         server,
@@ -304,6 +307,10 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         });
                     vx.chest_viewers.retain(|_, v| *v != *id);
                     vx.furnace_viewers.retain(|_, v| *v != *id);
+                    // W479: drop the departed client's insomnia
+                    // clock (a reconnect starts rested - documented
+                    // approximation).
+                    vx.remote_ticks_since_rest.remove(id);
                     if let Some(held) =
                         vx.container_cursors.remove(id).flatten()
                     {

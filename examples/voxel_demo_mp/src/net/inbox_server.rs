@@ -84,6 +84,11 @@ pub(crate) struct ServerInboxCtx<'a> {
     /// bool) from the join handshake + /gamemode changes. Applied
     /// to `Voxel::client_gamemodes` after the drain.
     pub gamemode_updates: &'a mut Vec<(u32, bool)>,
+    /// W479: the host's per-client insomnia clocks
+    /// (`Voxel::remote_ticks_since_rest`) - a validated `vx.sleep`
+    /// zeroes the sender's entry (MC resets TIME_SINCE_REST for the
+    /// player who slept).
+    pub remote_ticks_since_rest: &'a mut HashMap<u32, u32>,
 }
 
 /// Drain the server socket's inbound queue and dispatch each
@@ -279,6 +284,9 @@ pub(crate) fn process_server_inbox(
                 if elev < -0.05 {
                     *ctx.day_time = day_length_s * 0.20;
                     *ctx.last_day_broadcast = None;
+                    // W479: the sleeper's insomnia clock restarts
+                    // (MC resets TIME_SINCE_REST on sleep).
+                    ctx.remote_ticks_since_rest.insert(client_id, 0);
                     let sender = server
                         .client_name(client_id)
                         .unwrap_or_else(|| format!("p{client_id}"));

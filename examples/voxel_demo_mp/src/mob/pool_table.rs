@@ -10,11 +10,11 @@
 //!
 //! MC species with no engine `MobKind` are kept as `// skip:` comment
 //! rows (weights preserved for the eventual port) + listed in
-//! `SKIPPED_SPECIES` for the once-per-boot log. Two kinds are R24 hand
-//! exceptions (phantom + wandering trader) - MC drives those via
-//! custom spawners (`PhantomSpawner` insomnia / `WanderingTraderSpawner`
-//! timer) that are still queued, so the engine keeps its pre-W475
-//! pool-row stand-ins rather than silently dropping night phantoms.
+//! `SKIPPED_SPECIES` for the once-per-boot log. W479 removed the two
+//! R24 hand stand-ins (phantom + wandering trader): MC drives those
+//! via custom spawners and the engine now runs the real ports
+//! (`mob/phantom_spawner.rs` insomnia / `mob/trader_spawner.rs`
+//! timer), so the tables are pure biome-json data again.
 
 use super::kinds::{
     KIND_BAT,
@@ -35,7 +35,6 @@ use super::kinds::{
     KIND_OCELOT,
     KIND_PANDA,
     KIND_PARROT,
-    KIND_PHANTOM,
     KIND_PIG,
     KIND_POLAR_BEAR,
     KIND_RABBIT,
@@ -46,7 +45,6 @@ use super::kinds::{
     KIND_SQUID,
     KIND_STRAY,
     KIND_TURTLE,
-    KIND_WANDERING_TRADER,
     KIND_WITCH,
     KIND_WOLF,
     KIND_ZOMBIE,
@@ -58,6 +56,7 @@ use super::kinds::{
 /// candidate plus its pack-size bounds (`minCount..=maxCount`, both
 /// inclusive - `NaturalSpawner.spawnCategoryForPosition` rolls
 /// `minCount + nextInt(1 + maxCount - minCount)` members per pack).
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SpawnRow {
     pub(crate) kind: u8,
     pub(crate) weight: u32,
@@ -88,8 +87,9 @@ pub(crate) const PLAINS: CategoryPools = CategoryPools {
         SpawnRow { kind: KIND_SLIME, weight: 100, min_count: 4, max_count: 4 },
         SpawnRow { kind: KIND_ENDERMAN, weight: 10, min_count: 1, max_count: 4 },
         SpawnRow { kind: KIND_WITCH, weight: 5, min_count: 1, max_count: 1 },
-        // R24: MC spawns phantoms via PhantomSpawner (insomnia timer), not biome pools - weight-5 night-pool stand-in until that custom spawner is ported (W382).
-        SpawnRow { kind: KIND_PHANTOM, weight: 5, min_count: 1, max_count: 1 },
+        // W479: phantom spawns via the PhantomSpawner insomnia port
+        // (mob/phantom_spawner.rs), never from biome pools - the R24
+        // weight-5 stand-in row is gone.
     ],
     creature: &[
         SpawnRow { kind: KIND_SHEEP, weight: 12, min_count: 4, max_count: 4 },
@@ -98,8 +98,9 @@ pub(crate) const PLAINS: CategoryPools = CategoryPools {
         SpawnRow { kind: KIND_COW, weight: 8, min_count: 4, max_count: 4 },
         SpawnRow { kind: KIND_HORSE, weight: 5, min_count: 2, max_count: 6 },
         SpawnRow { kind: KIND_DONKEY, weight: 1, min_count: 1, max_count: 3 },
-        // R24: MC spawns him via WanderingTraderSpawner (timed, near a player), not biome pools - weight-1 stand-in until that custom spawner is ported (W389).
-        SpawnRow { kind: KIND_WANDERING_TRADER, weight: 1, min_count: 1, max_count: 1 },
+        // W479: the wandering trader spawns via the
+        // WanderingTraderSpawner port (mob/trader_spawner.rs), never
+        // from biome pools - the R24 weight-1 stand-in row is gone.
     ],
     ambient: &[
         SpawnRow { kind: KIND_BAT, weight: 10, min_count: 8, max_count: 8 },
@@ -340,8 +341,7 @@ pub(crate) const SAVANNA: CategoryPools = CategoryPools {
         SpawnRow { kind: KIND_HORSE, weight: 1, min_count: 2, max_count: 6 },
         SpawnRow { kind: KIND_DONKEY, weight: 1, min_count: 1, max_count: 1 },
         // skip: armadillo w=10 (2-3) - no engine MobKind yet.
-        // R24: WanderingTraderSpawner stand-in (see PLAINS row).
-        SpawnRow { kind: KIND_WANDERING_TRADER, weight: 1, min_count: 1, max_count: 1 },
+        // W479: R24 wandering-trader stand-in removed (see PLAINS).
     ],
     ambient: &[
         SpawnRow { kind: KIND_BAT, weight: 10, min_count: 8, max_count: 8 },
@@ -424,6 +424,38 @@ pub(crate) const OCEAN: CategoryPools = CategoryPools {
     ],
 };
 
+/// `river.json` spawners. W479: rivers were collapsed into the BEACH
+/// bucket before, losing the in-water drowned 100 (1-1) row that
+/// makes MC rivers dangerous at night. `frozen_river` stays in the
+/// TUNDRA bucket per the snowy-collapse policy (its json carries
+/// drowned at weight 1 - a documented divergence).
+pub(crate) const RIVER: CategoryPools = CategoryPools {
+    monster: &[
+        SpawnRow { kind: KIND_SPIDER, weight: 100, min_count: 4, max_count: 4 },
+        SpawnRow { kind: KIND_ZOMBIE, weight: 95, min_count: 4, max_count: 4 },
+        SpawnRow { kind: KIND_ZOMBIE_VILLAGER, weight: 5, min_count: 1, max_count: 1 },
+        SpawnRow { kind: KIND_SKELETON, weight: 100, min_count: 4, max_count: 4 },
+        SpawnRow { kind: KIND_CREEPER, weight: 100, min_count: 4, max_count: 4 },
+        SpawnRow { kind: KIND_SLIME, weight: 100, min_count: 4, max_count: 4 },
+        SpawnRow { kind: KIND_ENDERMAN, weight: 10, min_count: 1, max_count: 4 },
+        SpawnRow { kind: KIND_WITCH, weight: 5, min_count: 1, max_count: 1 },
+        SpawnRow { kind: KIND_DROWNED, weight: 100, min_count: 1, max_count: 1 },
+    ],
+    creature: &[],
+    ambient: &[
+        SpawnRow { kind: KIND_BAT, weight: 10, min_count: 8, max_count: 8 },
+    ],
+    water_creature: &[
+        SpawnRow { kind: KIND_SQUID, weight: 2, min_count: 1, max_count: 4 },
+    ],
+    water_ambient: &[
+        // skip: salmon w=5 (1-5) - no engine MobKind yet.
+    ],
+    underground_water_creature: &[
+        SpawnRow { kind: KIND_GLOW_SQUID, weight: 10, min_count: 4, max_count: 6 },
+    ],
+};
+
 /// `nether_wastes.json` spawners.
 pub(crate) const NETHER: CategoryPools = CategoryPools {
     monster: &[
@@ -454,6 +486,7 @@ pub(crate) const SKIPPED_SPECIES: &[&str] = &[
     "nautilus (ocean)",
     "parched (desert)",
     "piglin (nether_wastes)",
+    "salmon (river)",
     "strider (nether_wastes)",
     "zombie_horse (plains, savanna, snowy_plains)",
 ];

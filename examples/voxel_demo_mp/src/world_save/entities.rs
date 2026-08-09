@@ -66,15 +66,21 @@ pub(crate) const ENTITIES_MAGIC: &[u8; 4] = b"INFE";
 /// - v8 (W476.1): adds per-mob `size` (slime / magma-cube 1|2|4 -
 ///   a saved size-4 slime reloaded at size 1 before). Migration in
 ///   `entities_v7_to_v8` appends `size: 1`.
-pub(crate) const ENTITIES_FORMAT_VERSION: u32 = 8;
+/// - v9 (W479): adds per-mob `despawn_delay` (the wandering trader's
+///   48000-tick budget; 0 = no timer). Migration in
+///   `entities_v9::entities_v8_to_v9` appends `despawn_delay: 0`
+///   (the frozen v8 shapes live there too).
+pub(crate) const ENTITIES_FORMAT_VERSION: u32 = 9;
 
 /// Default zstd compression level. Matches `chunks.rs` + `players.rs` -
 /// level 3 is the documented "balanced" setting from the design doc.
-const ZSTD_LEVEL: i32 = 3;
+/// W479: `pub(super)` so the `entities_v9` arrow module shares the
+/// envelope helpers instead of copying them.
+pub(super) const ZSTD_LEVEL: i32 = 3;
 
 /// Compression-kind discriminant byte stored in the envelope.
-const COMP_NONE: u8 = 0;
-const COMP_ZSTD: u8 = 1;
+pub(super) const COMP_NONE: u8 = 0;
+pub(super) const COMP_ZSTD: u8 = 1;
 
 /// All persistent entity state for one dimension.
 ///
@@ -197,6 +203,10 @@ pub(crate) struct MobSave {
     /// other kind stays at 1. The load side clamps to the 1|2|4
     /// domain.
     pub size: u8,
+    /// W479 (v9): MC `WanderingTrader.DespawnDelay` - game ticks
+    /// left before the mob removes itself (48000 on a fresh trader);
+    /// 0 = no timer (every other kind).
+    pub despawn_delay: u32,
     // Future fields go here - with a version bump + migration arrow
     // (bincode is positional; `#[serde(default)]` does NOT cover it).
 }
@@ -415,7 +425,7 @@ fn decode_entities_bytes(
 /// bytes. Mirrors the chunks.rs / players.rs helpers - bounds the
 /// output so a maliciously inflated header can't trigger an unbounded
 /// allocation.
-fn decode_zstd(body: &[u8], expected_len: usize) -> io::Result<Vec<u8>> {
+pub(super) fn decode_zstd(body: &[u8], expected_len: usize) -> io::Result<Vec<u8>> {
     let mut decoder = zstd::stream::Decoder::new(body)?;
     let mut out: Vec<u8> = Vec::with_capacity(expected_len);
     let mut buf = [0u8; 4096];
@@ -437,7 +447,7 @@ fn decode_zstd(body: &[u8], expected_len: usize) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-fn invalid(msg: impl Into<String>) -> io::Error {
+pub(super) fn invalid(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
 }
 
@@ -779,11 +789,13 @@ struct MobSaveV7 {
 }
 
 impl MobSaveV7 {
-    /// Lift to the current shape with the v8 default. Pre-v8 saves
-    /// predate slime-size persistence; size-1 is exactly what the
-    /// old load path reconstructed for every mob.
-    fn lift(self) -> MobSave {
-        MobSave {
+    /// Lift to the FROZEN v8 shape with the v8 default (W479: the
+    /// live struct is v9 now - encoding it under a v8 tag would
+    /// break the chained 8 -> 9 arrow). Pre-v8 saves predate
+    /// slime-size persistence; size-1 is exactly what the old load
+    /// path reconstructed for every mob.
+    fn lift(self) -> super::entities_v9::MobSaveV8 {
+        super::entities_v9::MobSaveV8 {
             id: self.id,
             kind: self.kind,
             pos: self.pos,
@@ -814,9 +826,9 @@ struct DropSaveV7 {
 }
 
 impl DropSaveV7 {
-    /// Lift to the current shape (field-identical today).
-    fn lift(self) -> DropSave {
-        DropSave {
+    /// Lift to the FROZEN v8 shape (field-identical; W479 freeze).
+    fn lift(self) -> super::entities_v9::DropSaveV8 {
+        super::entities_v9::DropSaveV8 {
             id: self.id,
             stack: self.stack,
             pos: self.pos,
@@ -1278,7 +1290,8 @@ pub(crate) fn entities_v7_to_v8(bytes: &[u8]) -> io::Result<Vec<u8>> {
     let cfg = bincode::config::standard();
     let (v7, _read) = bincode::serde::decode_from_slice::<DimensionEntitiesV7, _>(&raw_v7, cfg)
         .map_err(|err| invalid(format!("entities v7 payload decode failed: {err}")))?;
-    let v8 = DimensionEntities {
+    // W479: emit the FROZEN v8 shape (the live struct is v9 now).
+    let v8 = super::entities_v9::DimensionEntitiesV8 {
         format_version: 8,
         mobs: v7.mobs.into_iter().map(MobSaveV7::lift).collect(),
         drops: v7.drops.into_iter().map(DropSaveV7::lift).collect(),
@@ -1654,9 +1667,11 @@ mod tests {
             COMP_NONE => out[17..].to_vec(),
             _ => decode_zstd(&out[17..], len).unwrap(),
         };
-        let (v8, _) = bincode::serde::decode_from_slice::<DimensionEntities, _>(
-            &body, cfg,
-        )
+        // W479: the arrow emits the FROZEN v8 shape now.
+        let (v8, _) = bincode::serde::decode_from_slice::<
+            crate::world_save::entities_v9::DimensionEntitiesV8,
+            _,
+        >(&body, cfg)
         .unwrap();
         assert_eq!(v8.format_version, 8);
         assert_eq!(v8.mobs.len(), 1);
@@ -1727,12 +1742,12 @@ mod tests {
         );
     }
 
-    /// W476.1: the full chain - a legacy v2 envelope walks 2 -> 3 ->
-    /// 4 -> 5 -> 6 -> 7 -> 8 through the production registry and
-    /// decodes at the current version with every appended default in
-    /// place.
+    /// W479: the full chain - a legacy v2 envelope walks 2 -> 3 ->
+    /// 4 -> 5 -> 6 -> 7 -> 8 -> 9 through the production registry
+    /// and decodes at the current version with every appended
+    /// default in place.
     #[test]
-    fn entities_v2_chains_to_v8_through_registry() {
+    fn entities_v2_chains_to_current_through_registry() {
         let cfg = bincode::config::standard();
         let v2 = DimensionEntitiesV2 {
             format_version: 2,
@@ -1772,7 +1787,7 @@ mod tests {
             2,
             &bytes,
         )
-        .expect("registry chains 2 -> 8");
+        .expect("registry chains 2 -> current");
         let (payload, _migrated_flag, _post) = decode_entities_bytes(
             &migrated,
             Path::new("chain-test"),
@@ -1787,6 +1802,7 @@ mod tests {
         assert_eq!(m.trade_xp, 0, "v5 default");
         assert!(!m.sheared, "v7 default");
         assert_eq!(m.size, 1, "v8 default");
+        assert_eq!(m.despawn_delay, 0, "v9 default");
         assert_eq!(payload.drops.len(), 1);
         assert_eq!(
             payload.drops[0].stack,

@@ -386,6 +386,13 @@ fn entities_migration_v0_to_v1_round_trip() {
     registry.register(SaveKind::Entities, 6, 7, entities_v6_to_v7);
     // W476.1: ...and on to v8 (slime / magma-cube size).
     registry.register(SaveKind::Entities, 7, 8, entities_v7_to_v8);
+    // W479: ...and on to v9 (trader despawn budget).
+    registry.register(
+        SaveKind::Entities,
+        8,
+        9,
+        super::entities_v9::entities_v8_to_v9,
+    );
 
     let loaded = read_entities_in_dir_with_registry(tmp.path(), SLUG, DIM, &registry)
         .unwrap()

@@ -114,6 +114,12 @@ pub(crate) struct MobState {
     /// (2.0 s at 20 TPS). Transient - not persisted or wired; the
     /// graze pass owns the countdown + the bite at 4 ticks left.
     pub(crate) eat_left: f32,
+    /// W479: MC `WanderingTrader.DespawnDelay` - game ticks left
+    /// before the mob removes itself (48000 = 40 min on a fresh
+    /// trader). 0 = no timer (every other kind). Counts down in
+    /// `trader_spawner::despawn_delay_pass`, PAUSED while a trade
+    /// session is open against this mob. Persisted (entities v9).
+    pub(crate) despawn_delay: u32,
 }
 
 impl MobState {
@@ -159,6 +165,7 @@ impl MobState {
             trade_xp: 0,
             sheared: false,
             eat_left: 0.0,
+            despawn_delay: 0,
         }
     }
 }

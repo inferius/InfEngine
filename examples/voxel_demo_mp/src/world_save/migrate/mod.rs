@@ -316,6 +316,14 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         8,
         super::entities::entities_v7_to_v8,
     );
+    // W479: entities v8 -> v9 appends per-mob `despawn_delay: 0`
+    // (the wandering trader's 48000-tick budget).
+    reg.register(
+        SaveKind::Entities,
+        8,
+        9,
+        super::entities_v9::entities_v8_to_v9,
+    );
     // W138: containers v3 -> v4 adds doors / chest facings /
     // brewing stands / levers-on (the runtime block-state maps
     // that were never persisted - reloaded doors rendered open-
@@ -387,6 +395,17 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         4,
         5,
         super::players::player_v4_to_v5,
+    );
+    // W479: player.bin v6 -> v7 appends `ticks_since_rest: 0` (the
+    // phantom insomnia stat; migrated players wake well rested).
+    // Note the chain still dead-ends at 5 per the R39 dev policy -
+    // this arrow exists so the CURRENT dev format keeps loading
+    // (the W474/W476.1 append-arrow precedent).
+    reg.register(
+        SaveKind::Player,
+        6,
+        7,
+        super::players_v7::player_v6_to_v7,
     );
 }
 

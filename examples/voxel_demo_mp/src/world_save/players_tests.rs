@@ -309,10 +309,11 @@ fn write_player_is_atomic_no_tmp_left_behind() {
 
 #[test]
 fn player_format_version_matches_design_doc() {
-    // Lock the published schema number. Bumped to v6 in W469 with
-    // ItemStack armor + craft-grid slots. Per the R39 dev-save
-    // policy there is NO 5 -> 6 migration arrow - older files
-    // refuse with a clear message until the release-time
-    // migration work lands.
-    assert_eq!(PLAYER_FORMAT_VERSION, 6);
+    // Lock the published schema number. Bumped to v7 in W479 with
+    // `ticks_since_rest` (phantom insomnia stat). The 6 -> 7 append
+    // arrow ships (W474/W476.1 precedent); per the R39 dev-save
+    // policy the chain still dead-ends at 5 - older files refuse
+    // with a clear message until the release-time migration work
+    // lands.
+    assert_eq!(PLAYER_FORMAT_VERSION, 7);
 }

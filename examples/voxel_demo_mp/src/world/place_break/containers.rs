@@ -176,6 +176,9 @@ pub(crate) fn try_sleep_bed(vx: &mut crate::Voxel) {
         NetRole::Offline | NetRole::Server { .. } => {
             vx.day_time = DAY_LENGTH_S * 0.20;
             vx.last_day_broadcast = None;
+            // W479: sleeping resets the MC TIME_SINCE_REST stat -
+            // the phantom insomnia clock starts over.
+            vx.ticks_since_rest = 0;
             vx.chat_log.push((
                 std::time::Instant::now(),
                 "* sleeps through the night".to_string(),

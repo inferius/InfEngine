@@ -1,40 +1,29 @@
 //! Light-level gates for mob spawning.
 //!
-//! Mirrors MC's `Monster::checkMonsterSpawnRules` (hostile gate) +
+//! Mirrors MC's `Monster::isDarkEnoughToSpawn` (hostile gate) +
 //! `Animal::checkAnimalSpawnRules` (passive gate). Both rules
-//! consult the per-voxel block + sky light layers + the time-of-day
-//! ramp to decide whether the candidate cell is "dark enough" or
-//! "bright enough" for the kind being placed.
+//! consult the per-voxel block + sky light layers to decide whether
+//! the candidate cell is "dark enough" or "bright enough" for the
+//! kind being placed.
 //!
 //! Cited MC source files:
-//! - `net/minecraft/world/entity/monster/Monster.java::checkMonsterSpawnRules`
-//!   - block_light <= 7 AND effective_sky_light <= 7 AND difficulty > 0.
+//! - `net/minecraft/world/entity/monster/Monster.java::isDarkEnoughToSpawn`
+//!   - the three-clause dark test ported in
+//!     `is_dark_enough_for_hostile` (see the mapping comment there).
 //! - `net/minecraft/world/entity/animal/Animal.java::checkAnimalSpawnRules`
-//!   - sky_light >= 9 (the spawnable-floor half moved to
-//!     `spawn::creature_floor_ok` in W475).
+//!   - `getRawBrightness(pos, 0) > 8` (the spawnable-floor half
+//!     lives in `spawn_rules::creature_floor_ok`).
 //!
 //! All free fns over `(&Voxel, [i32; 3])` so they compose into the
 //! spawn loop in `spawn.rs` without coupling to the AI tick body.
 
 use infengine_voxel::CHUNK_SIZE;
 
+use crate::DAY_LENGTH_S;
 use crate::Voxel;
 use crate::lighting::compute_day_factor;
-use crate::DAY_LENGTH_S;
 
-/// MC's hostile spawn-gate ceiling. `block_light` strictly above
-/// this kills the spawn. MC uses 7 here too
-/// (Monster.java::isDarkEnoughToSpawn).
-pub(crate) const HOSTILE_MAX_BLOCK_LIGHT: u8 = 7;
-/// Effective sky-light ceiling for hostile spawns. `sky_light *
-/// day_factor` strictly above this kills the spawn. We mirror the
-/// MC behaviour of "spawning at night ignores sun" by multiplying
-/// the raw sky value by the day-factor ramp.
-pub(crate) const HOSTILE_MAX_SKY_LIGHT: f32 = 7.0;
-/// MC's passive spawn-gate floor. `sky_light` strictly below this
-/// kills the spawn (Animal.java::checkAnimalSpawnRules). 9 is high
-/// enough to filter caves + heavily forested floor.
-pub(crate) const PASSIVE_MIN_SKY_LIGHT: u8 = 9;
+use super::spawn::SpawnRng;
 
 /// Look up the block-light value at the world voxel `wpos`. Returns
 /// 0 when the chunk hasn't been lit yet (treats unknown cells as
@@ -74,30 +63,70 @@ pub(crate) fn sky_light_at(voxel: &Voxel, wpos: [i32; 3]) -> u8 {
 }
 
 /// Effective sky light at `wpos`: raw sky value multiplied by the
-/// day-factor ramp. Drives the hostile gate so zombies stop
-/// spawning once the sun is up.
+/// day-factor ramp. The engine's analog of MC's skyDarken-adjusted
+/// sky channel; also feeds the slime / bat local-brightness rules.
 pub(crate) fn effective_sky_light(voxel: &Voxel, wpos: [i32; 3]) -> f32 {
     let raw = sky_light_at(voxel, wpos) as f32;
     raw * compute_day_factor(voxel.day_time, DAY_LENGTH_S)
 }
 
-/// Same dark-cell check MC's `Monster::isDarkEnoughToSpawn` runs:
-/// block_light <= 7 AND effective_sky_light <= 7. Both layers must
-/// pass; a torch-lit night spot is invalid (block_light too high)
-/// and a daylight overworld surface is invalid (effective sky
-/// light too high).
-pub(crate) fn is_dark_enough_for_hostile(voxel: &Voxel, wpos: [i32; 3]) -> bool {
-    let bl = block_light_at(voxel, wpos);
-    let esl = effective_sky_light(voxel, wpos);
-    bl <= HOSTILE_MAX_BLOCK_LIGHT && esl <= HOSTILE_MAX_SKY_LIGHT
+/// W479: full `Monster.isDarkEnoughToSpawn` port.
+///
+/// MC -> engine light-model mapping (the engine has raw sky 0-15,
+/// raw block 0-15 and a multiplicative day-factor ramp 1.0 noon ->
+/// 0.04 midnight, where MC has raw sky, raw block and a SUBTRACTIVE
+/// skyDarken 0 day -> 11 midnight; 10 while thundering):
+/// 1. `skyLight > nextInt(32)` rejects  ->  identical, raw sky
+///    channel vs `rng % 32` (a sky-exposed cell is probabilistically
+///    penalised even at night, exactly the MC roll);
+/// 2. `blockLight > monsterSpawnBlockLightLimit` rejects  ->  the
+///    overworld limit is 0, so ANY block light kills the spawn
+///    (torch-lit = never). Ceiled dims never reach this fn (their
+///    MC limit is 15 = no check; the callers keep the `ceiled ||`
+///    bypass so nether spawning is unchanged);
+/// 3. `max(blockLight, skyLight - skyDarken) <= uniform(0..7)
+///    sample`  ->  darkened sky = `sky * day_factor` (thundering
+///    clamps the factor to the midnight floor, MC's amount=10
+///    thunder case), brightness = `max(block, round(darkened))`,
+///    pass iff `brightness <= rng % 8`.
+///
+/// Net effects: noon surface (sky 15) fails clause 3
+/// deterministically; midnight surface passes probabilistically
+/// (MC-like); caves (sky 0, block 0) pass at ANY hour; block light
+/// >= 1 fails clause 2 deterministically.
+pub(crate) fn is_dark_enough_for_hostile(
+    voxel: &Voxel,
+    wpos: [i32; 3],
+    rng: &mut SpawnRng<'_>,
+) -> bool {
+    let sky = sky_light_at(voxel, wpos);
+    if sky as u32 > rng.next_u32() % 32 {
+        return false;
+    }
+    let block = block_light_at(voxel, wpos);
+    if block > 0 {
+        return false;
+    }
+    let mut factor = compute_day_factor(voxel.day_time, DAY_LENGTH_S);
+    if voxel.thundering {
+        // MC thunder case: sample as if skyDarken were 10 (storm
+        // light ~= night). The engine's midnight factor is the
+        // equivalent floor of its multiplicative model.
+        factor = factor.min(compute_day_factor(DAY_LENGTH_S * 0.75, DAY_LENGTH_S));
+    }
+    let darkened = (sky as f32 * factor).round().clamp(0.0, 15.0) as u32;
+    let brightness = (block as u32).max(darkened);
+    brightness <= rng.next_u32() % 8
 }
 
-/// MC's `Animal::checkAnimalSpawnRules`: sky_light >= 9 AND a
-/// spawnable floor below. The floor half lives in
-/// `spawn::creature_floor_ok` since W475 (per-kind MC block tags
-/// replaced the old grass-only check).
+/// MC's `Animal::checkAnimalSpawnRules` light half:
+/// `getRawBrightness(pos, 0) > 8` = the brighter of the raw sky and
+/// block channels must exceed 8 (a torch-lit night pen spawns
+/// animals in MC too - W479 aligned the engine from sky-only to the
+/// max of both channels). The floor half lives in
+/// `spawn_rules::creature_floor_ok` (per-kind MC block tags).
 pub(crate) fn is_bright_enough_for_passive(voxel: &Voxel, wpos: [i32; 3]) -> bool {
-    sky_light_at(voxel, wpos) >= PASSIVE_MIN_SKY_LIGHT
+    sky_light_at(voxel, wpos).max(block_light_at(voxel, wpos)) > 8
 }
 
 /// Standing-room check: the cell at `wpos` is air AND the cell at
@@ -119,7 +148,9 @@ mod tests {
     //! Tests run against a freshly built `Voxel` so we can stamp
     //! light values directly into the lighting state + read them
     //! back out. The tests stay independent of the AI tick / spawn
-    //! loop - they verify the gate predicates in isolation.
+    //! loop - they verify the gate predicates in isolation. The
+    //! hostile gate carries MC's probabilistic rolls, so positive
+    //! cases sweep seeds (`any`) and negative cases assert `never`.
 
     use super::*;
     use crate::Voxel;
@@ -140,6 +171,19 @@ mod tests {
         let g = voxel.lighting.ensure(cc);
         g.set_block(lc, block);
         g.set_sky(lc, sky);
+    }
+
+    fn hostile_over_seeds(v: &Voxel, w: [i32; 3]) -> (bool, bool) {
+        let mut any = false;
+        let mut all = true;
+        for s in 1..128u32 {
+            let mut seed = s.wrapping_mul(0x9E37_79B9);
+            let mut rng = SpawnRng::new(&mut seed);
+            let ok = is_dark_enough_for_hostile(v, w, &mut rng);
+            any |= ok;
+            all &= ok;
+        }
+        (any, all)
     }
 
     #[test]
@@ -163,49 +207,71 @@ mod tests {
     }
 
     #[test]
-    fn hostile_spawn_at_block_light_7_passes() {
-        // MC gate: block_light <= 7. Boundary value, daytime
-        // (sky_light = 0 -> effective sky = 0 -> passes ceiling).
+    fn hostile_dark_cave_passes_at_noon_deterministically() {
+        // Clause-by-clause: sky 0 -> clause 1 never rejects; block 0
+        // -> clause 2 passes; brightness 0 <= any sample -> clause 3
+        // passes. A dark cave spawns monsters at ANY hour (the W479
+        // behaviour change vs the old day/night clock).
         let mut v = Voxel::new();
-        v.day_time = 0.0; // noon, day_factor = 1.0
-        stamp_light(&mut v, [0, 50, 0], 7, 0);
-        assert!(is_dark_enough_for_hostile(&v, [0, 50, 0]));
+        v.day_time = 0.0; // noon
+        stamp_light(&mut v, [0, 30, 0], 0, 0);
+        let (_, all) = hostile_over_seeds(&v, [0, 30, 0]);
+        assert!(all, "dark cave must pass for every roll");
     }
 
     #[test]
-    fn hostile_spawn_at_block_light_8_fails() {
-        // One above the ceiling: block_light gate fails.
+    fn hostile_any_block_light_fails_deterministically() {
+        // MC 1.18+ rule: overworld monsterSpawnBlockLightLimit = 0,
+        // so even block light 1 kills the spawn (7 passed pre-W479).
         let mut v = Voxel::new();
-        v.day_time = 0.0;
-        stamp_light(&mut v, [0, 50, 0], 8, 0);
-        assert!(!is_dark_enough_for_hostile(&v, [0, 50, 0]));
+        v.day_time = crate::DAY_LENGTH_S * 0.75; // midnight
+        for bl in [1u8, 7, 8, 14] {
+            stamp_light(&mut v, [0, 50, 0], bl, 0);
+            let (any, _) = hostile_over_seeds(&v, [0, 50, 0]);
+            assert!(!any, "block light {bl} must never spawn");
+        }
     }
 
     #[test]
-    fn hostile_spawn_at_full_daylight_fails() {
-        // Full sun (day_time = 0, day_factor ~1.0) + sky_light=15:
-        // effective sky = 15 > 7 -> hostile gate fails even with
-        // block_light = 0.
+    fn hostile_full_daylight_surface_never_passes() {
+        // Noon + sky 15: darkened sky = 15 > 7 -> clause 3 rejects
+        // every roll (clause 1 also rejects ~half).
         let mut v = Voxel::new();
         v.day_time = 0.0;
         stamp_light(&mut v, [0, 50, 0], 0, 15);
-        assert!(!is_dark_enough_for_hostile(&v, [0, 50, 0]));
+        let (any, _) = hostile_over_seeds(&v, [0, 50, 0]);
+        assert!(!any, "noon surface must never spawn");
     }
 
     #[test]
-    fn hostile_spawn_at_midnight_with_full_sky_passes() {
-        // Midnight: day_factor = 0.04, sky_light = 15 ->
-        // effective sky = 0.6 -> well under 7, hostile gate
-        // passes (matches MC: night ignores the sun).
+    fn hostile_midnight_surface_passes_for_some_rolls() {
+        // Midnight: darkened sky ~= 15 * 0.04 -> brightness ~1, so
+        // clause 3 passes 7/8 and clause 1 passes 17/32 - the night
+        // surface spawns, probabilistically like MC.
         let mut v = Voxel::new();
-        v.day_time = crate::DAY_LENGTH_S * 0.75; // midnight (phase 0.75)
+        v.day_time = crate::DAY_LENGTH_S * 0.75;
         stamp_light(&mut v, [0, 50, 0], 0, 15);
-        assert!(is_dark_enough_for_hostile(&v, [0, 50, 0]));
+        let (any, all) = hostile_over_seeds(&v, [0, 50, 0]);
+        assert!(any, "midnight surface must spawn for some rolls");
+        assert!(!all, "sky-exposed cells keep the MC nextInt(32) roll");
+    }
+
+    #[test]
+    fn hostile_thunder_darkens_the_day_sky() {
+        // Thundering at noon: the factor clamps to the midnight
+        // floor (MC's amount=10 thunder sample), so a sky-15 surface
+        // behaves like night instead of deterministically rejecting.
+        let mut v = Voxel::new();
+        v.day_time = 0.0;
+        v.thundering = true;
+        stamp_light(&mut v, [0, 50, 0], 0, 15);
+        let (any, _) = hostile_over_seeds(&v, [0, 50, 0]);
+        assert!(any, "storm-dark noon surface must spawn for some rolls");
     }
 
     #[test]
     fn passive_spawn_at_sky_light_9_passes() {
-        // MC gate: sky_light >= 9. Boundary value.
+        // MC gate: raw brightness > 8. Boundary value via sky.
         let mut v = Voxel::new();
         stamp_light(&mut v, [0, 50, 0], 0, 9);
         assert!(is_bright_enough_for_passive(&v, [0, 50, 0]));
@@ -216,6 +282,18 @@ mod tests {
         // One below the floor: passive gate fails.
         let mut v = Voxel::new();
         stamp_light(&mut v, [0, 50, 0], 0, 8);
+        assert!(!is_bright_enough_for_passive(&v, [0, 50, 0]));
+    }
+
+    #[test]
+    fn passive_spawn_accepts_block_light_channel() {
+        // W479: `getRawBrightness(pos, 0)` is the max of BOTH
+        // channels - a torch-lit night pen (block 9+, sky 0) spawns
+        // animals, exactly like MC.
+        let mut v = Voxel::new();
+        stamp_light(&mut v, [0, 50, 0], 9, 0);
+        assert!(is_bright_enough_for_passive(&v, [0, 50, 0]));
+        stamp_light(&mut v, [0, 50, 0], 8, 0);
         assert!(!is_bright_enough_for_passive(&v, [0, 50, 0]));
     }
 

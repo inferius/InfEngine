@@ -25,12 +25,11 @@
 //! - `Delay`/`SpawnPotentials` NBT persistence skipped: delay state is
 //!   runtime-only, an app restart or chunk unload re-inits to the
 //!   20-tick initial delay (MC saves the counter in the block entity).
-//! - Light gate reuses the engine-wide hostile rule
-//!   (`is_dark_enough_for_hostile`: block <= 7 AND effective sky <= 7)
-//!   so spawners and natural spawns stay consistent; 26.1.2's
-//!   `isDarkEnoughToSpawn` (sky > rand(32) reject, overworld block
-//!   limit 0, brightness <= rand(0..=7)) is a global light-rule
-//!   upgrade for a future wave.
+//! - Light gate reuses the engine-wide hostile rule so spawners and
+//!   natural spawns stay consistent - W479 upgraded it to the full
+//!   26.1.2 `isDarkEnoughToSpawn` port (sky > rand(32) reject,
+//!   overworld block-light limit 0, brightness <= rand(0..=7); see
+//!   `light::is_dark_enough_for_hostile`).
 //! - `finalizeSpawn` extras (gear rolls, baby-zombie chance) don't
 //!   exist in the engine's mob model; `isUnobstructed` entity-vs-
 //!   entity overlap isn't checked (engine mobs don't hard-collide).
@@ -277,13 +276,17 @@ fn run_spawn_cycle(vx: &mut Voxel, pos: [i32; 3], st: &mut SpawnerState) {
             continue;
         }
         // SpawnPlacements.checkSpawnRules(SPAWNER): the monster light
-        // gate at the target block (ground rule auto-passes).
+        // gate at the target block (ground rule auto-passes). W479:
+        // the gate carries MC's random rolls now - feed it a stream
+        // split off the spawner's own rng.
         let cell = [
             sx.floor() as i32,
             sy.floor() as i32,
             sz.floor() as i32,
         ];
-        if !is_dark_enough_for_hostile(vx, cell) {
+        let mut gate_seed = (st.rng.next_u64() as u32) | 1;
+        let mut gate_rng = crate::mob::spawn::SpawnRng::new(&mut gate_seed);
+        if !is_dark_enough_for_hostile(vx, cell, &mut gate_rng) {
             continue;
         }
         if count_same_kind_near(vx, pos, kind) >= SPAWNER_MAX_NEARBY {

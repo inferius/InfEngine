@@ -132,8 +132,19 @@ fn tick_mobs_once(voxel: &mut Voxel, dt: f32) {
     }
     voxel.last_despawn_check_time =
         despawn::despawn_pass(voxel, day_time, voxel.last_despawn_check_time, &mut to_remove);
+    // W479: the wandering trader's 40-minute despawn budget (one
+    // game tick per call; paused while his trade UI is open).
+    super::trader_spawner::despawn_delay_pass(voxel, &mut to_remove);
     evict(voxel, &to_remove);
     spawn::spawn_pass(voxel, day_time, &mut rand_seed);
+    // W479: MC custom spawners (overworld-only, host-side) + the
+    // per-player insomnia clocks they read.
+    {
+        let mut rng = spawn::SpawnRng::new(&mut rand_seed);
+        super::phantom_spawner::phantom_spawner_tick(voxel, &mut rng);
+        super::trader_spawner::trader_spawner_tick(voxel, &mut rng);
+    }
+    super::phantom_spawner::tick_rest_counters(voxel);
     // W242.2: monster-spawner blocks tick at the same fixed 20 Hz
     // (each call = one MC game tick for the BaseSpawner counters).
     super::spawner::spawner_pass(voxel);

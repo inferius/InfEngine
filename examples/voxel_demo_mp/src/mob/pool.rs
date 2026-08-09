@@ -4,8 +4,10 @@
 //!
 //! Pre-W475 the pools were hand-written day / night `(kind, weight)`
 //! pairs; the categories + pack counts now come straight from the
-//! data files and the day / night split lives in the spawner's
-//! category gate instead (see `spawn::eligible_categories`).
+//! data files. W479: the day / night MONSTER split moved from the
+//! category clock gate onto the MC light rule (`light::
+//! is_dark_enough_for_hostile` sampled at the anchor + per member),
+//! so dark caves spawn monsters at noon exactly like MC.
 //!
 //! Cited MC source files:
 //! - `net/minecraft/world/level/biome/MobSpawnSettings.java` -
@@ -201,11 +203,12 @@ pub(crate) fn log_skipped_species_once() {
 mod tests {
     use super::super::kinds::{
         KIND_BAT, KIND_CAMEL, KIND_CHICKEN, KIND_COW, KIND_DONKEY,
-        KIND_ENDERMAN, KIND_GLOW_SQUID, KIND_HORSE, KIND_HUSK,
-        KIND_IRON_GOLEM, KIND_MOOSHROOM, KIND_PHANTOM, KIND_PIG,
-        KIND_RABBIT, KIND_SHEEP, KIND_SKELETON, KIND_SLIME, KIND_SQUID,
-        KIND_STRAY, KIND_TURTLE, KIND_VILLAGER, KIND_WANDERING_TRADER,
-        KIND_WITCH, KIND_WOLF, KIND_ZOMBIE, KIND_ZOMBIE_VILLAGER,
+        KIND_DROWNED, KIND_ENDERMAN, KIND_GLOW_SQUID, KIND_HORSE,
+        KIND_HUSK, KIND_IRON_GOLEM, KIND_MOOSHROOM, KIND_PHANTOM,
+        KIND_PIG, KIND_RABBIT, KIND_SHEEP, KIND_SKELETON, KIND_SLIME,
+        KIND_SQUID, KIND_STRAY, KIND_TURTLE, KIND_VILLAGER,
+        KIND_WANDERING_TRADER, KIND_WITCH, KIND_WOLF, KIND_ZOMBIE,
+        KIND_ZOMBIE_VILLAGER,
     };
     use super::*;
     use crate::worldgen::Biome;
@@ -223,8 +226,9 @@ mod tests {
     #[test]
     fn plains_creature_rows_match_plains_json() {
         // plains.json creature list: sheep 12 / pig 10 / chicken 10 /
-        // cow 8 (all 4-4 packs) + horse 5 (2-6) + donkey 1 (1-3) +
-        // the R24 wandering-trader stand-in.
+        // cow 8 (all 4-4 packs) + horse 5 (2-6) + donkey 1 (1-3).
+        // W479: the R24 wandering-trader stand-in row is GONE - the
+        // real WanderingTraderSpawner port owns him now.
         let c = pool_for(Biome::Plains).creature;
         for (kind, w, mn, mx) in [
             (KIND_SHEEP, 12, 4, 4),
@@ -233,19 +237,20 @@ mod tests {
             (KIND_COW, 8, 4, 4),
             (KIND_HORSE, 5, 2, 6),
             (KIND_DONKEY, 1, 1, 3),
-            (KIND_WANDERING_TRADER, 1, 1, 1),
         ] {
             let r = row_of(c, kind);
             assert_eq!((r.weight, r.min_count, r.max_count), (w, mn, mx));
         }
-        assert_eq!(c.len(), 7);
+        assert_eq!(c.len(), 6);
+        assert_eq!(weight_of(c, KIND_WANDERING_TRADER), 0, "R24 row gone");
     }
 
     #[test]
     fn plains_monster_rows_match_plains_json() {
         // The 100-weight quartet + zombie 90 (zombie_horse holds the
         // other 5 in MC - skip-logged) + zombie_villager 5 + witch 5
-        // + enderman 10 (1-4) + the R24 phantom stand-in.
+        // + enderman 10 (1-4). W479: the R24 phantom stand-in row is
+        // GONE - the real PhantomSpawner port owns it now.
         let m = pool_for(Biome::Plains).monster;
         for (kind, w) in [
             (super::super::kinds::KIND_SPIDER, 100),
@@ -256,12 +261,30 @@ mod tests {
             (KIND_ZOMBIE_VILLAGER, 5),
             (KIND_WITCH, 5),
             (KIND_ENDERMAN, 10),
-            (KIND_PHANTOM, 5),
         ] {
             assert_eq!(weight_of(m, kind), w, "kind {kind}");
         }
+        assert_eq!(weight_of(m, KIND_PHANTOM), 0, "R24 row gone");
         let e = row_of(m, KIND_ENDERMAN);
         assert_eq!((e.min_count, e.max_count), (1, 4));
+    }
+
+    #[test]
+    fn river_rows_match_river_json() {
+        // W479: river.json - the full 8-entry overworld monster set
+        // PLUS drowned 100 (1-1, the river night threat), squid 2
+        // (1-4) in water_creature, no creatures, salmon skip-logged.
+        let p = &pool_table::RIVER;
+        assert_eq!(weight_of(p.monster, KIND_DROWNED), 100);
+        let d = row_of(p.monster, KIND_DROWNED);
+        assert_eq!((d.min_count, d.max_count), (1, 1));
+        assert_eq!(p.monster.len(), 9);
+        assert!(p.creature.is_empty());
+        let s = row_of(p.water_creature, KIND_SQUID);
+        assert_eq!((s.weight, s.min_count, s.max_count), (2, 1, 4));
+        assert!(p.water_ambient.is_empty(), "salmon has no kind yet");
+        let g = row_of(p.underground_water_creature, KIND_GLOW_SQUID);
+        assert_eq!((g.weight, g.min_count, g.max_count), (10, 4, 6));
     }
 
     #[test]

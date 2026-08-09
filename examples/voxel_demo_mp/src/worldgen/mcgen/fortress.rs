@@ -1038,6 +1038,13 @@ pub(crate) fn is_throne_spawner(ctx: &WorldgenCtx, pos: [i32; 3]) -> bool {
     })
 }
 
+/// W479: is `pos` inside ANY fortress piece's bounding box? The
+/// per-piece Bb membership is exactly MC's `bounding_box: piece`
+/// semantics for the fortress spawn overrides (`fortress.json`).
+pub(crate) fn pos_in_fortress(ctx: &WorldgenCtx, pos: [i32; 3]) -> bool {
+    fortress_probe(ctx, pos, |_, _| true)
+}
+
 fn fortress_probe(
     ctx: &WorldgenCtx,
     pos: [i32; 3],

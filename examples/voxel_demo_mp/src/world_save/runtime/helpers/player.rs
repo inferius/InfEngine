@@ -55,6 +55,8 @@ pub(in crate::world_save::runtime) fn build_player_save(voxel: &Voxel) -> Player
         xp: voxel.player_xp,
         // W419: worn armor (W469: full stacks - components persist).
         armor: voxel.armor_slots.to_vec(),
+        // W479: the phantom insomnia clock survives reload.
+        ticks_since_rest: voxel.ticks_since_rest,
     }
 }
 
@@ -107,6 +109,8 @@ pub(in crate::world_save::runtime) fn apply_player_save(voxel: &mut Voxel, save:
     for (i, slot) in save.armor.iter().take(4).enumerate() {
         voxel.armor_slots[i] = slot.clone();
     }
+    // W479: the phantom insomnia clock picks up where it left off.
+    voxel.ticks_since_rest = save.ticks_since_rest;
     // W10.1: keep the cached ability bundle in lockstep with
     // `game_mode`. Without this the fly / invuln / instabuild
     // flags would lag a tick behind the loaded mode.
