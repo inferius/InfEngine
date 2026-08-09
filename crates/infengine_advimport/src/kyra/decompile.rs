@@ -323,7 +323,9 @@ fn translate(
             sound: format!("kyra.sfx{sound}"),
         }),
         FN_PLAY_MUSIC => site.args.first().copied().map(|track| Action::PlayMusic {
-            music: Some(format!("kyra.music{track}")),
+            // Commands 0 and 1 of the original's track map are "fade
+            // out" and "halt" - a stop, not a tune.
+            music: (track > 1).then(|| format!("kyra.music{track}")),
         }),
         FN_SCENE_ANIM_ON | FN_INTERNAL_ANIM_ON | FN_ANIM_UNTIL_DONE => site
             .args
