@@ -76,11 +76,54 @@ fn tick_stalls_when_input_is_empty() {
 
 #[test]
 fn tick_stalls_when_no_recipe() {
-    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(1, 1)), Some(ItemStack::new(13, 1)));
+    // W476: dirt (2) is the canonical junk input now - stone gained
+    // the MC stone -> smooth_stone recipe. The accept filter would
+    // block dirt from ever landing in slot 0 via the UI; set_slot
+    // bypasses it, which is exactly the defensive path under test.
+    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(2, 1)), Some(ItemStack::new(13, 1)));
     step_one_furnace(&mut f, &mut rt, 100);
     assert_eq!(rt.cook_progress_ms, 0);
     assert_eq!(rt.fuel_left_ms, 0);
     assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(13, 1)));
+}
+
+#[test]
+fn lava_bucket_burn_leaves_empty_bucket_in_fuel_slot() {
+    // W476: MC crafting-remainder rule. Lighting the lava bucket
+    // (fuel 20000 ticks) must swap the emptied fuel slot to the
+    // EMPTY bucket, not clear it.
+    use crate::block::{BUCKET_EMPTY_ID, BUCKET_LAVA_ID};
+    let (mut f, mut rt) = loaded_furnace(
+        Some(ItemStack::new(14, 1)),
+        Some(ItemStack::new(BUCKET_LAVA_ID, 1)),
+    );
+    step_one_furnace(&mut f, &mut rt, 100);
+    assert_eq!(rt.fuel_full_ms, 20000 * TICK_MS);
+    assert_eq!(rt.fuel_left_ms, rt.fuel_full_ms - 100);
+    assert_eq!(
+        f.slot(FURNACE_FUEL_SLOT),
+        Some(ItemStack::new(BUCKET_EMPTY_ID, 1)),
+        "empty bucket stays behind as the crafting remainder"
+    );
+    // The bucket is NOT fuel - the furnace must idle on it once the
+    // lava burn ends instead of consuming it.
+    let mut rt2 = super::FurnaceRuntime::default();
+    step_one_furnace(&mut f, &mut rt2, 100);
+    assert_eq!(rt2.fuel_full_ms, 0, "empty bucket never lights");
+    assert_eq!(
+        f.slot(FURNACE_FUEL_SLOT),
+        Some(ItemStack::new(BUCKET_EMPTY_ID, 1)),
+        "bucket survives the failed relight"
+    );
+}
+
+#[test]
+fn coal_burn_leaves_no_remainder() {
+    // W476: only the lava bucket has a crafting remainder - coal
+    // still clears the slot like before.
+    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 1)), Some(ItemStack::new(13, 1)));
+    step_one_furnace(&mut f, &mut rt, 100);
+    assert_eq!(f.slot(FURNACE_FUEL_SLOT), None);
 }
 
 #[test]
@@ -279,9 +322,11 @@ fn action_place_into_input_accepts_smeltable() {
 fn action_place_into_input_rejects_non_smeltable() {
     let mut f = new_furnace();
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
-    let mut held: Option<ItemStack> = Some(ItemStack::new(1, 3));
+    // W476: dirt (2) is the canonical non-smeltable probe (stone
+    // gained the MC stone -> smooth_stone recipe).
+    let mut held: Option<ItemStack> = Some(ItemStack::new(2, 3));
     apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Place(FURNACE_INPUT_SLOT), false);
-    assert_eq!(held, Some(ItemStack::new(1, 3)));
+    assert_eq!(held, Some(ItemStack::new(2, 3)));
     assert_eq!(f.slot(FURNACE_INPUT_SLOT), None);
 }
 
@@ -349,14 +394,15 @@ fn action_transfer_from_furnace_to_player() {
 fn action_transfer_from_player_to_furnace_respects_filters() {
     let mut f = new_furnace();
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
-    inv[3] = Some(ItemStack::new(1, 5));
+    // W476: dirt (2) - stone smelts now, dirt stays junk.
+    inv[3] = Some(ItemStack::new(2, 5));
     let mut held: Option<ItemStack> = None;
     apply_player_action(&mut inv, &mut f, &mut held, GridAction::Transfer(3), false);
-    // W470 (AbstractFurnaceMenu.quickMoveStack): stone is neither
+    // W470 (AbstractFurnaceMenu.quickMoveStack): dirt is neither
     // smeltable nor fuel, so no furnace slot takes it - the MC
     // fallback hops it from the hotbar into the main rows instead.
     assert_eq!(inv[3], None);
-    assert_eq!(inv[9], Some(ItemStack::new(1, 5)));
+    assert_eq!(inv[9], Some(ItemStack::new(2, 5)));
     assert_eq!(f.slot(FURNACE_INPUT_SLOT), None);
     assert_eq!(f.slot(FURNACE_FUEL_SLOT), None);
 }
@@ -377,15 +423,19 @@ fn action_place_one_into_input_lifts_single_item() {
 fn full_ui_session_roundtrip() {
     // Simulate a 2-step user flow: place input + fuel via the
     // GridAction path, run a cook, take the ingot.
+    // W476: the fuel is CHARCOAL (993) now - coal-ore 13 became
+    // smeltable (MC coal_ore -> coal), so its quick-move targets
+    // the input slot per AbstractFurnaceMenu.quickMoveStack and
+    // would bounce off the occupied input here.
     let mut f = new_furnace();
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
     inv[0] = Some(ItemStack::new(14, 2));
-    inv[1] = Some(ItemStack::new(13, 1));
+    inv[1] = Some(ItemStack::new(993, 1));
     let mut held: Option<ItemStack> = None;
     apply_player_action(&mut inv, &mut f, &mut held, GridAction::Transfer(0), false);
     assert_eq!(f.slot(FURNACE_INPUT_SLOT), Some(ItemStack::new(14, 2)));
     apply_player_action(&mut inv, &mut f, &mut held, GridAction::Transfer(1), false);
-    assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(13, 1)));
+    assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(993, 1)));
     let mut rt = FurnaceRuntime::default();
     step_one_furnace(&mut f, &mut rt, FURNACE_COOK_MS_PER_OUTPUT);
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), Some(ItemStack::new(43, 1)));

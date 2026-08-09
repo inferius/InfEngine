@@ -29,7 +29,10 @@ fn input_slot_accepts_smeltables_only() {
     let c = new_furnace();
     assert!(c.accepts(FURNACE_INPUT_SLOT, 8)); // cobble (smeltable)
     assert!(c.accepts(FURNACE_INPUT_SLOT, 14)); // iron ore
-    assert!(!c.accepts(FURNACE_INPUT_SLOT, 1)); // stone (no recipe)
+    // W476: stone smelts now (MC stone -> smooth_stone); dirt is
+    // the canonical no-recipe id.
+    assert!(c.accepts(FURNACE_INPUT_SLOT, 1)); // stone -> smooth stone
+    assert!(!c.accepts(FURNACE_INPUT_SLOT, 2)); // dirt (no recipe)
     assert!(!c.accepts(FURNACE_INPUT_SLOT, 0)); // air
 }
 
@@ -72,9 +75,17 @@ fn set_slot_bypasses_filter_for_cook_path() {
 #[test]
 fn accept_predicates_match_smelting_module() {
     assert!(accept_smeltable(8));
-    assert!(!accept_smeltable(1));
+    // W476: stone (1) SMELTS now (MC stone -> smooth_stone); dirt
+    // (2) is the canonical non-smeltable probe.
+    assert!(accept_smeltable(1));
+    assert!(!accept_smeltable(2));
     assert!(accept_fuel(13));
     assert!(!accept_fuel(1));
+    // W476: the generated FuelValues rows flow through the same
+    // predicate - lava bucket + charcoal accept, empty bucket not.
+    assert!(accept_fuel(crate::block::BUCKET_LAVA_ID));
+    assert!(accept_fuel(993));
+    assert!(!accept_fuel(crate::block::BUCKET_EMPTY_ID));
     assert!(!accept_nothing(0));
     assert!(!accept_nothing(43));
 }
@@ -209,18 +220,23 @@ fn recover_held_smeltable_lands_in_input_slot() {
 #[test]
 fn recover_held_fuel_lands_in_fuel_slot() {
     let mut c = new_furnace();
+    // W476: probe with planks (7) - pure fuel, no smelt recipe.
+    // Coal-ore 13 gained the MC coal_ore -> coal recipe, so insert
+    // order would now route it to the INPUT slot first.
     let leftover =
-        recover_held_on_close(Some(&mut c), Some(ItemStack::new(13, 8)));
+        recover_held_on_close(Some(&mut c), Some(ItemStack::new(7, 8)));
     assert!(leftover.is_none());
-    assert_eq!(c.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(13, 8)));
+    assert_eq!(c.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(7, 8)));
 }
 
 #[test]
 fn recover_held_non_matching_item_falls_as_drops() {
     let mut c = new_furnace();
+    // W476: dirt (2) is the neither-smeltable-nor-fuel probe now
+    // (stone gained the MC stone -> smooth_stone recipe).
     let leftover =
-        recover_held_on_close(Some(&mut c), Some(ItemStack::new(1, 3)));
-    assert_eq!(leftover, Some(ItemStack::new(1, 3)));
+        recover_held_on_close(Some(&mut c), Some(ItemStack::new(2, 3)));
+    assert_eq!(leftover, Some(ItemStack::new(2, 3)));
     assert!(c.is_empty());
 }
 

@@ -10,21 +10,19 @@
 //!   UI hover-tip will probe individual ids. A hash-map allocation
 //!   per lookup would cost more than the match.
 //!
-//! Phase C.4 ships the seed recipes (cobble -> stone, iron ore ->
-//! iron ingot) and the seed fuels (coal, planks, wood, sticks if
-//! ever registered). Future commits append entries here without
-//! touching the furnace runtime.
+//! W476: the rows behind these fns are GENERATED from the MC 26.1.2
+//! recipe jsons + FuelValues.java (see `recipes/smelting_table.rs`).
+//! This wrapper adds exactly one engine-legacy exception on top: the
+//! ore-coal id 13 (mining still drops it until the W477 loot pass)
+//! keeps its 1600-tick burn even though MC's coal_ore is not a fuel.
 //!
 //! Cross-module mapping:
 //! - input + output ids are the same `u16` used by `item::ITEM_TYPES`
 //!   and `block::BLOCK_TYPES`. The furnace runtime trusts the table -
 //!   it does not verify that an item with id `output` actually
 //!   exists; callers test that via the matching `item_type` lookup.
-//! - the iron-ingot output points at item id `43`, the new item
-//!   added in C.4 (no block form). See `item::ITEM_TYPES` for the
-//!   row.
 
-use crate::block::{CHEST_ID, COAL_ID, FURNACE_ID, PLANKS_ID, WOOD_ID};
+use crate::block::{BUCKET_EMPTY_ID, BUCKET_LAVA_ID, CHEST_ID, COAL_ID, FURNACE_ID};
 
 /// Resolve a smelt recipe.
 ///
@@ -34,13 +32,11 @@ use crate::block::{CHEST_ID, COAL_ID, FURNACE_ID, PLANKS_ID, WOOD_ID};
 /// of consuming fuel on a junk input.
 ///
 /// Output count is currently always 1; the type leaves room for
-/// multi-output recipes (e.g. sand -> 1 glass, but sand -> 2 sugar
-/// in a different mod) without rewriting the callers.
+/// multi-output recipes without rewriting the callers.
 pub(crate) fn smelt_recipe(input_id: u16) -> Option<(u16, u8)> {
-    // W50.4: delegate to the extended recipes/smelting table. The
-    // legacy match arms (cobble -> stone, IRON_ORE -> IRON_INGOT)
-    // are folded into SMELTING_RECIPES so the furnace tick + the
-    // recipe book share the same source of truth.
+    // W50.4/W476: delegate to the generated recipes/smelting table
+    // so the furnace tick + the recipe book share one source of
+    // truth.
     crate::recipes::smelting::smelting_for(input_id)
         .map(|r| r.output)
 }
@@ -48,30 +44,32 @@ pub(crate) fn smelt_recipe(input_id: u16) -> Option<(u16, u8)> {
 /// Resolve a fuel's burn duration.
 ///
 /// Returns the number of 50-ms game ticks the item burns for; `0`
-/// means "not a fuel". Vanilla mappings:
-/// - coal:   1600 ticks (80 s -> 8 outputs per coal).
-/// - planks: 300 ticks (15 s -> 1.5 outputs per plank).
-/// - wood:   300 ticks (matches planks: vanilla treats raw logs as
-///   planks-equivalent fuel for the basic furnace).
+/// means "not a fuel". Values come from the generated FuelValues
+/// port (coal/charcoal 1600, logs + planks 300, stick 100, wooden
+/// slabs 150, lava bucket 20000, ...).
 ///
 /// The runtime multiplies these by `TICK_MS` to get the burn
 /// duration in milliseconds. The catch-up dispatcher uses the same
 /// constant on the offline path so the two units stay in sync.
 pub(crate) fn fuel_burn_ticks(item_id: u16) -> u32 {
-    // W50.4: delegate to the recipes table so new fuel ids (other
-    // log variants, sticks, ladders) flow through one place.
-    // Fallback to the legacy 1600 / 300 mapping for the original
-    // 3 ids so the existing furnace tests stay green.
-    let extended = crate::recipes::smelting::fuel_burn_ticks(item_id);
-    if extended > 0 {
-        return extended;
+    let generated = crate::recipes::smelting::fuel_burn_ticks(item_id);
+    if generated > 0 {
+        return generated;
     }
-    match item_id {
-        id if id == COAL_ID => 1600,
-        id if id == PLANKS_ID => 300,
-        id if id == WOOD_ID => 300,
-        _ => 0,
-    }
+    // W476 engine-legacy exception: id 13 is the ore-coal row that
+    // mining currently drops and torch crafting consumes - it keeps
+    // burning like the coal item (1600) until W477 reroutes ore
+    // drops onto the real coal item (325).
+    if item_id == COAL_ID { 1600 } else { 0 }
+}
+
+/// W476: crafting remainder left in the FUEL slot when the last item
+/// of a fuel stack burns up. MC's `AbstractFurnaceBlockEntity`
+/// replaces an emptied fuel stack with `item.getCraftingRemainder()`;
+/// for vanilla fuels that is exactly the lava bucket -> empty
+/// bucket pair.
+pub(crate) fn fuel_remainder(item_id: u16) -> Option<u16> {
+    (item_id == BUCKET_LAVA_ID).then_some(BUCKET_EMPTY_ID)
 }
 
 /// True when `item_id` has a smelt recipe registered. Small helper
@@ -114,7 +112,10 @@ mod tests {
     #[test]
     fn smelt_unknown_id_is_none() {
         assert!(smelt_recipe(0).is_none()); // air
-        assert!(smelt_recipe(1).is_none()); // stone (already smelted)
+        // W476: stone SMELTS now (MC stone -> smooth_stone), so the
+        // negative probe moved to dirt - MC has no dirt smelt (the
+        // old dirt -> bricks stand-in is deleted).
+        assert!(smelt_recipe(2).is_none());
         assert!(smelt_recipe(9999).is_none());
     }
 
@@ -148,11 +149,30 @@ mod tests {
     }
 
     #[test]
+    fn fuel_lava_bucket_burns_20000_ticks() {
+        // W476: FuelValues.java baseUnit * 100.
+        assert_eq!(fuel_burn_ticks(crate::block::BUCKET_LAVA_ID), 20000);
+    }
+
+    #[test]
+    fn fuel_remainder_is_empty_bucket_for_lava_only() {
+        // W476: MC crafting remainder - burning the lava bucket
+        // leaves the empty bucket in the fuel slot.
+        assert_eq!(
+            fuel_remainder(crate::block::BUCKET_LAVA_ID),
+            Some(crate::block::BUCKET_EMPTY_ID)
+        );
+        assert_eq!(fuel_remainder(COAL_ID), None);
+        assert_eq!(fuel_remainder(0), None);
+        assert_eq!(fuel_remainder(993), None); // charcoal
+    }
+
+    #[test]
     fn is_smeltable_matches_recipe_some() {
         assert!(is_smeltable(8));
         assert!(is_smeltable(IRON_ORE_ID));
         assert!(!is_smeltable(0));
-        assert!(!is_smeltable(1));
+        assert!(!is_smeltable(2)); // dirt (W476: stone smelts now)
     }
 
     #[test]
@@ -160,6 +180,7 @@ mod tests {
         assert!(is_fuel(COAL_ID));
         assert!(is_fuel(PLANKS_ID));
         assert!(is_fuel(WOOD_ID));
+        assert!(is_fuel(993)); // W476: charcoal
         assert!(!is_fuel(0));
         assert!(!is_fuel(1));
     }
@@ -167,7 +188,7 @@ mod tests {
     #[test]
     fn smelt_sand_to_glass_via_recipes_table() {
         // W50.4: sand (id 4) -> glass (id 9). Comes from the
-        // recipes/smelting table, not the legacy match arms.
+        // recipes/smelting table, not legacy match arms.
         assert_eq!(smelt_recipe(4), Some((9, 1)));
     }
 
@@ -179,8 +200,9 @@ mod tests {
 
     #[test]
     fn smelt_oak_log_to_charcoal() {
-        // W50.4: oak log (id 5) -> charcoal/coal (13).
-        assert_eq!(smelt_recipe(5), Some((13, 1)));
+        // W476: oak log (id 5) -> the real charcoal item (993), not
+        // the legacy ore-coal id 13.
+        assert_eq!(smelt_recipe(5), Some((993, 1)));
     }
 
     #[test]

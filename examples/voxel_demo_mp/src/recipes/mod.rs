@@ -13,6 +13,9 @@ pub(crate) mod brewing;
 pub(crate) mod matcher;
 pub(crate) mod shaped;
 pub(crate) mod smelting;
+// W476: GENERATED smelting + fuel rows (MC 26.1.2 recipe jsons +
+// FuelValues.java). `smelting` re-exports the tables.
+pub(crate) mod smelting_table;
 pub(crate) mod smithing;
 pub(crate) mod stonecutter;
 

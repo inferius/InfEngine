@@ -2699,6 +2699,14 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
     ItemType { id: 990, name: "netherite_chestplate", display: Some("Netherite Chestplate"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
     ItemType { id: 991, name: "netherite_leggings", display: Some("Netherite Leggings"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
     ItemType { id: 992, name: "netherite_boots", display: Some("Netherite Boots"), places: None, max_stack: 1, icon: None, category: ItemCategory::Tool },
+    // W476: furnace-economy items. Pure items (no block form); the
+    // names ARE the MC item png stems so the icon resolves via the
+    // W53.7 match-name path with no ITEM_NAME_MAP row. charcoal is
+    // the log-smelt output + a 1600-tick fuel (FuelValues.java);
+    // clay_ball is the brick-smelt input (clay block drops route it
+    // in the W477 loot pass).
+    ItemType { id: 993, name: "charcoal", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
+    ItemType { id: 994, name: "clay_ball", display: None, places: None, max_stack: 64, icon: None, category: ItemCategory::Ingredient },
 ];
 
 /// W145: mob kind spawned by a spawn-egg item id, `None` for

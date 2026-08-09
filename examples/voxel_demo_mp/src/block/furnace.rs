@@ -275,9 +275,19 @@ pub(crate) fn step_one_furnace(
         }
         // Consume one fuel item. Count decrement keeps the stack's
         // components; clear the slot when count drops to 0.
+        // W476: MC crafting-remainder rule (AbstractFurnaceBlockEntity
+        // serverTick: `itemStack.shrink(1); if (itemStack.isEmpty())
+        // items.set(1, item.getCraftingRemainder())`) - burning the
+        // last lava bucket leaves the EMPTY BUCKET in the fuel slot.
+        // set_slot is the raw setter, so the accept_fuel filter can't
+        // reject the non-fuel bucket; the relight path above then
+        // parks on it exactly like MC (furnace won't relight until
+        // the player pulls the bucket out).
         let new_count = fuel.count.saturating_sub(1);
         if new_count == 0 {
-            furnace.set_slot(FURNACE_FUEL_SLOT, None);
+            let remainder = crate::smelting::fuel_remainder(fuel.id)
+                .map(|id| crate::item::ItemStack::new(id, 1));
+            furnace.set_slot(FURNACE_FUEL_SLOT, remainder);
         } else {
             furnace.set_slot(FURNACE_FUEL_SLOT, Some(fuel.with_count(new_count)));
         }
