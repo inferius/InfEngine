@@ -40,6 +40,9 @@ const FN_SET_FLAG: i32 = 5;
 const FN_RESET_FLAG: i32 = 6;
 /// Walks the player to a point.
 const FN_WALK_PLAYER: i32 = 11;
+/// `placeItemInGenericMapScene(item, index)` - the original drops the
+/// item at a random free spot of a wilderness scene.
+const FN_PLACE_ITEM_GENERIC: i32 = 31;
 /// Walks a named character to one, so its point starts an argument later.
 const FN_WALK_CHARACTER: i32 = 81;
 /// Starts one of the room's animations, and waits for one to finish.
@@ -303,6 +306,15 @@ fn translate(
             value: site.function == FN_SET_FLAG,
         }),
         FN_WALK_PLAYER => point(&site.args, 0).map(|to| Action::Walk { to }),
+        // The original rolls a random free spot; a deterministic spread
+        // over the playfield keeps the drop reachable and repeatable.
+        FN_PLACE_ITEM_GENERIC => site.args.first().map(|item| {
+            let index = site.args.get(1).copied().unwrap_or(0).max(0) as f32;
+            Action::PlaceItem {
+                item: format!("kyra.item{item}"),
+                at: glam::Vec2::new(48.0 + (index * 67.0) % 224.0, 104.0 + (index * 13.0) % 32.0),
+            }
+        }),
         // The character is the first argument here, so the point starts
         // one later. Reading it at zero walks the actor to the
         // character's number.
