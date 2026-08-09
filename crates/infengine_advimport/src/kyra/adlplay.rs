@@ -50,7 +50,6 @@ const OPERATORS: [u8; 2] = [0x00, 0x03];
 /// Bytes an instrument occupies.
 const INSTRUMENT_BYTES: usize = 11;
 /// The registers those bytes go to, as pairs.
-const INSTRUMENT_REGISTERS: [u8; 6] = [0x20, 0xC0, 0xE0, 0x40, 0x60, 0x80];
 
 /// How long a program may run before it is called a loop.
 ///
@@ -190,32 +189,39 @@ impl<'a> Channel<'a> {
         // the 190 that are tracks - which is why the driver indexes them
         // at an offset rather than from the start.
         let Some(file) = self.file else { return };
-        let Some(data) = file.instrument(number as usize) else {
+        // Where instruments sit depends on the file: the music banks
+        // keep them past the 190 track programs, the effect banks index
+        // them directly. The number itself does not say, so whichever
+        // slot holds enough bytes to be an instrument wins.
+        let Some(data) = file
+            .instrument(number as usize)
+            .filter(|data| data.len() >= INSTRUMENT_BYTES)
+            .or_else(|| file.program(number as usize))
+        else {
             return;
         };
         if data.len() < INSTRUMENT_BYTES {
             return;
         }
-        let mut byte = 0usize;
-        for register in INSTRUMENT_REGISTERS {
-            for (op, offset) in OPERATORS.iter().enumerate() {
-                // Feedback and algorithm are one register for the whole
-                // channel rather than one per operator.
-                if register == 0xC0 {
-                    if op == 0 {
-                        chip.write(0xC0 + CHANNEL, data[byte]);
-                        byte += 1;
-                    }
-                    continue;
-                }
-                let value = data[byte];
-                byte += 1;
-                if register == 0x40 {
-                    self.instrument_level[op] = value & 0x3F;
-                }
-                chip.write(register + offset, value);
-            }
-        }
+        // The layout is byte-interleaved per operator pair, exactly as
+        // the original driver walks it: characteristics for both ops,
+        // the channel's feedback, both waveforms, both levels, both
+        // attack/decay bytes, both sustain/release bytes. Walking it
+        // register-major instead scrambled everything past the third
+        // byte - attack rates got waveform bits, and every effect came
+        // out at a peak of eight in thirty-two thousand.
+        chip.write(0x20 + OPERATORS[0], data[0]);
+        chip.write(0x20 + OPERATORS[1], data[1]);
+        chip.write(0xC0 + CHANNEL, data[2]);
+        chip.write(0xE0 + OPERATORS[0], data[3]);
+        chip.write(0xE0 + OPERATORS[1], data[4]);
+        self.instrument_level[0] = data[5] & 0x3F;
+        self.instrument_level[1] = data[6] & 0x3F;
+        chip.write(0x40 + OPERATORS[0], data[5]);
+        chip.write(0x60 + OPERATORS[0], data[7]);
+        chip.write(0x60 + OPERATORS[1], data[8]);
+        chip.write(0x80 + OPERATORS[0], data[9]);
+        chip.write(0x80 + OPERATORS[1], data[10]);
         self.apply_level(chip);
     }
 
