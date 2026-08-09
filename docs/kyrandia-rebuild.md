@@ -55,10 +55,11 @@ to run when the index does not parse, instead of "starting fresh".
 12. kyra_intro_time     <FLOPPY> _assets/kyrandia
        story animation sheets re-baked in PLAYED order with exact tick
        rates read from MAIN.EXE (loops included, per loop slot)
-13. kyra_intro_script   <FLOPPY> _assets/kyrandia
+13. kyra_intro_script   <FLOPPY> _assets/kyrandia <GOG>
        the four intro rooms + scripts (positions, music tracks, effect
        cues at measured tick offsets, subtitles from the EXE's own text
-       table) + game.ron start/intro pointers
+       table, speech wired from INTRO.VRM - recording numbers are the
+       subtitle string indexes) + game.ron start/intro pointers
 14. kyra_spots          (re-run after any script regeneration)
 ```
 

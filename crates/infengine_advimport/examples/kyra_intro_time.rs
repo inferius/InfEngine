@@ -136,8 +136,21 @@ fn main() {
         }
     };
 
-    // TREE2 needs TREE1's last frame as its screen; brought over below.
+    // TREE2 stores no first frame - it continues on what TREE1 left on
+    // screen. TREE1 is 248 wide and TREE2 is 320, so the seed has to be
+    // built at TREE2's size: the forest backdrop's band with TREE1's
+    // last frame laid over the left of it. Passing TREE1's frame raw
+    // was a length mismatch, the seed was silently dropped, and every
+    // TREE2 frame baked as deltas over nothing - confetti where the
+    // forest should be.
     let mut tree_last: Option<Vec<u8>> = None;
+    let forest_band: Option<Vec<u8>> = std::fs::read(game.join("TREE.CPS"))
+        .ok()
+        .and_then(|data| cps::decode(&data).ok())
+        .map(|forest| {
+            let width = forest.width as usize;
+            forest.indices[16 * width..144 * width].to_vec()
+        });
     let hands = hand_shapes(&game);
 
     for scene in SCENES {
@@ -148,8 +161,23 @@ fn main() {
                 continue;
             };
             let Ok(data) = std::fs::read(game.join(file)) else { continue };
+            let tree_seed = (*file == "TREE2.WSA")
+                .then(|| {
+                    let (band, last) = (forest_band.as_ref()?, tree_last.as_ref()?);
+                    let mut seed = band.clone();
+                    for y in 0..128usize {
+                        for x in 0..248usize {
+                            let over = last[y * 248 + x];
+                            if over != 0 {
+                                seed[y * 320 + x] = over;
+                            }
+                        }
+                    }
+                    Some(seed)
+                })
+                .flatten();
             let decoded = if *file == "TREE2.WSA" {
-                wsa::decode_over(&data, tree_last.as_deref())
+                wsa::decode_over(&data, tree_seed.as_deref())
             } else {
                 wsa::decode(&data)
             };

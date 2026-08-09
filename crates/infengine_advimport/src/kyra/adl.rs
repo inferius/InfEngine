@@ -333,7 +333,15 @@ impl<'a> AdlFile<'a> {
     /// an offset of 500 bytes into the header rather than at its start:
     /// 120 for the track table plus 190 pointers of two bytes each.
     pub fn instrument(&self, instrument: usize) -> Option<&'a [u8]> {
-        self.program(TRACK_PROGRAMS + instrument)
+        // Where the instrument table starts depends on the file's
+        // vintage: 150 programs in the floppy-era files, 190 in the
+        // later ones (ScummVM's AdLibDriver keeps the same split by
+        // version). The right base is the one whose slot holds
+        // instrument-sized data.
+        [150usize, TRACK_PROGRAMS]
+            .into_iter()
+            .filter_map(|base| self.program(base + instrument))
+            .find(|data| (11..=64).contains(&data.len()))
     }
 
     /// How many programs the file actually defines.

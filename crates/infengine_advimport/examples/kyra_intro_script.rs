@@ -9,8 +9,13 @@
 //! are written whole.
 //!
 //! ```text
-//! cargo run -p infengine_advimport --release --example kyra_intro_script -- <floppy dir> <project>
+//! cargo run -p infengine_advimport --release --example kyra_intro_script -- <floppy dir> <project> [vrm dir]
 //! ```
+//!
+//! With a directory holding `INTRO.VRM` - the CD release keeps the
+//! intro's speech there, numbered by the same string indexes the
+//! subtitles use - the recordings are written under `voice/intro/` and
+//! the voice-language lines point at them.
 
 #![allow(clippy::print_stdout)]
 
@@ -70,6 +75,7 @@ fn main() {
         println!("usage: kyra_intro_script <floppy dir with MAIN.EXE> <project>");
         return;
     };
+    let vrm_dir = args.next().map(PathBuf::from);
     let game = PathBuf::from(game);
     let project = PathBuf::from(project);
 
@@ -81,6 +87,44 @@ fn main() {
         println!("the intro string table was not where it should be");
         return;
     };
+
+    // The spoken lines, when the CD's INTRO.VRM is at hand: recording
+    // numbers are the same string indexes the subtitles use.
+    let mut voiced: std::collections::HashMap<usize, String> = Default::default();
+    if let Some(dir) = &vrm_dir {
+        match std::fs::read(dir.join("INTRO.VRM")) {
+            Ok(bytes) => match infengine_advimport::kyra::pak::Pak::parse(&bytes) {
+                Ok(pak) => {
+                    for (_, index) in LINES {
+                        let name = format!("{index:03}.VOC");
+                        let Some(at) = pak
+                            .entries()
+                            .iter()
+                            .position(|e| e.name.eq_ignore_ascii_case(&name))
+                        else {
+                            continue;
+                        };
+                        let Some(data) = pak.data_at(at) else { continue };
+                        let Ok(voice) = infengine_advimport::kyra::voc::decode(data) else {
+                            println!("intro voice {index:03}: did not decode");
+                            continue;
+                        };
+                        let rel = format!("voice/intro/{index:03}.wav");
+                        let path = project.join(&rel);
+                        if let Some(parent) = path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if std::fs::write(&path, voice.to_wav()).is_ok() {
+                            voiced.insert(*index, rel);
+                        }
+                    }
+                    println!("intro speech: {} recordings wired", voiced.len());
+                }
+                Err(err) => println!("INTRO.VRM: {err}"),
+            },
+            Err(err) => println!("INTRO.VRM: {err}"),
+        }
+    }
 
     // Subtitles into both locales; existing voice fields stay.
     let loca_dir = project.join(infengine_loca::LOCALE_DIR);
@@ -103,7 +147,14 @@ fn main() {
                 english.get(*index).cloned()
             };
             let Some(text) = text else { continue };
-            locale.lines.entry(id.to_string()).or_default().text = text;
+            let line = locale.lines.entry(id.to_string()).or_default();
+            line.text = text;
+            // The voice rides on the voice language's locale only.
+            if language == "en"
+                && let Some(rel) = voiced.get(index)
+            {
+                line.voice = Some(rel.clone());
+            }
         }
         match infengine_loca::save_locale(&locale, &loca_dir) {
             Ok(_) => println!("{language}: {} intro lines", LINES.len()),
