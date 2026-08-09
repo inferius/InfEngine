@@ -56,9 +56,9 @@ const SCENES: &[Scene] = &[
 /// A drawShape riding on a shown frame: which play it followed, the
 /// shape index, and the screen position.
 type Draw = (usize, usize, i32, i32);
-/// One animation's play log: frames in shown order, the ticks its span
-/// took, and the shape draws over it.
-type PlayLog = (Vec<usize>, u32, Vec<Draw>);
+/// One animation's play log: frames in shown order with the tick each
+/// was shown at, the ticks its span took, and the shape draws over it.
+type PlayLog = (Vec<(usize, u32)>, u32, Vec<Draw>);
 
 /// The three hand-with-quill shapes from WRITING.CPS: a bank of
 /// `u16 count`, word offsets, and per shape a small header
@@ -166,7 +166,7 @@ fn main() {
                 .and_then(|data| Palette::from_vga_6bit(&data));
             let mut played: Vec<Vec<u8>> = order
                 .iter()
-                .filter_map(|frame| anim.frames.get(*frame).cloned())
+                .filter_map(|(frame, _)| anim.frames.get(*frame).cloned())
                 .collect();
             if played.is_empty() {
                 continue;
@@ -194,6 +194,15 @@ fn main() {
                 }
             }
             let fps = 60.0 * played.len() as f32 / (*ticks).max(1) as f32;
+            // The pacing as the original played it: each frame stays up
+            // until the next one was shown. Uniform speed averaged the
+            // pauses into a crawl - a scene rattles through a burst and
+            // then holds through a line of dialogue.
+            let mut timing: Vec<f32> = order
+                .windows(2)
+                .map(|pair| (pair[1].1.saturating_sub(pair[0].1)).max(1) as f32 / 60.0)
+                .collect();
+            timing.push(1.0 / fps.max(0.1));
             let refs: Vec<&Vec<u8>> = played.iter().collect();
             let sheet = bake(&refs, anim.width, anim.height, palette.as_ref());
             let rel = format!("animations/{id}.png");
@@ -212,6 +221,7 @@ fn main() {
                 infengine_adventure::Animation::columns_for(anim.width as f32, played.len() as u32);
             row.fps = fps;
             row.looping = false;
+            row.timing = timing;
             if let Some(old) = old {
                 row.room = old.room;
                 row.at = old.at;
@@ -323,7 +333,7 @@ fn note(
     frame: usize,
     ticks: u32,
 ) {
-    order.entry(wsa).or_default().0.push(frame);
+    order.entry(wsa).or_default().0.push((frame, ticks));
     let span = spans.entry(wsa).or_insert((ticks, ticks));
     span.1 = ticks;
 }

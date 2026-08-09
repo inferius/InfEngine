@@ -196,6 +196,7 @@ fn sheet_of(
         gap: glam::Vec2::ZERO,
         fps: scene_anim::fps(&anim.frames),
         looping: anim.looping,
+        timing: Vec::new(),
         room: Some(room.to_string()),
         at: Some(glam::Vec2::new(min_x as f32, min_y as f32)),
     })

@@ -64,6 +64,13 @@ pub struct Animation {
     pub fps: f32,
     #[serde(default = "default_true")]
     pub looping: bool,
+    /// Seconds each frame stays up, when the pacing is not uniform.
+    ///
+    /// An imported cutscene holds a frame through a pause and rattles
+    /// through a burst; one rate cannot say that. Empty means every
+    /// frame gets `1 / fps`, which is what an authored animation wants.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timing: Vec<f32>,
     /// Room this belongs to, when it is a room's own animation rather
     /// than a cutscene or a character.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -113,6 +120,7 @@ impl Animation {
             gap: Vec2::ZERO,
             fps: DEFAULT_FPS,
             looping: true,
+            timing: Vec::new(),
             room: None,
             at: None,
         }
@@ -137,6 +145,9 @@ impl Animation {
 
     /// How long one loop takes, in seconds.
     pub fn duration(&self) -> f32 {
+        if !self.timing.is_empty() {
+            return self.timing.iter().sum();
+        }
         if self.fps <= 0.0 {
             return 0.0;
         }
@@ -149,10 +160,27 @@ impl Animation {
     /// rather than vanishing, which is what a door that has finished
     /// opening should look like.
     pub fn frame_at(&self, time: f32) -> u32 {
-        if self.frames <= 1 || self.fps <= 0.0 {
+        if self.frames <= 1 {
             return 0;
         }
         if time <= 0.0 {
+            return 0;
+        }
+        if !self.timing.is_empty() {
+            let total: f32 = self.timing.iter().sum();
+            if total <= 0.0 {
+                return 0;
+            }
+            let mut left = if self.looping { time % total } else { time.min(total) };
+            for (index, step) in self.timing.iter().enumerate() {
+                left -= step;
+                if left < 0.0 {
+                    return (index as u32).min(self.frames - 1);
+                }
+            }
+            return self.frames - 1;
+        }
+        if self.fps <= 0.0 {
             return 0;
         }
         let index = (time * self.fps) as u32;
