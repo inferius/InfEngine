@@ -308,6 +308,14 @@ fn register_production_arrows(reg: &mut MigrationRegistry) {
         7,
         super::entities::entities_v6_to_v7,
     );
+    // W476.1: entities v7 -> v8 appends per-mob `size: 1` (slime /
+    // magma-cube size persistence).
+    reg.register(
+        SaveKind::Entities,
+        7,
+        8,
+        super::entities::entities_v7_to_v8,
+    );
     // W138: containers v3 -> v4 adds doors / chest facings /
     // brewing stands / levers-on (the runtime block-state maps
     // that were never persisted - reloaded doors rendered open-

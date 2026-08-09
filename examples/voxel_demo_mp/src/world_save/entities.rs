@@ -63,7 +63,10 @@ pub(crate) const ENTITIES_MAGIC: &[u8; 4] = b"INFE";
 /// - v7 (W474): adds per-mob `sheared` (a shorn sheep stays shorn
 ///   across reload until it eats grass). Migration in
 ///   `entities_v6_to_v7` appends `sheared: false`.
-pub(crate) const ENTITIES_FORMAT_VERSION: u32 = 7;
+/// - v8 (W476.1): adds per-mob `size` (slime / magma-cube 1|2|4 -
+///   a saved size-4 slime reloaded at size 1 before). Migration in
+///   `entities_v7_to_v8` appends `size: 1`.
+pub(crate) const ENTITIES_FORMAT_VERSION: u32 = 8;
 
 /// Default zstd compression level. Matches `chunks.rs` + `players.rs` -
 /// level 3 is the documented "balanced" setting from the design doc.
@@ -189,6 +192,11 @@ pub(crate) struct MobSave {
     /// W474 (v7): MC `Sheep` sheared flag - a shorn sheep reloads
     /// shorn until it eats grass.
     pub sheared: bool,
+    /// W476.1 (v8): MC `Slime.ID_SIZE` - 1, 2 or 4 for the slime /
+    /// magma-cube family (HP = size^2, render scale = size). Every
+    /// other kind stays at 1. The load side clamps to the 1|2|4
+    /// domain.
+    pub size: u8,
     // Future fields go here - with a version bump + migration arrow
     // (bincode is positional; `#[serde(default)]` does NOT cover it).
 }
@@ -692,9 +700,9 @@ struct MobSaveV6 {
 }
 
 impl MobSaveV6 {
-    /// Lift to the current shape with the v7 default.
-    fn lift(self) -> MobSave {
-        MobSave {
+    /// Lift to the FROZEN v7 shape with the v7 default.
+    fn lift(self) -> MobSaveV7 {
+        MobSaveV7 {
             id: self.id,
             kind: self.kind,
             pos: self.pos,
@@ -725,9 +733,9 @@ struct DropSaveV6 {
 }
 
 impl DropSaveV6 {
-    /// Lift to the current shape (field-identical today).
-    fn lift(self) -> DropSave {
-        DropSave {
+    /// Lift to the FROZEN v7 shape (field-identical).
+    fn lift(self) -> DropSaveV7 {
+        DropSaveV7 {
             id: self.id,
             stack: self.stack,
             pos: self.pos,
@@ -743,6 +751,87 @@ struct DimensionEntitiesV6 {
     format_version: u32,
     mobs: Vec<MobSaveV6>,
     drops: Vec<DropSaveV6>,
+    next_mob_id: u32,
+    next_drop_id: u32,
+    carts: Vec<CartSave>,
+    next_cart_id: u32,
+    structure_mob_anchors: Vec<[i32; 3]>,
+}
+
+/// W476.1: the v7 on-disk mob shape (pre-`size`), frozen so the
+/// 6 -> 7 and 7 -> 8 arrows keep decoding/encoding true v7 bytes
+/// while the live `MobSave` evolves.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct MobSaveV7 {
+    id: u32,
+    kind: u8,
+    pos: [f32; 3],
+    yaw: f32,
+    vel: [f32; 3],
+    health: f32,
+    age_seconds: f32,
+    persistent: bool,
+    baby_left: f32,
+    tamed: bool,
+    temper: u8,
+    trade_xp: u32,
+    sheared: bool,
+}
+
+impl MobSaveV7 {
+    /// Lift to the current shape with the v8 default. Pre-v8 saves
+    /// predate slime-size persistence; size-1 is exactly what the
+    /// old load path reconstructed for every mob.
+    fn lift(self) -> MobSave {
+        MobSave {
+            id: self.id,
+            kind: self.kind,
+            pos: self.pos,
+            yaw: self.yaw,
+            vel: self.vel,
+            health: self.health,
+            age_seconds: self.age_seconds,
+            persistent: self.persistent,
+            baby_left: self.baby_left,
+            tamed: self.tamed,
+            temper: self.temper,
+            trade_xp: self.trade_xp,
+            sheared: self.sheared,
+            size: 1,
+        }
+    }
+}
+
+/// W476.1: the v7 on-disk drop shape, frozen even though v8 does
+/// not change drops (the W459/W468 freeze-everything rule).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct DropSaveV7 {
+    id: u32,
+    stack: crate::item::ItemStack,
+    pos: [f32; 3],
+    vel: [f32; 3],
+    age: f32,
+}
+
+impl DropSaveV7 {
+    /// Lift to the current shape (field-identical today).
+    fn lift(self) -> DropSave {
+        DropSave {
+            id: self.id,
+            stack: self.stack,
+            pos: self.pos,
+            vel: self.vel,
+            age: self.age,
+        }
+    }
+}
+
+/// W476.1: the v7 on-disk dimension shape.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct DimensionEntitiesV7 {
+    format_version: u32,
+    mobs: Vec<MobSaveV7>,
+    drops: Vec<DropSaveV7>,
     next_mob_id: u32,
     next_drop_id: u32,
     carts: Vec<CartSave>,
@@ -1121,7 +1210,10 @@ pub(crate) fn entities_v6_to_v7(bytes: &[u8]) -> io::Result<Vec<u8>> {
     let cfg = bincode::config::standard();
     let (v6, _read) = bincode::serde::decode_from_slice::<DimensionEntitiesV6, _>(&raw_v6, cfg)
         .map_err(|err| invalid(format!("entities v6 payload decode failed: {err}")))?;
-    let v7 = DimensionEntities {
+    // W476.1: emit the FROZEN v7 shape (the live struct is v8 now) -
+    // encoding the current struct under a v7 tag would break the
+    // chained 7 -> 8 arrow, exactly like the earlier precedents.
+    let v7 = DimensionEntitiesV7 {
         format_version: 7,
         mobs: v6.mobs.into_iter().map(MobSaveV6::lift).collect(),
         drops: v6.drops.into_iter().map(DropSaveV6::lift).collect(),
@@ -1144,6 +1236,71 @@ pub(crate) fn entities_v6_to_v7(bytes: &[u8]) -> io::Result<Vec<u8>> {
     out.push(kind_v7);
     out.extend_from_slice(&uncompressed_len_v7.to_le_bytes());
     out.extend_from_slice(&body_v7);
+    Ok(out)
+}
+
+/// W476.1: one-step v7 -> v8 migration arrow - lifts every mob with
+/// `size: 1` (pre-v8 saves reloaded every slime at size 1; the lift
+/// preserves that exact behaviour) and copies the frozen v7 drops
+/// across unchanged. Same envelope handling as the earlier arrows.
+pub(crate) fn entities_v7_to_v8(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < 17 {
+        return Err(invalid("entities v7 envelope truncated"));
+    }
+    if &bytes[..4] != ENTITIES_MAGIC {
+        return Err(invalid("entities v7 envelope magic mismatch"));
+    }
+    let on_disk_v = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if on_disk_v != 7 {
+        return Err(invalid(format!(
+            "entities_v7_to_v8 expected v7, got v{on_disk_v}"
+        )));
+    }
+    let kind = bytes[8];
+    let uncompressed_len = u64::from_le_bytes([
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], bytes[16],
+    ]) as usize;
+    let body = &bytes[17..];
+    let raw_v7: Vec<u8> = match kind {
+        COMP_NONE => {
+            if body.len() != uncompressed_len {
+                return Err(invalid("entities v7 body length mismatch during migration"));
+            }
+            body.to_vec()
+        }
+        COMP_ZSTD => decode_zstd(body, uncompressed_len)?,
+        other => {
+            return Err(invalid(format!(
+                "unknown entities v7 compression kind {other} during migration"
+            )));
+        }
+    };
+    let cfg = bincode::config::standard();
+    let (v7, _read) = bincode::serde::decode_from_slice::<DimensionEntitiesV7, _>(&raw_v7, cfg)
+        .map_err(|err| invalid(format!("entities v7 payload decode failed: {err}")))?;
+    let v8 = DimensionEntities {
+        format_version: 8,
+        mobs: v7.mobs.into_iter().map(MobSaveV7::lift).collect(),
+        drops: v7.drops.into_iter().map(DropSaveV7::lift).collect(),
+        next_mob_id: v7.next_mob_id,
+        next_drop_id: v7.next_drop_id,
+        carts: v7.carts,
+        next_cart_id: v7.next_cart_id,
+        structure_mob_anchors: v7.structure_mob_anchors,
+    };
+    let raw_v8 = bincode::serde::encode_to_vec(&v8, cfg)
+        .map_err(|err| invalid(format!("entities v8 payload encode failed: {err}")))?;
+    let uncompressed_len_v8 = raw_v8.len() as u64;
+    let (kind_v8, body_v8): (u8, Vec<u8>) = match zstd::encode_all(&raw_v8[..], ZSTD_LEVEL) {
+        Ok(compressed) if compressed.len() < raw_v8.len() => (COMP_ZSTD, compressed),
+        _ => (COMP_NONE, raw_v8),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(body_v8.len() + 17);
+    out.extend_from_slice(ENTITIES_MAGIC);
+    out.extend_from_slice(&8u32.to_le_bytes());
+    out.push(kind_v8);
+    out.extend_from_slice(&uncompressed_len_v8.to_le_bytes());
+    out.extend_from_slice(&body_v8);
     Ok(out)
 }
 
@@ -1429,7 +1586,8 @@ mod tests {
             COMP_NONE => out[17..].to_vec(),
             _ => decode_zstd(&out[17..], len).unwrap(),
         };
-        let (v7, _) = bincode::serde::decode_from_slice::<DimensionEntities, _>(
+        // W476.1: the arrow emits the FROZEN v7 shape now.
+        let (v7, _) = bincode::serde::decode_from_slice::<DimensionEntitiesV7, _>(
             &body, cfg,
         )
         .unwrap();
@@ -1441,6 +1599,103 @@ mod tests {
         assert_eq!(v7.drops[0].stack, worn, "v6 drop stacks carry through");
         assert_eq!(v7.structure_mob_anchors, vec![[4, 5, 6]]);
         assert_eq!(v7.next_drop_id, 10);
+    }
+
+    /// W476.1: a hand-built FROZEN v7 envelope lifts through the
+    /// 7 -> 8 arrow - every mob gains `size: 1`, the other fields
+    /// and the drops carry through untouched.
+    #[test]
+    fn entities_v7_to_v8_lifts_size() {
+        let cfg = bincode::config::standard();
+        let mut worn = crate::item::ItemStack::new(48, 5);
+        worn.components.damage = 20;
+        let v7 = DimensionEntitiesV7 {
+            format_version: 7,
+            mobs: vec![MobSaveV7 {
+                id: 3,
+                kind: 0,
+                pos: [1.0, 64.0, 1.0],
+                yaw: 0.25,
+                vel: [0.0; 3],
+                health: 8.0,
+                age_seconds: 0.0,
+                persistent: true,
+                baby_left: 0.0,
+                tamed: false,
+                temper: 0,
+                trade_xp: 12,
+                sheared: true,
+            }],
+            drops: vec![DropSaveV7 {
+                id: 9,
+                stack: worn.clone(),
+                pos: [2.5, 65.0, 2.5],
+                vel: [0.0, 0.1, 0.0],
+                age: 4.0,
+            }],
+            next_mob_id: 4,
+            next_drop_id: 10,
+            carts: Vec::new(),
+            next_cart_id: 1,
+            structure_mob_anchors: vec![[4, 5, 6]],
+        };
+        let raw = bincode::serde::encode_to_vec(&v7, cfg).unwrap();
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(ENTITIES_MAGIC);
+        bytes.extend_from_slice(&7u32.to_le_bytes());
+        bytes.push(COMP_NONE);
+        bytes.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&raw);
+        let out = entities_v7_to_v8(&bytes).expect("arrow lifts");
+        assert_eq!(u32::from_le_bytes([out[4], out[5], out[6], out[7]]), 8);
+        let kind = out[8];
+        let len = u64::from_le_bytes(out[9..17].try_into().unwrap()) as usize;
+        let body: Vec<u8> = match kind {
+            COMP_NONE => out[17..].to_vec(),
+            _ => decode_zstd(&out[17..], len).unwrap(),
+        };
+        let (v8, _) = bincode::serde::decode_from_slice::<DimensionEntities, _>(
+            &body, cfg,
+        )
+        .unwrap();
+        assert_eq!(v8.format_version, 8);
+        assert_eq!(v8.mobs.len(), 1);
+        assert_eq!(v8.mobs[0].size, 1, "v7 mobs lift at size 1");
+        assert!(v8.mobs[0].sheared, "v7 sheared carries through");
+        assert_eq!(v8.mobs[0].trade_xp, 12, "v7 mob fields carry through");
+        assert_eq!(v8.drops.len(), 1);
+        assert_eq!(v8.drops[0].stack, worn, "v7 drop stacks carry through");
+        assert_eq!(v8.structure_mob_anchors, vec![[4, 5, 6]]);
+        assert_eq!(v8.next_drop_id, 10);
+    }
+
+    /// W476.1: the 7 -> 8 arrow refuses input tagged with any other
+    /// envelope version.
+    #[test]
+    fn entities_v7_to_v8_rejects_wrong_version() {
+        let cfg = bincode::config::standard();
+        let v7 = DimensionEntitiesV7 {
+            format_version: 7,
+            mobs: Vec::new(),
+            drops: Vec::new(),
+            next_mob_id: 0,
+            next_drop_id: 0,
+            carts: Vec::new(),
+            next_cart_id: 0,
+            structure_mob_anchors: Vec::new(),
+        };
+        let raw = bincode::serde::encode_to_vec(&v7, cfg).unwrap();
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(ENTITIES_MAGIC);
+        bytes.extend_from_slice(&6u32.to_le_bytes());
+        bytes.push(COMP_NONE);
+        bytes.extend_from_slice(&(raw.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&raw);
+        let err = entities_v7_to_v8(&bytes).expect_err("must refuse v6 input");
+        assert!(
+            err.to_string().contains("expected v7"),
+            "error names the version mismatch, got: {err}"
+        );
     }
 
     /// W474: the 6 -> 7 arrow refuses input tagged with any other
@@ -1472,11 +1727,12 @@ mod tests {
         );
     }
 
-    /// W474: the full chain - a legacy v2 envelope walks 2 -> 3 ->
-    /// 4 -> 5 -> 6 -> 7 through the production registry and decodes
-    /// at the current version with every appended default in place.
+    /// W476.1: the full chain - a legacy v2 envelope walks 2 -> 3 ->
+    /// 4 -> 5 -> 6 -> 7 -> 8 through the production registry and
+    /// decodes at the current version with every appended default in
+    /// place.
     #[test]
-    fn entities_v2_chains_to_v7_through_registry() {
+    fn entities_v2_chains_to_v8_through_registry() {
         let cfg = bincode::config::standard();
         let v2 = DimensionEntitiesV2 {
             format_version: 2,
@@ -1516,7 +1772,7 @@ mod tests {
             2,
             &bytes,
         )
-        .expect("registry chains 2 -> 7");
+        .expect("registry chains 2 -> 8");
         let (payload, _migrated_flag, _post) = decode_entities_bytes(
             &migrated,
             Path::new("chain-test"),
@@ -1530,6 +1786,7 @@ mod tests {
         assert!(!m.tamed, "v4 default");
         assert_eq!(m.trade_xp, 0, "v5 default");
         assert!(!m.sheared, "v7 default");
+        assert_eq!(m.size, 1, "v8 default");
         assert_eq!(payload.drops.len(), 1);
         assert_eq!(
             payload.drops[0].stack,

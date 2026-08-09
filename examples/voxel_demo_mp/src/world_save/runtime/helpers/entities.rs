@@ -42,6 +42,8 @@ pub(in crate::world_save::runtime) fn build_dimension_entities_from(
             trade_xp: m.trade_xp,
             // W474 (v7): shorn sheep reload shorn.
             sheared: m.sheared,
+            // W476.1 (v8): slime / magma-cube size reloads intact.
+            size: m.size,
         })
         .collect();
     // Deterministic order keeps identical saves byte-identical.
@@ -85,6 +87,18 @@ pub(in crate::world_save::runtime) fn build_dimension_entities_from(
     }
 }
 
+/// W476.1: clamp a saved mob size onto the MC slime-size domain
+/// (`Slime.setSize` only ever mints 1, 2 or 4 via `1 << rng(3)`).
+/// Rounds down so a hand-edited 3 becomes 2, anything >= 4 caps at
+/// 4, and 0 lifts to 1.
+pub(in crate::world_save::runtime) fn clamp_mob_size(size: u8) -> u8 {
+    match size {
+        0 | 1 => 1,
+        2 | 3 => 2,
+        _ => 4,
+    }
+}
+
 /// Apply a loaded `DimensionEntities` back onto `voxel`. Replaces
 /// the live mob + drop lists; the runtime broadcast loop will
 /// re-emit spawn messages on the next net-tick frame.
@@ -124,6 +138,10 @@ pub(in crate::world_save::runtime) fn apply_dimension_entities(
         mob.trade_xp = m.trade_xp;
         // W474 (v7): sheep shear state survives reload.
         mob.sheared = m.sheared;
+        // W476.1 (v8): slime / magma-cube size survives reload,
+        // clamped onto the MC `1 << rng(3)` domain (1|2|4) so an
+        // edited save can't mint a size-0 or size-255 blob.
+        mob.size = clamp_mob_size(m.size);
         voxel.mobs.push(mob);
     }
     // W302: the spawned-anchor set (v2 saves migrate with an empty
@@ -236,5 +254,95 @@ mod tests {
         assert_eq!(v.dropped_items.len(), 1);
         assert_eq!(v.dropped_items[0].stack, worn, "count + damage intact");
         assert_eq!(v.dropped_items[0].id, 7);
+    }
+
+    /// W476.1: a size-4 slime builds into the save bundle, survives
+    /// the disk envelope, and applies back at size 4 (pre-v8 the
+    /// field did not exist and every slime reloaded at size 1 with
+    /// its big-size HP - the render shrank while health did not).
+    #[test]
+    fn mob_size_survives_save_and_reload() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut slime = MobState::new_natural(
+            5,
+            0,
+            [3.0, 65.0, 3.0],
+            [3.0, 65.0, 3.0],
+            0.0,
+            0.0,
+            16.0,
+        );
+        slime.size = 4;
+        let anchors: std::collections::HashSet<[i32; 3]> = Default::default();
+        let bundle = build_dimension_entities_from(
+            std::slice::from_ref(&slime),
+            &[],
+            &[],
+            6,
+            1,
+            1,
+            &anchors,
+        );
+        assert_eq!(bundle.mobs.len(), 1);
+        assert_eq!(bundle.mobs[0].size, 4, "size rides the save bundle");
+
+        crate::world_save::entities::write_entities_in_dir(
+            tmp.path(),
+            "slot",
+            "overworld",
+            &bundle,
+        )
+        .unwrap();
+        let loaded = crate::world_save::entities::read_entities_in_dir(
+            tmp.path(),
+            "slot",
+            "overworld",
+        )
+        .unwrap()
+        .expect("entities file exists");
+        assert_eq!(loaded, bundle);
+
+        let mut v = crate::Voxel::new();
+        apply_dimension_entities(&mut v, loaded);
+        assert_eq!(v.mobs.len(), 1);
+        assert_eq!(v.mobs[0].size, 4, "size survives the round trip");
+    }
+
+    /// W476.1: the load side clamps saved sizes onto the MC 1|2|4
+    /// domain (edited / corrupted saves).
+    #[test]
+    fn mob_size_clamps_to_slime_domain() {
+        assert_eq!(clamp_mob_size(0), 1);
+        assert_eq!(clamp_mob_size(1), 1);
+        assert_eq!(clamp_mob_size(2), 2);
+        assert_eq!(clamp_mob_size(3), 2);
+        assert_eq!(clamp_mob_size(4), 4);
+        assert_eq!(clamp_mob_size(200), 4);
+
+        // End-to-end: an out-of-domain size in the bundle applies
+        // clamped.
+        let mut v = crate::Voxel::new();
+        let mut bundle =
+            crate::world_save::entities::DimensionEntities::empty();
+        bundle.mobs.push(MobSave {
+            id: 1,
+            kind: 0,
+            pos: [0.0, 65.0, 0.0],
+            yaw: 0.0,
+            vel: [0.0; 3],
+            health: 9.0,
+            age_seconds: 0.0,
+            persistent: false,
+            baby_left: 0.0,
+            tamed: false,
+            temper: 0,
+            trade_xp: 0,
+            sheared: false,
+            size: 3,
+        });
+        bundle.next_mob_id = 2;
+        apply_dimension_entities(&mut v, bundle);
+        assert_eq!(v.mobs.len(), 1);
+        assert_eq!(v.mobs[0].size, 2, "3 rounds down to 2");
     }
 }
