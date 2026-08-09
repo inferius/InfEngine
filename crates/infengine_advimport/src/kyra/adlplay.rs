@@ -49,8 +49,6 @@ const CHANNEL: u8 = 0;
 const OPERATORS: [u8; 2] = [0x00, 0x03];
 /// Bytes an instrument occupies.
 const INSTRUMENT_BYTES: usize = 11;
-/// The registers those bytes go to, as pairs.
-
 /// How long a program may run before it is called a loop.
 ///
 /// A sound effect is about a second. A hundred seconds of one is a

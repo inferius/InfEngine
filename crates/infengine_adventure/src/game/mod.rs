@@ -276,6 +276,29 @@ impl Game {
             return click;
         }
         self.state.click = Some(point);
+
+        // The room's click hook - the original's script function 1, run
+        // on a click with the point and held item in registers. It
+        // carries the conversations a room's entry only opens: the
+        // willow that speaks for the Land answers here, not in the
+        // greeting. The hook's own position gates did not survive
+        // translation, so running it on every click would talk instead
+        // of walk - it runs once per visit, which plays the opening
+        // conversation and then lets clicks walk as normal.
+        let prefix = room.script_prefix();
+        let hook = format!("{prefix}.entry1");
+        let seen = format!("kyra.hook.{prefix}");
+        if matches!(click, Click::Walk { .. })
+            && self.state.vars.get(&seen).copied().unwrap_or(0) == 0
+            && let Some(script) = self.scripts.get(&hook).cloned()
+        {
+            self.state.vars.insert(seen, 1);
+            self.state.vars.insert("kyra.reg1".into(), point.x as i32);
+            self.state.vars.insert("kyra.reg2".into(), point.y as i32);
+            self.runner.start(&script);
+            return click;
+        }
+
         let actions = self.actions_for(room, &click);
         if !actions.is_empty() {
             self.runner.start_actions(actions);
