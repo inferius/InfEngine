@@ -13,9 +13,11 @@
 //! ```
 //!
 //! With a directory holding `INTRO.VRM` - the CD release keeps the
-//! intro's speech there, numbered by the same string indexes the
-//! subtitles use - the recordings are written under `voice/intro/` and
-//! the voice-language lines point at them.
+//! intro's speech there, numbered in scene order with its own gaps -
+//! the recordings are written under `voice/intro/` and the
+//! voice-language lines point at them. Which recording speaks which
+//! line is [`LINES`]' third column, read out of the CD executable's
+//! sequence bytecode; it is not the string index.
 
 #![allow(clippy::print_stdout)]
 
@@ -44,29 +46,79 @@ const CZECH: &[(usize, &str)] = &[
     (15, "...Ale oci ti nechavam."),
     (16, "Pro Kyrandii slzy neronim..."),
     (17, "...ale tve ti neuprem."),
-    (22, "Ale ne, pro tebe mam neco zvlastniho..."),
-    (23, "Zertovne zaklinadlo!"),
-    (24, "Ale poctive te varuji."),
-    (25, "Neskakej na TENHLE strom!"),
-    (26, "Nelez na TENHLE strom, veverko mala!"),
-    (30, "Ha ha ha..."),
-    (31, "Nejsou prsty uzasne?"),
-    (32, "Je skvele byt nazivu!"),
-    (45, "Draha Brynn..."),
-    (46, "Malcolm se osvobodil!"),
-    (47, "Brzy si prijde i pro me."),
-    (48, "Prosim, pomoz Brandonovi..."),
+    (22, "Tys mi podrazil nohy!"),
+    (23, "Ale ne, pro tebe mam neco zvlastniho..."),
+    (24, "Zertovne zaklinadlo!"),
+    (25, "Ale poctive te varuji."),
+    (26, "Neskakej na TENHLE strom!"),
+    (28, "Buu!"),
+    (29, "Tak je to zabavnejsi..."),
+    (30, "...nebo neni?"),
+    (31, "Ha ha ha..."),
+    (46, "Draha Brynn..."),
+    (47, "Malcolm se osvobodil!"),
+    (48, "Brzy si prijde i pro me."),
+    (49, "Prosim, pomoz Brandonovi..."),
 ];
 
-/// Which EXE string each of our line ids means.
-const LINES: &[(&str, usize)] = &[
-    ("intro.let0", 45), ("intro.let1", 46), ("intro.let2", 47), ("intro.let3", 48),
-    ("intro.tree0", 31), ("intro.tree1", 32), ("intro.tree2", 22), ("intro.tree3", 23),
-    ("intro.tree4", 24), ("intro.tree5", 25), ("intro.tree6", 26), ("intro.tree7", 30),
-    ("intro.mal0", 2), ("intro.mal1", 3), ("intro.mal2", 4), ("intro.mal3", 5),
-    ("intro.mal4", 6), ("intro.mal5", 7), ("intro.mal6", 8), ("intro.mal7", 9),
-    ("intro.mal8", 10), ("intro.mal9", 11), ("intro.mal10", 12), ("intro.mal11", 13),
-    ("intro.mal12", 14), ("intro.mal13", 15), ("intro.mal14", 16), ("intro.mal15", 17),
+/// Which EXE string each of our line ids means, and which `INTRO.VRM`
+/// recording speaks it.
+///
+/// The recording numbers are NOT the string indexes - they run in
+/// scene order with their own gaps, and the pairing comes from the CD
+/// executable's own sequence bytecode, where every `printTalkText`
+/// sits next to its `playVocFile` (decode the CD `EXE` directory with
+/// `kyra_seq` to see it). Guessing "recording = string index" put
+/// Kallak's outro shout and Brandon's reunion line into the forest,
+/// which is exactly how wrong that guess sounds.
+///
+/// The line sets are the floppy sequences' own `printTalkText` lists:
+/// the forest speaks strings 31, 22..26, 28..30 - the "fingers" pair
+/// (32, 33) belongs to restored Kallak in the outro, not here.
+const LINES: &[(&str, usize, Option<usize>)] = &[
+    ("intro.let0", 46, Some(43)),
+    ("intro.let1", 47, Some(44)),
+    ("intro.let2", 48, Some(45)),
+    ("intro.let3", 49, Some(46)),
+    ("intro.tree0", 31, Some(28)),
+    ("intro.tree1", 22, Some(19)),
+    ("intro.tree2", 23, Some(20)),
+    ("intro.tree3", 24, Some(21)),
+    ("intro.tree4", 25, Some(22)),
+    ("intro.tree5", 26, Some(23)),
+    ("intro.tree6", 28, Some(25)),
+    ("intro.tree7", 29, Some(27)),
+    // "...Is it not?" rides recording 27 with the line before it.
+    ("intro.tree8", 30, None),
+    ("intro.mal0", 2, Some(0)),
+    ("intro.mal1", 3, Some(1)),
+    ("intro.mal2", 4, Some(2)),
+    ("intro.mal3", 5, Some(3)),
+    ("intro.mal4", 6, Some(4)),
+    ("intro.mal5", 7, Some(5)),
+    ("intro.mal6", 8, Some(6)),
+    ("intro.mal7", 9, Some(7)),
+    ("intro.mal8", 10, Some(8)),
+    ("intro.mal9", 11, Some(9)),
+    ("intro.mal10", 12, Some(10)),
+    ("intro.mal11", 13, Some(11)),
+    ("intro.mal12", 14, Some(12)),
+    ("intro.mal13", 15, Some(13)),
+    ("intro.mal14", 16, Some(14)),
+    ("intro.mal15", 17, Some(15)),
+    // Malcolm's parting laugh over the window scene's last beat.
+    ("intro.mal16", 31, Some(28)),
+];
+
+/// The narrator over the island storm: recordings with no text
+/// anywhere in the data - the CD shows nothing and only speaks.
+const ISLAND: &[(&str, usize)] = &[
+    ("intro.isl0", 55),
+    ("intro.isl1", 56),
+    ("intro.isl2", 57),
+    ("intro.isl3", 58),
+    ("intro.isl4", 59),
+    ("intro.isl5", 60),
 ];
 
 fn main() {
@@ -88,15 +140,21 @@ fn main() {
         return;
     };
 
-    // The spoken lines, when the CD's INTRO.VRM is at hand: recording
-    // numbers are the same string indexes the subtitles use.
+    // The spoken lines, when the CD's INTRO.VRM is at hand. Keyed by
+    // recording number; the line tables above say which line each one
+    // speaks.
     let mut voiced: std::collections::HashMap<usize, String> = Default::default();
+    let wanted: std::collections::BTreeSet<usize> = LINES
+        .iter()
+        .filter_map(|(_, _, voc)| *voc)
+        .chain(ISLAND.iter().map(|(_, voc)| *voc))
+        .collect();
     if let Some(dir) = &vrm_dir {
         match std::fs::read(dir.join("INTRO.VRM")) {
             Ok(bytes) => match infengine_advimport::kyra::pak::Pak::parse(&bytes) {
                 Ok(pak) => {
-                    for (_, index) in LINES {
-                        let name = format!("{index:03}.VOC");
+                    for voc in &wanted {
+                        let name = format!("{voc:03}.VOC");
                         let Some(at) = pak
                             .entries()
                             .iter()
@@ -106,19 +164,23 @@ fn main() {
                         };
                         let Some(data) = pak.data_at(at) else { continue };
                         let Ok(voice) = infengine_advimport::kyra::voc::decode(data) else {
-                            println!("intro voice {index:03}: did not decode");
+                            println!("intro voice {voc:03}: did not decode");
                             continue;
                         };
-                        let rel = format!("voice/intro/{index:03}.wav");
+                        let rel = format!("voice/intro/{voc:03}.wav");
                         let path = project.join(&rel);
                         if let Some(parent) = path.parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }
                         if std::fs::write(&path, voice.to_wav()).is_ok() {
-                            voiced.insert(*index, rel);
+                            voiced.insert(*voc, rel);
                         }
                     }
-                    println!("intro speech: {} recordings wired", voiced.len());
+                    println!(
+                        "intro speech: {} of {} recordings wired",
+                        voiced.len(),
+                        wanted.len()
+                    );
                 }
                 Err(err) => println!("INTRO.VRM: {err}"),
             },
@@ -137,7 +199,7 @@ fn main() {
                 return;
             }
         };
-        for (id, index) in LINES {
+        for (id, index, voc) in LINES {
             let text = if czech {
                 CZECH
                     .iter()
@@ -151,9 +213,20 @@ fn main() {
             line.text = text;
             // The voice rides on the voice language's locale only.
             if language == "en"
-                && let Some(rel) = voiced.get(index)
+                && let Some(rel) = voc.and_then(|voc| voiced.get(&voc))
             {
                 line.voice = Some(rel.clone());
+            }
+        }
+        // The narrator's lines have no text in any language: an empty
+        // line with a recording shows nothing and speaks.
+        if language == "en" {
+            for (id, voc) in ISLAND {
+                if let Some(rel) = voiced.get(voc) {
+                    let line = locale.lines.entry(id.to_string()).or_default();
+                    line.text = String::new();
+                    line.voice = Some(rel.clone());
+                }
             }
         }
         match infengine_loca::save_locale(&locale, &loca_dir) {
@@ -163,7 +236,7 @@ fn main() {
     }
 
     let rt = |id: &str| -> f32 {
-        let index = LINES.iter().find(|(l, _)| *l == id).map(|(_, i)| *i);
+        let index = LINES.iter().find(|(l, _, _)| *l == id).map(|(_, i, _)| *i);
         let text = index.and_then(|i| english.get(i)).cloned().unwrap_or_default();
         SUBTITLE_MIN + text.chars().count() as f32 / CHARS_PER_SECOND
     };
@@ -335,26 +408,40 @@ fn scripts(rt: &dyn Fn(&str) -> f32) -> Vec<(&'static str, String)> {
     b.act("MoveCamera", &[("to", "Vec2(0.0, 112.0)".into()), ("seconds", "3.7".into())]);
     b.wait(0.4);
     b.anim("intro1_shore", false, 0.0, 112.0);
+    // The storm, narrated: the CD speaks six recordings over it (there
+    // is no text for them anywhere), thunder between, the lightning
+    // strike on the shore in the middle of it.
     beats(
         &mut b,
         rt,
         &[
-            (0.15, Sfx(22)),
-            (0.9, Sfx(22)),
-            (2.7, Sfx(37)),
-            (2.7, Anim("intro1_destruct", false, 152.0, 160.0)),
-            (3.0, Sfx(23)),
-            (3.15, Sfx(37)),
-            (3.3, Sfx(24)),
-            (4.35, Sfx(37)),
+            (0.9, Say("intro.isl0")),
+            (1.9, Sfx(22)),
+            (4.1, Say("intro.isl1")),
+            (4.3, Sfx(22)),
+            (5.0, Say("intro.isl2")),
+            (6.0, Sfx(37)),
+            (6.3, Say("intro.isl3")),
+            (7.0, Sfx(23)),
+            (7.0, Anim("intro1_destruct", false, 152.0, 160.0)),
+            (7.1, Sfx(37)),
+            (7.8, Sfx(24)),
+            (8.0, Say("intro.isl4")),
+            (8.9, Sfx(37)),
+            (9.8, Say("intro.isl5")),
         ],
-        6.5,
+        12.5,
     );
     b.goto("_intro_tree");
     out.push(("_intro.script.ron", b.script("_intro.entry")));
 
-    // The forest: Malcolm's taunts while TREE1 runs its 21.8s, then
-    // TREE2 carries straight on.
+    // The forest: Malcolm's taunts while TREE1 runs its 22.0s, then
+    // TREE2 carries straight on. The cue times are the sequence's own
+    // print and effect times, scaled 22.0/13.3 - the flat bytecode
+    // clock undercounts because the walk-in loops, and the baked
+    // animation carries the loops' real length. Effect 38 is in the
+    // bytecode but no INTRO.ADL track 38 exists; the original played
+    // silence there and so do we, by leaving it out.
     let mut b = Body::new();
     b.music("intro_3");
     b.anim("intro2_tree1", false, 0.0, 16.0);
@@ -364,20 +451,30 @@ fn scripts(rt: &dyn Fn(&str) -> f32) -> Vec<(&'static str, String)> {
         &[
             (0.0, Sfx(30)),
             (0.0, Sfx(31)),
-            (0.1, Sfx(25)),
-            (0.2, Say("intro.tree0")),
-            (0.6, Sfx(36)),
-            (1.0, Sfx(30)),
-            (2.9, Say("intro.tree1")),
-            (5.6, Say("intro.tree2")),
-            (8.4, Say("intro.tree3")),
-            (9.0, Sfx(28)),
-            (10.4, Say("intro.tree4")),
+            (0.2, Sfx(25)),
+            (0.3, Say("intro.tree0")),
+            (0.5, Sfx(31)),
+            (1.0, Sfx(36)),
+            (1.0, Sfx(31)),
+            (1.2, Sfx(30)),
+            (1.3, Say("intro.tree1")),
+            (1.7, Sfx(30)),
+            (2.0, Sfx(31)),
+            (2.6, Sfx(30)),
+            (2.8, Sfx(26)),
+            (3.1, Sfx(26)),
+            (3.1, Say("intro.tree2")),
+            (5.0, Sfx(30)),
+            (5.8, Say("intro.tree3")),
+            (10.6, Sfx(27)),
+            (11.2, Say("intro.tree4")),
             (12.9, Say("intro.tree5")),
-            (15.3, Say("intro.tree6")),
-            (18.6, Say("intro.tree7")),
+            (13.1, Say("intro.tree6")),
+            (14.9, Sfx(28)),
+            (15.0, Say("intro.tree7")),
+            (16.0, Say("intro.tree8")),
         ],
-        21.8,
+        22.0,
     );
     b.anim("intro2_tree2", true, 0.0, 16.0);
     b.wait(0.3);
@@ -432,7 +529,11 @@ fn scripts(rt: &dyn Fn(&str) -> f32) -> Vec<(&'static str, String)> {
             b.wait(0.5);
         }
     }
-    b.wait(8.5);
+    // The parting laugh the CD gives him on his way off the sill.
+    b.wait(1.0);
+    b.sfx(35);
+    b.say("intro.mal16");
+    b.wait(7.0);
     b.act("OpenScreen", &[("screen", "\"title\"".into())]);
     out.push(("_intro_malcolm.script.ron", b.script("_intro_malcolm.entry")));
 

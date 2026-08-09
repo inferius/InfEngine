@@ -186,8 +186,24 @@ impl Renderer {
     ///
     /// Performs blocking GPU initialization via `pollster`. Should be
     /// called once at startup; subsequent resizes happen through
-    /// [`Renderer::resize`].
+    /// [`Renderer::resize`]. Presents unsynchronized - see
+    /// [`Renderer::new_vsynced`] for the smooth-pacing variant.
     pub fn new(window: &EngineWindow) -> Result<Self, RendererError> {
+        Self::new_with_vsync(window, false)
+    }
+
+    /// Create a renderer that presents on the display's own beat.
+    ///
+    /// Fifo caps the frame rate at the refresh rate and quantizes a
+    /// missed deadline down to refresh/2 - the wrong trade for the
+    /// voxel demo chasing 240 FPS, and exactly the right one for a
+    /// paced 2D game, where unsynchronized presents show as tearing
+    /// and animation judder.
+    pub fn new_vsynced(window: &EngineWindow) -> Result<Self, RendererError> {
+        Self::new_with_vsync(window, true)
+    }
+
+    fn new_with_vsync(window: &EngineWindow, vsync: bool) -> Result<Self, RendererError> {
         let (width, height) = window.size();
         let raw: Arc<winit::window::Window> = Arc::clone(window.raw());
 
@@ -289,16 +305,15 @@ impl Renderer {
             format,
             width: width.max(1),
             height: height.max(1),
-            // W198: AutoNoVsync (Immediate, else Mailbox) instead of
-            // AutoVsync (Fifo). Fifo hard-caps the framerate to the
-            // monitor refresh and, when a frame misses the deadline,
-            // quantizes down to refresh/2, /3, ... - that is exactly the
-            // user's "40 / 80 FPS" stepping. NoVsync uncaps it so the true
-            // frame rate shows (needed for the 240 FPS target) and reveals
-            // the real CPU/GPU bottleneck instead of hiding it behind the
-            // sync wait. Tearing is the trade-off; a vsync toggle can come
-            // later if wanted.
-            present_mode: PresentMode::AutoNoVsync,
+            // W198: AutoNoVsync (Immediate, else Mailbox) by default so
+            // the voxel demo's true frame rate shows instead of Fifo's
+            // refresh/2 quantization; A130: callers that want smooth
+            // pacing over throughput pick Fifo via new_vsynced.
+            present_mode: if vsync {
+                PresentMode::AutoVsync
+            } else {
+                PresentMode::AutoNoVsync
+            },
             desired_maximum_frame_latency: 2,
             alpha_mode: CompositeAlphaMode::Auto,
             view_formats: Vec::new(),

@@ -51,6 +51,13 @@ const SIZES: &[&[u8]] = &[
     &[],              // 1B textDisplayEnable
     &[],              // 1C textDisplayDisable
     &[],              // 1D endOfScript
+    // The CD interpreter continues the table with speech (ScummVM's
+    // SeqPlayer): load the VRM, play a recording by number, and one
+    // no-argument odd one out.
+    &[],              // 1E loadIntroVRM
+    &[1],             // 1F playVocFile
+    &[],              // 20 miscUnk3
+    &[1],             // 21 prefetchVocFile
 ];
 
 const NAMES: &[&str] = &[
@@ -58,7 +65,8 @@ const NAMES: &[&str] = &[
     "copyWaitTicks", "shuffleScreen", "copyView", "loopInit", "loopInc", "loadPalette",
     "loadBitmap", "fadeToBlack", "printText", "printTalkText", "restoreTalkText", "clearScreen",
     "break", "fadeFromBlack", "copyRegion", "copyRegionSpecial", "fillRect", "playEffect",
-    "playTrack", "allocTempBuffer", "textEnable", "textDisable", "endOfScript",
+    "playTrack", "allocTempBuffer", "textEnable", "textDisable", "endOfScript", "loadIntroVRM",
+    "playVocFile", "miscUnk3", "prefetchVocFile",
 ];
 
 fn main() {
@@ -74,8 +82,12 @@ fn main() {
 
     // The tables sit shortly before the intro's string block. Scanning
     // the whole file also matches stray runs, so the search is anchored
-    // to the region before the first intro string.
-    let anchor = find(&data, b"mal-kal.cps").unwrap_or(data.len());
+    // to the region before the first intro string. The floppy names the
+    // backdrop with its extension, the CD without one, so the anchor is
+    // whichever of the two the file has first.
+    let anchor = find(&data, b"mal-kal.cps")
+        .or_else(|| find(&data, b"mal-kal.wsa"))
+        .unwrap_or(data.len());
     let from = anchor.saturating_sub(0x3000);
 
     let mut at = from;
@@ -138,7 +150,7 @@ fn print_stream(data: &[u8], at: usize, end: usize) {
         }
         // The chatter (frame stepping, waits) drowns the structure, so
         // only the ops that say what happens are printed, with a clock.
-        if matches!(op, 0x00 | 0x02 | 0x05 | 0x0C | 0x0D | 0x0F | 0x10 | 0x18 | 0x19) {
+        if matches!(op, 0x00 | 0x02 | 0x05 | 0x0C | 0x0D | 0x0F | 0x10 | 0x18 | 0x19 | 0x1F | 0x21) {
             println!(
                 "   {:6.1}s {:<14} {:?}",
                 ticks as f32 / 60.0,

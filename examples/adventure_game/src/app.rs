@@ -290,7 +290,9 @@ impl Game {
 
 impl AppHandler for Game {
     fn on_start(&mut self, window: &EngineWindow) {
-        match Renderer::new(window) {
+        // Vsync: a paced 2D game wants every frame on the display's
+        // beat; unsynchronized presents made the intro judder.
+        match Renderer::new_vsynced(window) {
             Ok(mut renderer) => {
                 renderer.set_clear_color(0.0, 0.0, 0.0, 1.0);
                 self.ui = Some(EditorUi::new(

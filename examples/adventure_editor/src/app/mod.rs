@@ -1437,7 +1437,9 @@ impl Editor {
 
 impl AppHandler for Editor {
     fn on_start(&mut self, window: &EngineWindow) {
-        match Renderer::new(window) {
+        // Vsync, like the game: animation previews should pace the way
+        // they will in play, and an editor gains nothing from tearing.
+        match Renderer::new_vsynced(window) {
             Ok(mut renderer) => {
                 renderer.set_clear_color(0.06, 0.06, 0.08, 1.0);
                 self.ui = Some(EditorUi::new(
