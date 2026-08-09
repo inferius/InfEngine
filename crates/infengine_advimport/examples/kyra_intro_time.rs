@@ -187,9 +187,9 @@ fn main() {
                         next.next();
                     }
                     if let Some((shape, x, y)) = current
-                        && let Some((w, h, pixels)) = hands.get(shape)
+                        && let Some(hand) = hands.get(shape)
                     {
-                        stamp(frame, anim.width, anim.height, pixels, *w, *h, x, y);
+                        stamp(frame, (anim.width, anim.height), hand, x, y);
                     }
                 }
             }
@@ -329,7 +329,10 @@ fn note(
 }
 
 /// Draw a shape's non-zero pixels onto a frame at the given spot.
-fn stamp(frame: &mut [u8], fw: u32, fh: u32, pixels: &[u8], w: u32, h: u32, x: i32, y: i32) {
+fn stamp(frame: &mut [u8], size: (u32, u32), shape: &(u32, u32, Vec<u8>), x: i32, y: i32) {
+    let (fw, fh) = size;
+    let (w, h, pixels) = shape;
+    let (w, h) = (*w, *h);
     for row in 0..h as i32 {
         let ty = y + row;
         if ty < 0 || ty >= fh as i32 {
