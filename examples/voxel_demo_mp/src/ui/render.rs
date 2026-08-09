@@ -1829,9 +1829,12 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                             });
                             ui.separator();
                             // Build the filtered + grouped recipe list.
-                            // Group by derived category (output item's
-                            // ItemCategory). Within each group recipes
-                            // are shown in RECIPES table order.
+                            // W478: the 2x2 book lists ONLY the
+                            // 2x2-capable subset of the generated MC
+                            // tables (`recipes::book::book_2x2`), so
+                            // a 3x3-only recipe (chest ring, tools)
+                            // never shows here. Group by derived
+                            // category (output item's ItemCategory).
                             let q = recipe_book_query_local
                                 .trim()
                                 .to_lowercase();
@@ -1841,7 +1844,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                     // W20.4: category headers. Group
                                     // recipes by ItemCategory of output.
                                     // Categories appear in the order
-                                    // they first occur in RECIPES.
+                                    // they first occur in the book.
                                     use crate::item::ItemCategory;
                                     let cats = [
                                         ("Bloky",     ItemCategory::BuildingBlock),
@@ -1856,9 +1859,11 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                     // first-seen order so the header
                                     // sequence is deterministic.
                                     let mut seen_cats: Vec<&str> = Vec::new();
-                                    for (ri, r) in RECIPES.iter().enumerate() {
+                                    let book = crate::recipes::book::book_2x2();
+                                    for (ri, r) in book.iter().enumerate() {
+                                        let (out_id, out_n) = r.output();
                                         let ic = crate::item::item_category(
-                                            r.output.0,
+                                            out_id,
                                         );
                                         let cat_label = cats
                                             .iter()
@@ -1870,7 +1875,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                         // + raw names + keywords).
                                         let pass_filter = q.is_empty()
                                             || crate::lang::search_haystack(
-                                                r.output.0,
+                                                out_id,
                                             )
                                             .contains(&q);
                                         if !pass_filter {
@@ -1886,31 +1891,41 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                             ui.strong(cat_label);
                                         }
                                         ui.horizontal(|ui| {
-                                            for (bid, n) in r.inputs {
-                                                let bt = block_type(*bid);
+                                            // One slot per occupied fill
+                                            // cell; a tag slot previews
+                                            // its FIRST live member (the
+                                            // matcher accepts any).
+                                            let spec = r
+                                                .cells_2x2()
+                                                .unwrap_or([None; 4]);
+                                            for set in spec.iter().flatten() {
+                                                let bid =
+                                                    set.first().copied()
+                                                        .unwrap_or(0);
+                                                let bt = block_type(bid);
                                                 // W20.2: icon_uv_front prefers
                                                 // the live MC atlas entry.
                                                 let uv = vx
                                                     .resource_pack
-                                                    .icon_uv_front(BlockId(*bid));
+                                                    .icon_uv_front(BlockId(bid));
                                                 // W153: item-only fallback
                                                 // (no block row != no icon).
                                                 let icon = Some(match vx
                                                     .registry
-                                                    .get(BlockId(*bid))
+                                                    .get(BlockId(bid))
                                                 {
                                                     Some(d) => (
                                                         d.color,
-                                                        *n,
+                                                        1,
                                                         uv,
                                                         bt.map(|t| t.name)
                                                             .unwrap_or("?"),
                                                     ),
                                                     None => (
                                                         [0.78, 0.78, 0.78],
-                                                        *n,
+                                                        1,
                                                         uv,
-                                                        crate::item::item_type(*bid)
+                                                        crate::item::item_type(bid)
                                                             .map(|it| it.name)
                                                             .unwrap_or("?"),
                                                     ),
@@ -1924,20 +1939,20 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                                 );
                                             }
                                             ui.label(" -> ");
-                                            let out_bt = block_type(r.output.0);
+                                            let out_bt = block_type(out_id);
                                             // W20.2: icon_uv_front for recipe
                                             // output icon.
                                             let out_uv = vx
                                                 .resource_pack
-                                                .icon_uv_front(BlockId(r.output.0));
+                                                .icon_uv_front(BlockId(out_id));
                                             // W153: item-only fallback.
                                             let out_icon = Some(match vx
                                                 .registry
-                                                .get(BlockId(r.output.0))
+                                                .get(BlockId(out_id))
                                             {
                                                 Some(d) => (
                                                     d.color,
-                                                    r.output.1,
+                                                    out_n,
                                                     out_uv,
                                                     out_bt
                                                         .map(|t| t.name)
@@ -1945,9 +1960,9 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                                 ),
                                                 None => (
                                                     [0.78, 0.78, 0.78],
-                                                    r.output.1,
+                                                    out_n,
                                                     out_uv,
-                                                    crate::item::item_type(r.output.0)
+                                                    crate::item::item_type(out_id)
                                                         .map(|it| it.name)
                                                         .unwrap_or("?"),
                                                 ),
@@ -1956,7 +1971,7 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                             // that currently matches the
                                             // craft grid.
                                             let is_active = craft_recipe_name
-                                                == Some(r.name);
+                                                == Some(r.name());
                                             let out_resp = crate::ui::slot_widget::draw_slot_widget(
                                                 ui,
                                                 out_icon,
@@ -1966,12 +1981,12 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                                             )
                                             .on_hover_text(format!(
                                                 "{} - click to fill craft grid",
-                                                r.name
+                                                r.name()
                                             ));
                                             if out_resp.clicked() {
                                                 prefill_recipe_idx = Some(ri);
                                             }
-                                            ui.label(r.name);
+                                            ui.label(r.name());
                                         });
                                     }
                                 });
@@ -4238,76 +4253,25 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
         }
         if let Some(idx) = prefill_recipe_idx
             && !matches!(vx.net, NetRole::Client { .. })
-            && let Some(recipe) = RECIPES.get(idx)
+            && let Some(recipe) = crate::recipes::book::book_2x2().get(idx)
         {
-            // Inventory of (slot_idx, original_stack) we may
-            // have to refund on failure. W469: the grid takes a
-            // SLICE of the source stack (components cloned), so
-            // the fill is lossless for worn/named ingredients.
-            let mut taken: Vec<(usize, crate::item::ItemStack)> = Vec::new();
-            let mut placed: [Option<crate::item::ItemStack>; 4] =
-                std::array::from_fn(|_| None);
-            let mut ok = true;
-            for (i, (bid, n)) in recipe.inputs.iter().enumerate() {
-                if i >= 4 {
-                    break;
-                }
-                let need = *n;
-                // Look for a slot that has the needed item id.
-                let mut found_slot: Option<usize> = None;
-                for (si, slot) in vx.inventory.iter().enumerate() {
-                    if let Some(st) = slot
-                        && st.id == *bid
-                        && st.count >= need
-                    {
-                        found_slot = Some(si);
-                        break;
-                    }
-                }
-                match found_slot {
-                    Some(si) => {
-                        let original = vx.inventory[si]
-                            .clone()
-                            .expect("verified above");
-                        let remaining =
-                            original.count.saturating_sub(need);
-                        vx.inventory[si] = (remaining > 0)
-                            .then(|| original.with_count(remaining));
-                        placed[i] = Some(original.with_count(need));
-                        taken.push((si, original));
-                    }
-                    None => {
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-            if ok {
-                // Return whatever was in the craft grid before
-                // the auto-fill so it's not silently lost
-                // (components ride back).
-                let returns: Vec<crate::item::ItemStack> = vx
-                    .craft_grid
-                    .iter_mut()
-                    .filter_map(|s| s.take())
-                    .collect();
-                for st in returns {
-                    let _ = crate::item::stack::drop_into_first_free_stacks(
-                        &mut vx.inventory,
-                        st,
-                    );
-                }
-                vx.craft_grid = placed;
-            } else {
-                // Roll back.
-                for (si, original) in taken {
-                    vx.inventory[si] = Some(original);
-                }
+            // W478: SHARED fill core (`recipes::book`) - shaped
+            // ingredients land in their pattern cells, tag slots pay
+            // with any acceptable member (set order first), the grid
+            // slice clones source components, and a shortfall is a
+            // clean no-op. Same function the server-side `vx.recipe`
+            // arm runs, so host and authority can never drift.
+            let ok = crate::recipes::book::fill_craft_grid_2x2(
+                &mut vx.inventory,
+                &mut vx.craft_grid,
+                idx,
+            );
+            if !ok {
                 vx.chat_log.push((
                     std::time::Instant::now(),
                     format!(
                         "Not enough materials for {}",
-                        recipe.name
+                        recipe.name()
                     ),
                 ));
             }

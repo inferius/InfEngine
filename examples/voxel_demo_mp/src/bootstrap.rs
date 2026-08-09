@@ -39,6 +39,10 @@ pub(crate) fn on_start(vx: &mut Voxel, window: &EngineWindow) {
     // W124: load the UI language maps (persisted code; en_us
     // fallback layer always loads alongside).
     crate::lang::load_and_set(&vx.resource_pack, &vx.settings.language);
+    // W478: warm the generated recipe book so the skip summary
+    // (unresolved MC rows + special types) logs exactly once at
+    // boot instead of on the first crafting-panel frame.
+    let _ = crate::recipes::book::full_book();
     vx.session_started = Some(std::time::Instant::now());
     // Drop the MOTD lines into the local chat log on startup.
     let motd = Voxel::motd_lines();

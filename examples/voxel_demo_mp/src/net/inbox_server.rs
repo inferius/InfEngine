@@ -108,7 +108,6 @@ pub(crate) fn process_server_inbox(
     pending_inv_sends: &mut HashSet<u32>,
     pvp_reach: f32,
     day_length_s: f32,
-    recipes_lookup: &dyn Fn(usize) -> Option<&'static [(u16, u8)]>,
     ctx: &mut ServerInboxCtx<'_>,
 ) {
     let cfg = bincode::config::standard();
@@ -242,84 +241,23 @@ pub(crate) fn process_server_inbox(
                 }
             }
             "vx.recipe" => {
-                // Client asked the server to auto-
-                // fill its craft grid with recipe
-                // index `idx`. Validate the sender's
-                // inventory carries every input,
-                // move them into craft_grid, and
-                // queue an inv snapshot back.
+                // Client asked the server to auto-fill its craft
+                // grid with 2x2-book recipe index `idx`. W478: the
+                // SHARED `recipes::book::fill_craft_grid_2x2` runs
+                // here and on the local (offline / host) path -
+                // shaped ingredients land in pattern positions, tag
+                // slots pay with any member the inventory carries,
+                // a shortfall is a clean no-op. Snapshot back either
+                // way so an optimistic client resyncs.
                 if let Ok((idx, _)) =
                     bincode::serde::decode_from_slice::<u32, _>(&data, cfg)
-                    && let Some(recipe_inputs) = recipes_lookup(idx as usize)
                     && let Some(inv) = inventories.get_mut(&client_id)
                 {
-                    let mut taken: Vec<(usize, ItemStack)> = Vec::new();
-                    let mut placed: [Option<ItemStack>; 4] =
-                        std::array::from_fn(|_| None);
-                    let mut ok = true;
-                    for (i, (bid, n)) in recipe_inputs.iter().enumerate() {
-                        if i >= 4 {
-                            break;
-                        }
-                        let need = *n;
-                        // W469: the craft grid is stack-typed, so
-                        // any matching stack feeds it losslessly -
-                        // the slice into the grid clones the source
-                        // components (the W468 plain-only gate is
-                        // gone).
-                        let mut found: Option<usize> = None;
-                        for (si, slot) in inv.inventory.iter().enumerate() {
-                            if let Some(st) = slot
-                                && st.id == *bid
-                                && st.count >= need
-                            {
-                                found = Some(si);
-                                break;
-                            }
-                        }
-                        match found {
-                            Some(si) => {
-                                let original = inv.inventory[si]
-                                    .clone()
-                                    .expect("verified");
-                                let remaining =
-                                    original.count.saturating_sub(need);
-                                inv.inventory[si] = if remaining == 0 {
-                                    None
-                                } else {
-                                    Some(original.with_count(remaining))
-                                };
-                                placed[i] = Some(original.with_count(need));
-                                taken.push((si, original));
-                            }
-                            None => {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    if ok {
-                        // Return any existing craft-grid stacks to
-                        // the inventory before overwriting
-                        // (components intact).
-                        let returns: Vec<ItemStack> = inv
-                            .craft_grid
-                            .iter_mut()
-                            .filter_map(|s| s.take())
-                            .collect();
-                        for st in returns {
-                            let _ =
-                                crate::item::stack::drop_into_first_free_stacks(
-                                    &mut inv.inventory,
-                                    st,
-                                );
-                        }
-                        inv.craft_grid = placed;
-                    } else {
-                        for (si, original) in taken {
-                            inv.inventory[si] = Some(original);
-                        }
-                    }
+                    let _ = crate::recipes::book::fill_craft_grid_2x2(
+                        &mut inv.inventory,
+                        &mut inv.craft_grid,
+                        idx as usize,
+                    );
                     pending_inv_sends.insert(client_id);
                 }
             }

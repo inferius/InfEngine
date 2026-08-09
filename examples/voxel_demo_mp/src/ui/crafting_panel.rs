@@ -34,7 +34,7 @@
 use crate::container;
 use crate::container::click::{self, SectionMut};
 use crate::item::ItemStack;
-use crate::item::stack::{drop_into_first_free_stacks, take_n_stacks};
+use crate::item::stack::drop_into_first_free_stacks;
 use crate::recipes::matcher;
 
 /// All inputs the 3x3 panel needs in one struct so render.rs
@@ -670,11 +670,12 @@ pub(crate) fn grid_as_u16(
     std::array::from_fn(|i| g[i].as_ref().map(|st| (st.id, st.count)))
 }
 
-/// W54.5 - Recipe book in a standalone egui::Window. Shows every
-/// known shaped + shapeless recipe with a search filter and a
-/// craftable-only toggle. Each card paints the 3x3 input layout
-/// next to an arrow + output icon (MC `RecipeBookComponent` shape).
-/// Clicking a card auto-fills the 3x3 grid from the player inv.
+/// W54.5 - Recipe book in a standalone egui::Window. W478: lists
+/// the FULL generated MC table (`recipes::book::full_book`) with a
+/// search filter and a craftable-only toggle. Each card paints the
+/// 3x3 input layout next to an arrow + output icon (MC
+/// `RecipeBookComponent` shape). Clicking a card auto-fills the 3x3
+/// grid from the player inv.
 fn render_recipe_book_window(
     ctx: &egui::Context,
     open: &mut bool,
@@ -683,9 +684,6 @@ fn render_recipe_book_window(
     inv_view: &mut [Option<ItemStack>],
     grid: &mut [Option<ItemStack>; 9],
 ) {
-    use crate::recipes::RECIPES;
-    use crate::recipes::shaped::SHAPED_RECIPES;
-
     // Search state persisted via egui memory.
     let search_id = egui::Id::new("crafting_panel_recipe_search");
     let mut search: String = ctx
@@ -724,13 +722,14 @@ fn render_recipe_book_window(
 
             // Build entry list with search + craftable filter.
             let q = search.trim().to_lowercase();
-            let mut entries: Vec<RecipeEntry> = Vec::new();
-            for r in RECIPES {
-                entries.push(recipe_entry_shapeless(r));
-            }
-            for r in SHAPED_RECIPES {
-                entries.push(recipe_entry_shaped(r));
-            }
+            let entries: Vec<RecipeEntry> = crate::recipes::book::full_book()
+                .iter()
+                .map(|r| RecipeEntry {
+                    output: r.output(),
+                    name: r.name(),
+                    cells: r.cells_3x3(),
+                })
+                .collect();
             let filtered: Vec<&RecipeEntry> = entries
                 .iter()
                 .filter(|e| {
@@ -773,25 +772,29 @@ fn render_recipe_book_window(
 }
 
 /// Predicate: does the player inv hold every input the recipe
-/// needs, in the right quantity? Id-keyed - components never gate
-/// a recipe.
+/// needs, in the right quantity? W478: cells are acceptable-id
+/// SETS - availability sums every member the inventory carries
+/// (id-keyed; components never gate a recipe). Overlapping sets
+/// could in theory double-count, but this only drives the
+/// "Craftable" badge - the autofill takes real items and bails
+/// cleanly on a shortfall.
 fn is_craftable_from(
     entry: &RecipeEntry,
     inv: &[Option<ItemStack>],
 ) -> bool {
-    let mut needed: Vec<(u16, u32)> = Vec::new();
-    for id in entry.cells.iter().flatten() {
-        if let Some(t) = needed.iter_mut().find(|(b, _)| *b == *id) {
+    let mut needed: Vec<(crate::recipes::Ingredient, u32)> = Vec::new();
+    for set in entry.cells.iter().flatten() {
+        if let Some(t) = needed.iter_mut().find(|(s, _)| *s == *set) {
             t.1 += 1;
         } else {
-            needed.push((*id, 1));
+            needed.push((*set, 1));
         }
     }
-    for (id, count) in &needed {
+    for (set, count) in &needed {
         let avail: u32 = inv
             .iter()
             .flatten()
-            .filter(|st| st.id == *id)
+            .filter(|st| set.contains(&st.id))
             .map(|st| st.count as u32)
             .sum();
         if avail < *count {
@@ -816,13 +819,15 @@ fn draw_recipe_card(
 ) {
     let mut card_clicked = false;
     ui.horizontal(|ui| {
-        // 3x3 input grid.
+        // 3x3 input grid. A tag cell previews its FIRST live
+        // member (the matcher accepts any member).
         ui.vertical(|ui| {
             for r in 0..3 {
                 ui.horizontal(|ui| {
                     for c in 0..3 {
-                        let id_opt = entry.cells[r * 3 + c];
-                        let slot = id_opt.map(|id| (id, 1u8));
+                        let slot = entry.cells[r * 3 + c]
+                            .and_then(|set| set.first().copied())
+                            .map(|id| (id, 1u8));
                         let resp = draw_slot(
                             ui,
                             slot,
@@ -885,87 +890,46 @@ fn draw_recipe_card(
 struct RecipeEntry {
     output: (u16, u8),
     name: &'static str,
-    /// Per-cell input layout (row-major, 9 cells). `None` = empty.
-    /// Shapeless recipes spread their inputs across the first N
-    /// non-empty cells in row-major order.
-    cells: [Option<u16>; 9],
+    /// Per-cell input layout (row-major, 9 cells). `None` = empty;
+    /// `Some(set)` = the cell accepts any member of the set (W478
+    /// tag semantics). Shaped patterns anchor top-left; shapeless
+    /// recipes spread across the first N cells.
+    cells: [Option<crate::recipes::Ingredient>; 9],
 }
 
-fn recipe_entry_shapeless(r: &crate::recipes::Recipe) -> RecipeEntry {
-    let mut cells: [Option<u16>; 9] = [None; 9];
-    for (i, (id, _)) in r.inputs.iter().take(9).enumerate() {
-        cells[i] = Some(*id);
-    }
-    RecipeEntry {
-        output: r.output,
-        name: r.name,
-        cells,
-    }
-}
-
-fn recipe_entry_shaped(r: &crate::recipes::shaped::ShapedRecipe) -> RecipeEntry {
-    let mut cells: [Option<u16>; 9] = [None; 9];
-    for row in 0..3 {
-        for col in 0..3 {
-            let id = r.pattern[row][col];
-            cells[row * 3 + col] = if id == 0 { None } else { Some(id) };
-        }
-    }
-    RecipeEntry {
-        output: r.output,
-        name: r.name,
-        cells,
-    }
-}
-
-/// W54.3 - autofill: for each non-empty cell in the recipe, take
-/// 1 of the matching item from the player inventory into the
-/// matching grid cell (the taken single clones the source stack's
-/// components). Bails (leaves grid + inv untouched) if any
-/// required input is missing.
+/// W54.3 - autofill (W478: set-aware): for each occupied recipe
+/// cell, take 1 item ANY set member matches from the player
+/// inventory into the matching grid cell (set order first, so an
+/// exact-id stack of the lead member wins; the taken single clones
+/// the source stack's components). Bails (leaves grid + inv
+/// untouched) if any required input is missing.
 fn autofill_grid_from_inv(
     entry: &RecipeEntry,
     inv_view: &mut [Option<ItemStack>],
     grid: &mut [Option<ItemStack>; 9],
 ) {
-    // First sweep: check feasibility against a tally. Mismatch ->
-    // bail without side effects.
-    let mut needed: Vec<(u16, u32)> = Vec::new();
-    for id in entry.cells.iter().flatten() {
-        if let Some(t) = needed.iter_mut().find(|(b, _)| *b == *id) {
-            t.1 += 1;
-        } else {
-            needed.push((*id, 1));
+    // Pay every cell from a WORKING copy - a shortfall rolls back
+    // by dropping the copy (same shape as `book::fill_craft_grid_2x2`).
+    let mut work: Vec<Option<ItemStack>> = inv_view.to_vec();
+    let mut placed: [Option<ItemStack>; 9] = std::array::from_fn(|_| None);
+    for (idx, maybe_set) in entry.cells.iter().enumerate() {
+        let Some(set) = maybe_set else { continue };
+        match crate::recipes::book::take_one_of(&mut work, set) {
+            Some(st) => placed[idx] = Some(st),
+            None => return, // not enough; abort untouched.
         }
     }
-    for (id, count) in &needed {
-        let available: u32 = inv_view
-            .iter()
-            .flatten()
-            .filter(|st| st.id == *id)
-            .map(|st| st.count as u32)
-            .sum();
-        if available < *count {
-            return; // not enough; abort.
-        }
+    // Commit the drained inventory, then return whatever is on the
+    // grid to it (components ride back) before the new layout lands.
+    for (dst, src) in inv_view.iter_mut().zip(work) {
+        *dst = src;
     }
-    // Return whatever is already on the grid to the inventory so
-    // the autofill starts from a clean grid (components ride back).
     for cell in grid.iter_mut() {
         if let Some(st) = cell.take() {
             let _ = drop_into_first_free_stacks(inv_view, st);
         }
     }
-    // Second sweep: actually move 1 of each required input into
-    // the matching cell. Inventory mutated in place.
-    for (idx, maybe_id) in entry.cells.iter().enumerate() {
-        let Some(id) = maybe_id else { continue };
-        if let Some(slot) = inv_view.iter_mut().find(|s| {
-            s.as_ref().is_some_and(|st| st.id == *id && st.count > 0)
-        }) {
-            grid[idx] = take_n_stacks(slot, 1);
-        }
-    }
+    *grid = placed;
 }
 
 // Keep the `container` import quiet about unused submodule.

@@ -710,9 +710,9 @@ mod tests {
         // `moveItemStackTo(9, 45, true)`: the reversed player
         // range starts at hotbar slot 8 (gi 43).
         let (mut craft, mut armor, mut inv, mut cursor) = screen();
-        // 2x2 recipe: 1 wood (5) -> 4 planks (7) per the RECIPES
-        // table; resolve dynamically so table edits don't break
-        // the assertion.
+        // 2x2 recipe: 1 oak log (5) -> 4 planks (7) per the MC
+        // oak_planks shapeless row (W478 generated table); resolve
+        // dynamically so table edits don't break the assertion.
         craft[0] = Some(ItemStack::new(5, 2));
         let grid: [Option<ItemStack>; 4] =
             std::array::from_fn(|i| craft[i].clone());

@@ -8,7 +8,8 @@ use glam::Vec3;
 use crate::Voxel;
 use crate::block::{BLOCK_TYPES, block_type};
 use crate::net::NetRole;
-use crate::{Biome, KIND_ZOMBIE, PLAYER_HEIGHT, RECIPES, Recipe, biome_at};
+use crate::recipes::book::{AnyRecipe, full_book};
+use crate::{Biome, KIND_ZOMBIE, PLAYER_HEIGHT, biome_at};
 
 /// `/listblocks` (alias `/blocks`). Dump every known block
 /// name in groups of ~8 per line.
@@ -52,16 +53,24 @@ pub(crate) fn cmd_recipe(
         lines.push("Usage: /recipe <block>".to_string());
         return true;
     }
-    let target_id = BLOCK_TYPES
+    // W478: outputs are ITEMS now - probe the item registry first
+    // (block names still resolve through their item rows).
+    let target_id = crate::item::ITEM_TYPES
         .iter()
-        .find(|bt| bt.name.eq_ignore_ascii_case(arg))
-        .map(|bt| bt.id);
+        .find(|it| it.name.eq_ignore_ascii_case(arg))
+        .map(|it| it.id)
+        .or_else(|| {
+            BLOCK_TYPES
+                .iter()
+                .find(|bt| bt.name.eq_ignore_ascii_case(arg))
+                .map(|bt| bt.id)
+        });
     match target_id {
         None => lines.push(format!("Unknown block: {arg}")),
         Some(id) => {
-            let found: Vec<&Recipe> = RECIPES
+            let found: Vec<&AnyRecipe> = full_book()
                 .iter()
-                .filter(|r| r.output.0 == id)
+                .filter(|r| r.output().0 == id)
                 .collect();
             if found.is_empty() {
                 lines.push(format!(
@@ -69,23 +78,30 @@ pub(crate) fn cmd_recipe(
                 ));
             } else {
                 for r in found {
-                    let inputs: Vec<String> = r
-                        .inputs
+                    // Aggregate the 3x3 layout into "Nxname" pairs
+                    // (tag slots print their first member).
+                    let mut needed: Vec<(u16, u8)> = Vec::new();
+                    for set in r.cells_3x3().iter().flatten() {
+                        let lead = set.first().copied().unwrap_or(0);
+                        match needed.iter_mut().find(|(b, _)| *b == lead) {
+                            Some(t) => t.1 += 1,
+                            None => needed.push((lead, 1)),
+                        }
+                    }
+                    let inputs: Vec<String> = needed
                         .iter()
                         .map(|(bid, n)| {
-                            let name = BLOCK_TYPES
-                                .iter()
-                                .find(|bt| bt.id == *bid)
-                                .map(|bt| bt.name)
+                            let name = crate::item::item_type(*bid)
+                                .map(|it| it.name)
                                 .unwrap_or("?");
                             format!("{n}x{name}")
                         })
                         .collect();
                     lines.push(format!(
                         "{}: {} -> {}x {arg}",
-                        r.name,
+                        r.name(),
                         inputs.join(" + "),
-                        r.output.1
+                        r.output().1
                     ));
                 }
             }

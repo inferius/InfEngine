@@ -24,8 +24,6 @@ pub(crate) mod slot_widget;
 use infengine_voxel::BlockId;
 use serde::{Deserialize, Serialize};
 
-use crate::RECIPES;
-
 /// Targeting wireframe mode, cycled by the `H` key.
 ///
 /// Drives the per-frame highlight box drawn around the voxel the
@@ -202,11 +200,11 @@ pub(crate) enum BackTo {
 }
 
 /// Inspect the 2x2 crafting grid and return the recipe output
-/// if every input is satisfied. The grid is shapeless: order
-/// doesn't matter. Returns `None` when no recipe matches or
-/// any required stack is short. W469: the grid holds stacks;
-/// matching stays id + count based (components are irrelevant
-/// to what a recipe accepts).
+/// if every input is satisfied. Returns `None` when no recipe
+/// matches. W478: routed through the MC-semantics matcher over the
+/// generated tables - shaped 2x2-capable patterns (offset + mirror)
+/// plus exact-multiset shapeless rows; matching stays id + count
+/// based (components are irrelevant to what a recipe accepts).
 pub(crate) fn match_recipe(
     grid: &[Option<crate::item::ItemStack>; 4],
 ) -> Option<(BlockId, u8)> {
@@ -219,48 +217,10 @@ pub(crate) fn match_recipe(
 pub(crate) fn match_recipe_named(
     grid: &[Option<crate::item::ItemStack>; 4],
 ) -> Option<(BlockId, u8, &'static str)> {
-    // Aggregate the grid into an (id, count) tally so order
-    // doesn't matter for shapeless matching.
-    let mut tally: Vec<(u16, u8)> = Vec::with_capacity(4);
-    for st in grid.iter().flatten() {
-        if let Some(slot) = tally.iter_mut().find(|(bb, _)| *bb == st.id) {
-            slot.1 = slot.1.saturating_add(st.count);
-        } else {
-            tally.push((st.id, st.count));
-        }
-    }
-    for recipe in RECIPES {
-        // Aggregate the recipe inputs the same way.
-        let mut needed: Vec<(u16, u8)> = Vec::with_capacity(recipe.inputs.len());
-        for (b, c) in recipe.inputs {
-            if let Some(slot) = needed.iter_mut().find(|(bb, _)| *bb == *b) {
-                slot.1 = slot.1.saturating_add(*c);
-            } else {
-                needed.push((*b, *c));
-            }
-        }
-        // The match requires the tally to have at least every
-        // (block, count) the recipe needs - and the tally must
-        // contain no other blocks (otherwise the user just
-        // stuffed random extras in).
-        if needed.len() != tally.len() {
-            continue;
-        }
-        let mut ok = true;
-        for (b, n) in &needed {
-            match tally.iter().find(|(bb, _)| bb == b) {
-                Some((_, have)) if *have >= *n => {}
-                _ => {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-        if ok {
-            return Some((BlockId(recipe.output.0), recipe.output.1, recipe.name));
-        }
-    }
-    None
+    let cells: crate::recipes::matcher::Grid2 =
+        std::array::from_fn(|i| grid[i].as_ref().map(|st| (st.id, st.count)));
+    crate::recipes::matcher::match_2x2(&cells)
+        .map(|(id, n, name)| (BlockId(id), n, name))
 }
 
 #[cfg(test)]

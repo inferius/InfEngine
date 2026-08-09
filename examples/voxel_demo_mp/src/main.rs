@@ -231,9 +231,9 @@ pub(crate) use workers::{
 // W47.27 - block atlas + day/night helpers.
 mod atlas;
 pub(crate) use atlas::{day_night, flame_emitter, load_block_atlas_from_dir};
-// W47.27 - crafting recipes.
+// W47.27 - crafting recipes (W478: generated MC tables; the
+// consumers reach them via `crate::recipes::{matcher, book}`).
 mod recipes;
-pub(crate) use recipes::{RECIPES, Recipe};
 // W47.27 - RemoteInterp player pose buffer.
 mod remote_interp;
 pub(crate) use remote_interp::RemoteInterp;

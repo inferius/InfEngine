@@ -246,7 +246,6 @@ pub(crate) fn tick(vx: &mut crate::Voxel) {
                         pending_inv_sends,
                         PVP_REACH,
                         DAY_LENGTH_S,
-                        &|idx| RECIPES.get(idx).map(|r| r.inputs),
                         &mut inbox,
                     );
                 }
