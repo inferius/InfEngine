@@ -44,8 +44,11 @@ to run when the index does not parse, instead of "starting fresh".
  7. adv-import music    (MT-32 render)  -> music_mt32/*.ogg
  8. adl_render          <dir with INTRO.ADL> _assets/kyrandia/sounds
        intro effects (OPL2)  -> sounds/sfx0NN.wav, ids sfx.intro_N
- 9. adl_render          <dir with KYRA1A.ADL> _assets/kyrandia/sounds/kyra1a
-       chapter-1 game effects -> ids kyra.sfxN  (1B..5B, KYRAMISC still open)
+ 9. adl_render          <dir with KYRAxx.ADL> _assets/kyrandia/sounds/<bank>
+       game effects, one run per bank (kyra1a..kyra5b, kyramisc) ->
+       ids kyra.sfxN (per-chapter id collisions still to untangle).
+       Each bank must be alone in its input dir - a track number wins
+       first-file-first, so mixing banks drops tracks.
 10. kyra_voice          <GOG> _assets/kyrandia en
        .VRM -> voice/<room>/NNN.wav; NNN == line index == "<room>.NN"
 11. kyra_intro_fit      <FLOPPY> _assets/kyrandia
@@ -83,3 +86,8 @@ tests, and a smoke run of `adventure_game` reading the project.
   are `looping: false`.
 - MALCOLM.CPS is a sprite sheet, not a screen. WRITING.CPS is the
   writing-hand shape bank (drawn by code; drawShape is still open).
+- `.ADL` program offsets are relative to the file *after* its 120-byte
+  track table; instruments are programs 250 and up; a track's program
+  opens with its channel (9 = the silent control channel that starts
+  the audible voices) and priority. Reading any of that differently is
+  how a whole bank renders at a peak of 8.
