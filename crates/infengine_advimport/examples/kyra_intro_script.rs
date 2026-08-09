@@ -191,6 +191,11 @@ impl Body {
     fn goto(&mut self, room: &str) {
         self.act("GoToRoom", &[("room", format!("\"{room}\""))]);
     }
+    /// Take the held last frame off - the original fades here, and a
+    /// part-built logo left hanging rides the pan as a ghost.
+    fn clear_anim(&mut self) {
+        self.act("PlayAnim", &[("animation", "\"\"".into()), ("wait", "false".into())]);
+    }
     fn script(self, id: &str) -> String {
         format!(
             "[\n  Script(\n    id: \"{id}\",\n    actions: [\n{}    ],\n  ),\n]\n",
@@ -271,8 +276,10 @@ fn scripts(rt: &dyn Fn(&str) -> f32) -> Vec<(&'static str, String)> {
     b.music("intro_2");
     b.wait(0.8);
     b.anim("intro1_westwood", true, 0.0, 39.0);
+    b.clear_anim();
     b.wait(0.3);
     b.anim("intro1_kyrandia", true, 0.0, 39.0);
+    b.clear_anim();
     b.wait(0.3);
     b.act("MoveCamera", &[("to", "Vec2(0.0, 112.0)".into()), ("seconds", "3.7".into())]);
     b.wait(0.4);

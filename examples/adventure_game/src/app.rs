@@ -221,6 +221,9 @@ impl Game {
             self.still = Some((image, left));
         }
         for file in [request.voice, request.sound].into_iter().flatten() {
+            // Named out loud so a silent run can say whether the sound
+            // was never asked for or asked for and unheard.
+            tracing::info!(%file, "sfx");
             self.play(&file);
         }
         // Music replaces music: the outer Some is "a PlayMusic action
@@ -232,6 +235,7 @@ impl Game {
                 old.stop(0.5);
             }
             if let Some(file) = music {
+                tracing::info!(%file, "music");
                 self.music = self.play_tracked(&file);
             }
         }

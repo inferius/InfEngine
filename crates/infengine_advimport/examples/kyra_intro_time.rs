@@ -249,6 +249,7 @@ fn played(data: &[u8], at: usize, end: usize) -> std::collections::HashMap<usize
     let mut last_play: Option<usize> = None;
     let mut spans: HashMap<usize, (u32, u32)> = HashMap::new();
     let mut ticks = 0u32;
+    let mut visible = true;
     let mut p = at;
     let mut loop_from: HashMap<i64, usize> = HashMap::new();
     let mut loops_left: HashMap<i64, u16> = HashMap::new();
@@ -268,26 +269,31 @@ fn played(data: &[u8], at: usize, end: usize) -> std::collections::HashMap<usize
         }
         match op {
             0x06 | 0x07 => ticks += args[0] as u32,
-            0x02 => {
+            // Frames stepped while the screen is faded to black were
+            // never seen - baking them left ghosts of the logo hanging
+            // in the sky.
+            0x02 if visible => {
                 let (wsa, frame) = (args[0] as usize, args[1] as usize);
                 current.insert(wsa, frame);
                 note(&mut order, &mut spans, wsa, frame, ticks);
                 last_play = Some(wsa);
             }
-            0x03 => {
+            0x03 if visible => {
                 let wsa = args[0] as usize;
                 let frame = current.get(&wsa).map(|f| f + 1).unwrap_or(0);
                 current.insert(wsa, frame);
                 note(&mut order, &mut spans, wsa, frame, ticks);
                 last_play = Some(wsa);
             }
-            0x04 => {
+            0x04 if visible => {
                 let wsa = args[0] as usize;
                 let frame = current.get(&wsa).map(|f| f.saturating_sub(1)).unwrap_or(0);
                 current.insert(wsa, frame);
                 note(&mut order, &mut spans, wsa, frame, ticks);
                 last_play = Some(wsa);
             }
+            0x0E => visible = false,
+            0x14 => visible = true,
             // drawShape rides on the frame that was just shown - the
             // writing hand is drawn over the WSA every step.
             0x05 => {
