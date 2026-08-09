@@ -12,9 +12,9 @@
 //!
 //! W476: the rows behind these fns are GENERATED from the MC 26.1.2
 //! recipe jsons + FuelValues.java (see `recipes/smelting_table.rs`).
-//! This wrapper adds exactly one engine-legacy exception on top: the
-//! ore-coal id 13 (mining still drops it until the W477 loot pass)
-//! keeps its 1600-tick burn even though MC's coal_ore is not a fuel.
+//! W477: the id-13 engine-legacy fuel exception is GONE - mining
+//! routes coal-ore drops onto the real coal item (325) now, so the
+//! ore block stopped burning, exactly like MC's coal_ore.
 //!
 //! Cross-module mapping:
 //! - input + output ids are the same `u16` used by `item::ITEM_TYPES`
@@ -22,7 +22,7 @@
 //!   it does not verify that an item with id `output` actually
 //!   exists; callers test that via the matching `item_type` lookup.
 
-use crate::block::{BUCKET_EMPTY_ID, BUCKET_LAVA_ID, CHEST_ID, COAL_ID, FURNACE_ID};
+use crate::block::{BUCKET_EMPTY_ID, BUCKET_LAVA_ID, CHEST_ID, FURNACE_ID};
 
 /// Resolve a smelt recipe.
 ///
@@ -52,15 +52,9 @@ pub(crate) fn smelt_recipe(input_id: u16) -> Option<(u16, u8)> {
 /// duration in milliseconds. The catch-up dispatcher uses the same
 /// constant on the offline path so the two units stay in sync.
 pub(crate) fn fuel_burn_ticks(item_id: u16) -> u32 {
-    let generated = crate::recipes::smelting::fuel_burn_ticks(item_id);
-    if generated > 0 {
-        return generated;
-    }
-    // W476 engine-legacy exception: id 13 is the ore-coal row that
-    // mining currently drops and torch crafting consumes - it keeps
-    // burning like the coal item (1600) until W477 reroutes ore
-    // drops onto the real coal item (325).
-    if item_id == COAL_ID { 1600 } else { 0 }
+    // W477: pure delegation - the generated FuelValues port is the
+    // whole truth (the W476 id-13 ore-coal exception is deleted).
+    crate::recipes::smelting::fuel_burn_ticks(item_id)
 }
 
 /// W476: crafting remainder left in the FUEL slot when the last item
@@ -95,7 +89,10 @@ const _: u16 = FURNACE_ID;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block::{COAL_ID, IRON_INGOT_ID, IRON_ORE_ID, PLANKS_ID, WOOD_ID};
+    use crate::block::{IRON_INGOT_ID, IRON_ORE_ID, PLANKS_ID, WOOD_ID};
+
+    /// W477: the real coal ITEM.
+    const COAL_ITEM: u16 = 325;
 
     #[test]
     fn smelt_cobble_to_stone() {
@@ -128,7 +125,15 @@ mod tests {
 
     #[test]
     fn fuel_coal_burns_1600_ticks() {
-        assert_eq!(fuel_burn_ticks(COAL_ID), 1600);
+        assert_eq!(fuel_burn_ticks(COAL_ITEM), 1600);
+    }
+
+    #[test]
+    fn coal_ore_block_is_not_a_fuel() {
+        // W477: the id-13 engine-legacy fallback is gone - MC's
+        // coal_ore never burns (mining pays the coal ITEM instead).
+        assert_eq!(fuel_burn_ticks(13), 0);
+        assert!(!is_fuel(13));
     }
 
     #[test]
@@ -162,7 +167,7 @@ mod tests {
             fuel_remainder(crate::block::BUCKET_LAVA_ID),
             Some(crate::block::BUCKET_EMPTY_ID)
         );
-        assert_eq!(fuel_remainder(COAL_ID), None);
+        assert_eq!(fuel_remainder(COAL_ITEM), None);
         assert_eq!(fuel_remainder(0), None);
         assert_eq!(fuel_remainder(993), None); // charcoal
     }
@@ -177,7 +182,7 @@ mod tests {
 
     #[test]
     fn is_fuel_matches_burn_ticks_nonzero() {
-        assert!(is_fuel(COAL_ID));
+        assert!(is_fuel(COAL_ITEM));
         assert!(is_fuel(PLANKS_ID));
         assert!(is_fuel(WOOD_ID));
         assert!(is_fuel(993)); // W476: charcoal

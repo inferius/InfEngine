@@ -83,6 +83,13 @@ pub(crate) struct StructureTemplate {
     pub(crate) cells: Vec<TemplateCell>,
     /// W302: entities embedded in the template.
     pub(crate) entities: Vec<TemplateEntity>,
+    /// W477: container cells whose block-entity nbt carries a
+    /// `LootTable` id (village house chests, trial-chamber barrels,
+    /// bastion rampart chests...): `(local cell pos, table id)`.
+    /// Kept OUT of `TemplateCell` - loot cells are rare (0-2 per
+    /// template) and a per-cell Option<String> would bloat every
+    /// cached template.
+    pub(crate) loot_cells: Vec<([i32; 3], String)>,
 }
 
 impl StructureTemplate {
@@ -132,6 +139,7 @@ impl StructureTemplate {
             })
             .collect();
         let mut cells = Vec::new();
+        let mut loot_cells = Vec::new();
         for b in root
             .get("blocks")
             .and_then(Nbt::as_list)
@@ -203,6 +211,17 @@ impl StructureTemplate {
             } else {
                 None
             };
+            // W477: container block entities carry their loot table
+            // in nbt (`LootTable: "minecraft:chests/..."`). Recorded
+            // per template so the chest-loot routing probes can map
+            // a carved chest/barrel back to its MC table.
+            if let Some(lt) = b
+                .get("nbt")
+                .and_then(|n| n.get("LootTable"))
+                .and_then(Nbt::as_str)
+            {
+                loot_cells.push((pos, lt.to_string()));
+            }
             cells.push(TemplateCell { pos, state, jigsaw, data_marker });
         }
         // W302: the entities list ({pos: [f64;3], blockPos: [i32;3],
@@ -232,7 +251,7 @@ impl StructureTemplate {
                 });
             }
         }
-        Ok(StructureTemplate { size, palette, cells, entities })
+        Ok(StructureTemplate { size, palette, cells, entities, loot_cells })
     }
 
     /// Every jigsaw socket in the template.

@@ -63,6 +63,9 @@ pub(crate) fn ore_break_xp(block_id: u16, seed: u32) -> u32 {
     };
     let stem = bt.name.strip_prefix("deepslate_").unwrap_or(bt.name);
     match stem {
+        // W477: surface coal ore matches now - its legacy registry
+        // name "coal" never hit this row (deepslate did), so it
+        // paid no break XP until the rename.
         "coal_ore" => seed % 3,                        // 0..=2
         "diamond_ore" | "emerald_ore" => 3 + seed % 5, // 3..=7
         "lapis_ore" | "nether_quartz_ore" => 2 + seed % 4, // 2..=5

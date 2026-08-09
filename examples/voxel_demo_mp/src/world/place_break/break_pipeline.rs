@@ -363,7 +363,19 @@ pub(crate) fn apply_block_break(
                     vx.spawn_drop(BlockId(drop_id), voxel);
                     vx.spawn_drop(BlockId(drop_id), voxel);
                 }
-                _ => vx.spawn_drop(BlockId(drop_id), voxel),
+                // W477: MC block-loot item overrides (coal ores ->
+                // the coal ITEM, clay -> 4x clay_ball); the general
+                // silk-touch/fortune block-loot system stays queued.
+                _ => match crate::block::break_drops::break_drop_override(
+                    broken.0,
+                ) {
+                    Some((item, n)) => {
+                        for _ in 0..n {
+                            vx.spawn_drop(BlockId(item), voxel);
+                        }
+                    }
+                    None => vx.spawn_drop(BlockId(drop_id), voxel),
+                },
             }
         }
         // W418: ore XP (DropExperienceBlock) - paid when the drop

@@ -189,7 +189,12 @@ pub(crate) const ITEM_TYPES: &[ItemType] = &[
         category: ItemCategory::Food,
     },
     ItemType {
-        id: 13, name: "coal", display: Some("Coal Ore"),
+        // W477: renamed from the legacy "coal" - the name shadowed
+        // the real coal ITEM (325) in every name-keyed lookup (the
+        // loot roller minted ore blocks for chest coal, and the icon
+        // resolver matched the coal SPRITE for the ore block). The
+        // block-form fall-through now lands on the coal_ore texture.
+        id: 13, name: "coal_ore", display: Some("Coal Ore"),
         places: Some(13), max_stack: 64, icon: None,
         category: ItemCategory::Decoration,
     },

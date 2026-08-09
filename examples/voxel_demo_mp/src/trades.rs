@@ -264,6 +264,23 @@ mod tests {
         }
     }
 
+    /// W477: the mason/1/clay_ball_emerald row landed once clay_ball
+    /// (994) existed - 10 clay balls buy one emerald.
+    #[test]
+    fn mason_buys_clay_balls() {
+        let row = TRADES
+            .iter()
+            .find(|t| {
+                t.profession == "mason" && t.tier == 1 && t.want == 994
+            })
+            .expect("mason clay_ball trade present");
+        assert_eq!(row.want_n, 10);
+        assert_eq!(row.give, 317);
+        assert_eq!(row.give_n, 1);
+        assert_eq!(row.max_uses, 16);
+        assert_eq!(row.xp, 2);
+    }
+
     /// W341: a composter next to the villager claims the farmer
     /// job; with no workstation the hash fallback answers.
     #[test]

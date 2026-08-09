@@ -20,20 +20,10 @@
 //! phantom_membrane, glass_bottle, totem_of_undying,
 //! tide_armor_trim_smithing_template).
 
-use crate::loot::{LootEntry, LootPool, LootTable};
-
-const fn one(name: &'static str, weight: u32) -> LootEntry {
-    LootEntry { name, weight, count_min: 1, count_max: 1 }
-}
-
-const fn counted(
-    name: &'static str,
-    weight: u32,
-    count_min: u8,
-    count_max: u8,
-) -> LootEntry {
-    LootEntry { name, weight, count_min, count_max }
-}
+// W477: `one` / `counted` are the shared crate::loot constructors
+// now (LootEntry grew the chest-only `subtable` field; the helpers
+// keep these rows literal-free).
+use crate::loot::{LootPool, LootTable, counted, one};
 
 const EMPTY: LootTable = LootTable { pools: &[] };
 

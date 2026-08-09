@@ -24,8 +24,9 @@
 //! Honest gaps: the drape reads the NATURAL
 //! heightmap (sibling pieces are invisible to it - MC's live
 //! heightmap sees earlier writes); feature sockets place no trees
-//! yet; village chests roll the simple_dungeon table until per-
-//! building tables arrive (better stocked than empty).
+//! yet. W477: village chests roll their OWN per-building tables -
+//! the chest cell's `LootTable` nbt survives template parsing and
+//! `village_chest_loot_at` maps a carved chest back to it.
 
 use infengine_voxel::{BlockId, CHUNK_SIZE, Chunk, ChunkCoord};
 use std::cell::RefCell;
@@ -432,6 +433,98 @@ pub(crate) fn layout_contains(layout: &[PlacedPiece], pos: [i32; 3]) -> bool {
         }
     }
     false
+}
+
+/// W477: the loot-table id of the container cell a jigsaw layout
+/// places at `pos`, if any (`minecraft:chests/...` from the cell's
+/// block-entity nbt). Mirrors the carve's world-position math
+/// exactly (rotation lattice + the terrain-matching drape), so the
+/// probe agrees with where the chest actually landed. Shared by the
+/// village / trial-chamber / bastion loot routing.
+pub(crate) fn layout_loot_table_at(
+    layout: &[PlacedPiece],
+    ctx: &WorldgenCtx,
+    pos: [i32; 3],
+) -> Option<String> {
+    let cell_world_y = |piece: &PlacedPiece, cell: [i32; 3], wx: i32, wz: i32| {
+        if piece.terrain_matching {
+            mc_floor_at(ctx, wx, wz)
+                .max(crate::worldgen::climate::SEA_LEVEL - 1)
+                + cell[1]
+        } else {
+            piece.position[1] + jigsaw::rot_pos(piece.rotation, cell)[1]
+        }
+    };
+    for piece in layout {
+        let Some(t) = village_data::template(&piece.template) else {
+            continue;
+        };
+        let mut bb = template_bb(t.size, piece.position, piece.rotation);
+        if piece.terrain_matching {
+            bb.y0 = -64;
+            bb.y1 = 319;
+        }
+        if !bb.contains(pos) {
+            continue;
+        }
+        // Loot cells are rare (0-2 per template); scan them directly.
+        // Where two pieces overlap the first hit wins - a carve-order
+        // mismatch would need two loot containers on the SAME cell.
+        for (cpos, lt) in &t.loot_cells {
+            let rp = jigsaw::rot_pos(piece.rotation, *cpos);
+            let wx = piece.position[0] + rp[0];
+            let wz = piece.position[2] + rp[2];
+            if [wx, cell_world_y(piece, *cpos, wx, wz), wz] == pos {
+                return Some(lt.clone());
+            }
+        }
+        // W251 list-element overlays can carry containers too.
+        for ov in &piece.overlays {
+            let Some(ot) = village_data::template(&ov.location) else {
+                continue;
+            };
+            for (cpos, lt) in &ot.loot_cells {
+                let rp = jigsaw::rot_pos(piece.rotation, *cpos);
+                let wx = piece.position[0] + rp[0];
+                let wz = piece.position[2] + rp[2];
+                if [wx, cell_world_y(piece, *cpos, wx, wz), wz] == pos {
+                    return Some(lt.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// W477: the village-table id owning the chest at `pos` (`None` =
+/// no village piece placed a loot container there). Same grid scan
+/// as `pos_in_village`; the layout caches keep it cheap right after
+/// the carve.
+pub(crate) fn village_chest_loot_at(
+    ctx: &WorldgenCtx,
+    pos: [i32; 3],
+) -> Option<String> {
+    let seed = ctx.effective_seed();
+    let cs = CHUNK_SIZE as i32;
+    let (ccx, ccz) = (pos[0].div_euclid(cs), pos[2].div_euclid(cs));
+    const REACH: i32 = 7;
+    for gx in (ccx - REACH).div_euclid(SPACING)..=(ccx + REACH).div_euclid(SPACING) {
+        for gz in
+            (ccz - REACH).div_euclid(SPACING)..=(ccz + REACH).div_euclid(SPACING)
+        {
+            let [scx, scz] = potential_start(seed, gx, gz);
+            if (scx - ccx).abs() > REACH || (scz - ccz).abs() > REACH {
+                continue;
+            }
+            let Some(layout) = layout_for_start(ctx, scx, scz) else {
+                continue;
+            };
+            if let Some(lt) = layout_loot_table_at(&layout, ctx, pos) {
+                return Some(lt);
+            }
+        }
+    }
+    None
 }
 
 /// Per-cell keep roll for a list-element overlay (the outpost

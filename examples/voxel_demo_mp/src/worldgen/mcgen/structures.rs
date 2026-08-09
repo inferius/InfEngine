@@ -305,6 +305,28 @@ fn rooms_for_source(
     rc
 }
 
+/// W477: does a monster room place a CHEST exactly at `pos`? The
+/// same 3x3 source-column replay `place_monster_rooms` applies, so
+/// the answer matches the carve cell-for-cell (rooms overwriting
+/// each other only ever write chests via this list). Positive probe
+/// for the loot routing - the old routing treated "no structure
+/// claimed it" as a monster-room chest, which misfed every unwired
+/// structure with dungeon loot.
+pub(crate) fn pos_is_monster_room_chest(ctx: &WorldgenCtx, pos: [i32; 3]) -> bool {
+    let cs = CHUNK_SIZE as i32;
+    let (ccx, ccz) = (pos[0].div_euclid(cs), pos[2].div_euclid(cs));
+    for scx in (ccx - 1)..=(ccx + 1) {
+        for scz in (ccz - 1)..=(ccz + 1) {
+            for room in rooms_for_source(ctx, scx, scz).iter() {
+                if room.writes.get(&pos).copied() == Some(CHEST_ID) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn place_monster_rooms(
     chunk: &mut Chunk,
     coord: ChunkCoord,

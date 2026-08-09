@@ -182,7 +182,15 @@ impl WorkerPool {
                                                 // noise stack on the
                                                 // MAIN thread (100-200 ms
                                                 // folds near villages).
-                                                } else if b.0 == crate::block::CHEST_ID {
+                                                // W477: worldgen BARRELS
+                                                // (trial-chamber corridor
+                                                // + intersection loot)
+                                                // ride the same channel -
+                                                // they share the chest
+                                                // container store.
+                                                } else if b.0 == crate::block::CHEST_ID
+                                                    || b.0 == crate::block::BARREL_ID
+                                                {
                                                     side_effects.push(
                                                         ChunkSideEffect::DungeonChest {
                                                             pos: wv,
@@ -1557,125 +1565,11 @@ pub(crate) enum ChunkSideEffect {
     StructureMob { anchor: [i32; 3], kind: u8, baby: bool },
 }
 
-/// W249: which loot table a worldgen chest rolls at delivery. Decided
-/// on the worker via the deterministic structure-membership probes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChestLootKind {
-    SimpleDungeon,
-    AbandonedMineshaft,
-    DesertPyramid,
-    IglooChest,
-    PillagerOutpost,
-    ShipwreckMap,
-    ShipwreckTreasure,
-    ShipwreckSupply,
-    BuriedTreasure,
-    UnderwaterRuinSmall,
-    UnderwaterRuinBig,
-    JungleTemple,
-    StrongholdCorridor,
-    StrongholdCrossing,
-    StrongholdLibrary,
-    RuinedPortal,
-    WoodlandMansion,
-    AncientCity,
-    AncientCityIceBox,
-    TrialChambersCorridor,
-    TrialChambersEntrance,
-    TrialChambersIntersection,
-    TrialChambersSupply,
-    BastionTreasure,
-    BastionOther,
-    BastionBridge,
-    BastionHoglinStable,
-    NetherBridge,
-}
-
-/// The membership chain behind [`ChestLootKind`]. Worker-side only:
-/// the probes replay structure layouts through the per-thread
-/// worldgen caches, which are warm right after generating the chunk.
-pub(crate) fn chest_loot_kind(
-    ctx: &crate::worldgen::WorldgenCtx,
-    pos: [i32; 3],
-) -> ChestLootKind {
-    use crate::worldgen::mcgen;
-    if mcgen::mineshaft::pos_in_mineshaft(ctx, pos) {
-        ChestLootKind::AbandonedMineshaft
-    } else if mcgen::pyramid::pos_in_desert_pyramid(ctx, pos) {
-        ChestLootKind::DesertPyramid
-    } else if mcgen::igloo::pos_in_igloo(ctx, pos) {
-        ChestLootKind::IglooChest
-    } else if mcgen::outpost::pos_in_outpost(ctx, pos) {
-        ChestLootKind::PillagerOutpost
-    } else if let Some(k) = mcgen::shipwreck::chest_kind_at(ctx, pos) {
-        match k {
-            mcgen::shipwreck::ShipwreckChest::Map => ChestLootKind::ShipwreckMap,
-            mcgen::shipwreck::ShipwreckChest::Treasure => {
-                ChestLootKind::ShipwreckTreasure
-            }
-            mcgen::shipwreck::ShipwreckChest::Supply => ChestLootKind::ShipwreckSupply,
-        }
-    } else if mcgen::buried_treasure::is_treasure_chest(ctx, pos) {
-        ChestLootKind::BuriedTreasure
-    } else if let Some(big) = mcgen::ocean_ruin::chest_is_big_at(ctx, pos) {
-        if big {
-            ChestLootKind::UnderwaterRuinBig
-        } else {
-            ChestLootKind::UnderwaterRuinSmall
-        }
-    } else if mcgen::jungle_temple::pos_in_jungle_temple(ctx, pos) {
-        ChestLootKind::JungleTemple
-    } else if let Some(k) = mcgen::stronghold::chest_kind_at(ctx, pos) {
-        match k {
-            mcgen::stronghold::StrongholdChest::Corridor => {
-                ChestLootKind::StrongholdCorridor
-            }
-            mcgen::stronghold::StrongholdChest::Crossing => {
-                ChestLootKind::StrongholdCrossing
-            }
-            mcgen::stronghold::StrongholdChest::Library => {
-                ChestLootKind::StrongholdLibrary
-            }
-        }
-    } else if mcgen::ruined_portal::pos_in_ruined_portal(ctx, pos) {
-        ChestLootKind::RuinedPortal
-    } else if mcgen::mansion::pos_in_mansion(ctx, pos) {
-        ChestLootKind::WoodlandMansion
-    } else if let Some(k) = mcgen::ancient_city::city_chest_at(ctx, pos) {
-        match k {
-            mcgen::ancient_city::CityChest::IceBox => ChestLootKind::AncientCityIceBox,
-            mcgen::ancient_city::CityChest::Regular => ChestLootKind::AncientCity,
-        }
-    } else if let Some(k) = mcgen::trial_chambers::chamber_chest_at(ctx, pos) {
-        match k {
-            mcgen::trial_chambers::ChamberChest::Corridor => {
-                ChestLootKind::TrialChambersCorridor
-            }
-            mcgen::trial_chambers::ChamberChest::Entrance => {
-                ChestLootKind::TrialChambersEntrance
-            }
-            mcgen::trial_chambers::ChamberChest::Intersection => {
-                ChestLootKind::TrialChambersIntersection
-            }
-            mcgen::trial_chambers::ChamberChest::Supply => {
-                ChestLootKind::TrialChambersSupply
-            }
-        }
-    } else if let Some(k) = mcgen::bastion::bastion_chest_at(ctx, pos) {
-        match k {
-            mcgen::bastion::BastionChest::Treasure => ChestLootKind::BastionTreasure,
-            mcgen::bastion::BastionChest::HoglinStable => {
-                ChestLootKind::BastionHoglinStable
-            }
-            mcgen::bastion::BastionChest::Bridge => ChestLootKind::BastionBridge,
-            mcgen::bastion::BastionChest::Other => ChestLootKind::BastionOther,
-        }
-    } else if mcgen::fortress::is_fortress_chest(ctx, pos) {
-        ChestLootKind::NetherBridge
-    } else {
-        ChestLootKind::SimpleDungeon
-    }
-}
+// W477: `ChestLootKind` + the structure-membership chain moved to
+// `loot::routing` (they grew the village tables + the Unrouted
+// terminal there). Re-exported so the wire/delivery paths keep their
+// `workers::ChestLootKind` spelling.
+pub(crate) use crate::loot::routing::{ChestLootKind, chest_loot_kind};
 
 // W24: Snapshot of 6-neighbour light grids shipped with each ChunkJob.
 // Defined in `lighting::HaloLighting`; re-exported here so the worker

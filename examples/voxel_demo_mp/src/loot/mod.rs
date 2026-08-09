@@ -1,4 +1,4 @@
-//! W242: MC chest loot tables.
+//! W242/W477: MC loot-table interpreter + the generated chest tables.
 //!
 //! Each table mirrors one JSON from the decompiled data pack
 //! (`F:\Data\mc_assets\mc_src\26.1.2\data\minecraft\loot_table\...`)
@@ -8,1179 +8,77 @@
 //! doesn't carry yet are skipped with a once-per-name log so a
 //! future item wave picks them up by deleting a line from nowhere.
 //!
-//! First user: the monster-room dungeon chest (simple_dungeon).
-//! Mineshaft / village chests reuse the same interpreter later.
+//! W477: the 28 hand-transcribed W242 chest tables are replaced by
+//! GENERATED consts covering the full `chests/**` directory (56
+//! tables incl. the 16 village + 13 trial-chamber files) - see
+//! `tables_gen*`. Entity loot (`mob/loot_table.rs`, W474) reuses the
+//! same interpreter. Which worldgen chest rolls which table lives in
+//! `routing`.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 use crate::worldgen::mcgen::noise::SplitMix64;
 
+pub(crate) mod routing;
+pub(crate) mod tables_gen;
+pub(crate) mod tables_gen_trial;
+pub(crate) mod tables_gen_village;
+
+#[cfg(test)]
+mod tests_hand_equiv;
+
 /// One weighted entry of a loot pool: MC item name + weight +
 /// inclusive stack-count range (MC `set_count` uniform; entries
-/// without the function drop exactly 1).
+/// without the function drop exactly 1). W477: `subtable` models
+/// `minecraft:loot_table` ref entries (the trial-chamber reward
+/// chain) - a picked ref rolls the referenced table inline.
+#[derive(Debug, PartialEq)]
 pub(crate) struct LootEntry {
     pub(crate) name: &'static str,
     pub(crate) weight: u32,
     pub(crate) count_min: u8,
     pub(crate) count_max: u8,
+    pub(crate) subtable: Option<&'static LootTable>,
 }
 
-const fn one(name: &'static str, weight: u32) -> LootEntry {
-    LootEntry { name, weight, count_min: 1, count_max: 1 }
+pub(crate) const fn one(name: &'static str, weight: u32) -> LootEntry {
+    LootEntry { name, weight, count_min: 1, count_max: 1, subtable: None }
 }
 
-const fn counted(
+pub(crate) const fn counted(
     name: &'static str,
     weight: u32,
     count_min: u8,
     count_max: u8,
 ) -> LootEntry {
-    LootEntry { name, weight, count_min, count_max }
+    LootEntry { name, weight, count_min, count_max, subtable: None }
+}
+
+/// W477: a `minecraft:loot_table` ref entry.
+pub(crate) const fn reft(table: &'static LootTable, weight: u32) -> LootEntry {
+    LootEntry {
+        name: "",
+        weight,
+        count_min: 1,
+        count_max: 1,
+        subtable: Some(table),
+    }
 }
 
 /// One pool: roll `rolls_min..=rolls_max` times; each roll picks one
 /// entry weighted by `weight`.
+#[derive(Debug, PartialEq)]
 pub(crate) struct LootPool {
     pub(crate) rolls_min: u8,
     pub(crate) rolls_max: u8,
     pub(crate) entries: &'static [LootEntry],
 }
 
+#[derive(Debug, PartialEq)]
 pub(crate) struct LootTable {
     pub(crate) pools: &'static [LootPool],
 }
-
-/// `data/minecraft/loot_table/chests/simple_dungeon.json` (26.1.2),
-/// entry-for-entry. Parity gaps, all skipped via the name mapper
-/// until the items exist: enchanted_golden_apple, the three music
-/// discs, name_tag, the four horse-armor tiers. `book` maps but
-/// drops UNenchanted (no enchant_randomly support yet).
-pub(crate) const SIMPLE_DUNGEON: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 3,
-            entries: &[
-                counted("leather", 20, 1, 5),
-                one("golden_apple", 15),
-                one("enchanted_golden_apple", 2),
-                one("music_disc_otherside", 2),
-                one("music_disc_13", 15),
-                one("music_disc_cat", 15),
-                one("name_tag", 20),
-                one("golden_horse_armor", 10),
-                one("copper_horse_armor", 15),
-                one("iron_horse_armor", 15),
-                one("diamond_horse_armor", 5),
-                one("book", 10),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 4,
-            entries: &[
-                counted("iron_ingot", 10, 1, 4),
-                counted("gold_ingot", 5, 1, 4),
-                one("bread", 20),
-                counted("wheat", 20, 1, 4),
-                one("bucket", 10),
-                counted("redstone", 15, 1, 4),
-                counted("coal", 15, 1, 4),
-                counted("melon_seeds", 10, 2, 4),
-                counted("pumpkin_seeds", 10, 2, 4),
-                counted("beetroot_seeds", 10, 2, 4),
-            ],
-        },
-        LootPool {
-            rolls_min: 3,
-            rolls_max: 3,
-            entries: &[
-                counted("bone", 10, 1, 8),
-                counted("gunpowder", 10, 1, 8),
-                counted("rotten_flesh", 10, 1, 8),
-                counted("string", 10, 1, 8),
-            ],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/abandoned_mineshaft.json`
-/// (26.1.2), entry-for-entry. Known mapper skips (once-logged until
-/// the items exist): enchanted_golden_apple, name_tag; `book` drops
-/// UNenchanted (no enchant_randomly). The `empty` weight-5 entry of
-/// pool 1 is a real MC no-drop slot.
-pub(crate) const ABANDONED_MINESHAFT: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("golden_apple", 20),
-                one("enchanted_golden_apple", 1),
-                one("name_tag", 30),
-                one("book", 10),
-                one("iron_pickaxe", 5),
-                // minecraft:empty weight 5 - a rolled blank.
-                one("", 5),
-            ],
-        },
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 4,
-            entries: &[
-                counted("iron_ingot", 10, 1, 5),
-                counted("gold_ingot", 5, 1, 3),
-                counted("redstone", 5, 4, 9),
-                counted("lapis_lazuli", 5, 4, 9),
-                counted("diamond", 3, 1, 2),
-                counted("coal", 10, 3, 8),
-                counted("bread", 15, 1, 3),
-                counted("glow_berries", 15, 3, 6),
-                counted("melon_seeds", 10, 2, 4),
-                counted("pumpkin_seeds", 10, 2, 4),
-                counted("beetroot_seeds", 10, 2, 4),
-            ],
-        },
-        LootPool {
-            rolls_min: 3,
-            rolls_max: 3,
-            entries: &[
-                counted("rail", 20, 4, 8),
-                counted("powered_rail", 5, 1, 4),
-                counted("detector_rail", 5, 1, 4),
-                counted("activator_rail", 5, 1, 4),
-                counted("torch", 15, 1, 16),
-            ],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/desert_pyramid.json` (26.1.2),
-/// entry-for-entry. Mapper skips until the items exist: horse
-/// armors, enchanted_golden_apple, the dune armor-trim template;
-/// `book` drops UNenchanted. The weight-15 / weight-6 `empty`
-/// entries are real MC no-drop slots.
-pub(crate) const DESERT_PYRAMID: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 4,
-            entries: &[
-                counted("diamond", 5, 1, 3),
-                counted("iron_ingot", 15, 1, 5),
-                counted("gold_ingot", 15, 2, 7),
-                counted("emerald", 15, 1, 3),
-                counted("bone", 25, 4, 6),
-                counted("spider_eye", 25, 1, 3),
-                counted("rotten_flesh", 25, 3, 7),
-                counted("leather", 20, 1, 5),
-                one("copper_horse_armor", 15),
-                one("iron_horse_armor", 15),
-                one("golden_horse_armor", 10),
-                one("diamond_horse_armor", 5),
-                one("book", 20),
-                one("golden_apple", 20),
-                one("enchanted_golden_apple", 2),
-                one("", 15),
-            ],
-        },
-        LootPool {
-            rolls_min: 4,
-            rolls_max: 4,
-            entries: &[
-                counted("bone", 10, 1, 8),
-                counted("gunpowder", 10, 1, 8),
-                counted("rotten_flesh", 10, 1, 8),
-                counted("string", 10, 1, 8),
-                counted("sand", 10, 1, 8),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 6),
-                counted("dune_armor_trim_smithing_template", 1, 2, 2),
-            ],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/igloo_chest.json` (26.1.2).
-pub(crate) const IGLOO_CHEST: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 8,
-            entries: &[
-                counted("apple", 15, 1, 3),
-                counted("coal", 15, 1, 4),
-                counted("gold_nugget", 10, 1, 3),
-                one("stone_axe", 2),
-                one("rotten_flesh", 10),
-                one("emerald", 1),
-                counted("wheat", 10, 2, 3),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("golden_apple", 1)],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/pillager_outpost.json` (26.1.2).
-/// Parity gaps skipped via the name mapper until the items exist:
-/// crossbow, experience_bottle, tripwire_hook, goat_horn (+ its
-/// set_instrument function), sentry_armor_trim_smithing_template;
-/// `book` drops UNenchanted (no enchant_randomly).
-pub(crate) const PILLAGER_OUTPOST: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 0,
-            rolls_max: 1,
-            entries: &[one("crossbow", 1)],
-        },
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 3,
-            entries: &[
-                counted("wheat", 7, 3, 5),
-                counted("potato", 5, 2, 5),
-                counted("carrot", 5, 3, 5),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 3,
-            entries: &[counted("dark_oak_log", 1, 2, 3)],
-        },
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 3,
-            entries: &[
-                one("experience_bottle", 7),
-                counted("string", 4, 1, 6),
-                counted("arrow", 4, 2, 7),
-                counted("tripwire_hook", 3, 1, 3),
-                counted("iron_ingot", 3, 1, 3),
-                one("book", 1),
-            ],
-        },
-        LootPool {
-            rolls_min: 0,
-            rolls_max: 1,
-            entries: &[one("goat_horn", 1)],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 3),
-                counted("sentry_armor_trim_smithing_template", 1, 2, 2),
-            ],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/shipwreck_map.json` (26.1.2).
-/// The map itself + navigation gear. Gaps via the name mapper: map,
-/// compass, clock, the coast trim + nautilus armors.
-pub(crate) const SHIPWRECK_MAP: LootTable = LootTable {
-    pools: &[
-        LootPool { rolls_min: 1, rolls_max: 1, entries: &[one("map", 1)] },
-        LootPool {
-            rolls_min: 3,
-            rolls_max: 3,
-            entries: &[
-                one("compass", 1),
-                one("map", 1),
-                one("clock", 1),
-                counted("paper", 20, 1, 10),
-                counted("feather", 10, 1, 5),
-                counted("book", 5, 1, 5),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 5),
-                counted("coast_armor_trim_smithing_template", 1, 2, 2),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 148),
-                one("copper_nautilus_armor", 20),
-                one("iron_nautilus_armor", 10),
-                one("golden_nautilus_armor", 5),
-                one("diamond_nautilus_armor", 2),
-            ],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/shipwreck_supply.json` (26.1.2).
-pub(crate) const SHIPWRECK_SUPPLY: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 3,
-            rolls_max: 10,
-            entries: &[
-                counted("paper", 8, 1, 12),
-                counted("potato", 7, 2, 6),
-                counted("moss_block", 7, 1, 4),
-                counted("poisonous_potato", 7, 2, 6),
-                counted("carrot", 7, 4, 8),
-                counted("wheat", 7, 8, 21),
-                one("suspicious_stew", 10),
-                counted("coal", 6, 2, 8),
-                counted("rotten_flesh", 5, 5, 24),
-                counted("pumpkin", 2, 1, 3),
-                counted("bamboo", 2, 1, 3),
-                counted("gunpowder", 3, 1, 5),
-                counted("tnt", 1, 1, 2),
-                one("leather_helmet", 3),
-                one("leather_chestplate", 3),
-                one("leather_leggings", 3),
-                one("leather_boots", 3),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 5),
-                counted("coast_armor_trim_smithing_template", 1, 2, 2),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 148),
-                one("copper_nautilus_armor", 20),
-                one("iron_nautilus_armor", 10),
-                one("golden_nautilus_armor", 5),
-                one("diamond_nautilus_armor", 2),
-            ],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/shipwreck_treasure.json`
-/// (26.1.2).
-pub(crate) const SHIPWRECK_TREASURE: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 3,
-            rolls_max: 6,
-            entries: &[
-                counted("iron_ingot", 90, 1, 5),
-                counted("gold_ingot", 10, 1, 5),
-                counted("emerald", 40, 1, 5),
-                one("diamond", 5),
-                one("experience_bottle", 5),
-            ],
-        },
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 5,
-            entries: &[
-                counted("iron_nugget", 50, 1, 10),
-                counted("gold_nugget", 10, 1, 10),
-                counted("lapis_lazuli", 20, 1, 10),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 5),
-                counted("coast_armor_trim_smithing_template", 1, 2, 2),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 148),
-                one("copper_nautilus_armor", 20),
-                one("iron_nautilus_armor", 10),
-                one("golden_nautilus_armor", 5),
-                one("diamond_nautilus_armor", 2),
-            ],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/buried_treasure.json` (26.1.2).
-/// Gaps via the name mapper: heart_of_the_sea, prismarine_crystals,
-/// iron_spear, the water-breathing potion (set_potion), nautilus
-/// armors.
-pub(crate) const BURIED_TREASURE: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("heart_of_the_sea", 1)],
-        },
-        LootPool {
-            rolls_min: 5,
-            rolls_max: 8,
-            entries: &[
-                counted("iron_ingot", 20, 1, 4),
-                counted("gold_ingot", 10, 1, 4),
-                counted("tnt", 5, 1, 2),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 3,
-            entries: &[
-                counted("emerald", 5, 4, 8),
-                counted("diamond", 5, 1, 2),
-                counted("prismarine_crystals", 5, 1, 5),
-            ],
-        },
-        LootPool {
-            rolls_min: 0,
-            rolls_max: 1,
-            entries: &[
-                one("leather_chestplate", 1),
-                one("iron_sword", 1),
-                one("iron_spear", 1),
-            ],
-        },
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 2,
-            entries: &[
-                counted("cooked_cod", 1, 2, 4),
-                counted("cooked_salmon", 1, 2, 4),
-            ],
-        },
-        LootPool {
-            rolls_min: 0,
-            rolls_max: 2,
-            entries: &[one("potion", 1)],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 148),
-                one("copper_nautilus_armor", 20),
-                one("iron_nautilus_armor", 10),
-                one("golden_nautilus_armor", 5),
-                one("diamond_nautilus_armor", 2),
-            ],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/underwater_ruin_small.json`
-/// (26.1.2). Gaps ride the name mapper: stone_spear, the exploration
-/// map (drops as a plain map name -> skipped), fishing_rod enchant,
-/// nautilus armors.
-pub(crate) const UNDERWATER_RUIN_SMALL: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 8,
-            entries: &[
-                counted("coal", 10, 1, 4),
-                one("stone_axe", 2),
-                one("stone_spear", 2),
-                one("rotten_flesh", 5),
-                one("emerald", 1),
-                counted("wheat", 10, 2, 3),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("leather_chestplate", 1),
-                one("golden_helmet", 1),
-                one("fishing_rod", 5),
-                one("map", 5),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 148),
-                one("copper_nautilus_armor", 20),
-                one("iron_nautilus_armor", 10),
-                one("golden_nautilus_armor", 5),
-                one("diamond_nautilus_armor", 2),
-            ],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/underwater_ruin_big.json`
-/// (26.1.2).
-pub(crate) const UNDERWATER_RUIN_BIG: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 8,
-            entries: &[
-                counted("coal", 10, 1, 4),
-                counted("gold_nugget", 10, 1, 3),
-                one("emerald", 1),
-                one("stone_spear", 2),
-                counted("wheat", 10, 2, 3),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("golden_apple", 1),
-                one("book", 5),
-                one("leather_chestplate", 1),
-                one("golden_helmet", 1),
-                one("fishing_rod", 5),
-                one("map", 10),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 148),
-                one("copper_nautilus_armor", 20),
-                one("iron_nautilus_armor", 10),
-                one("golden_nautilus_armor", 5),
-                one("diamond_nautilus_armor", 2),
-            ],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/jungle_temple.json` (26.1.2).
-/// Gaps via the name mapper: the four horse-armor tiers, the wild
-/// trim; `book` drops UNenchanted (enchant_with_levels 30 gap).
-pub(crate) const JUNGLE_TEMPLE: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 6,
-            entries: &[
-                counted("diamond", 3, 1, 3),
-                counted("iron_ingot", 10, 1, 5),
-                counted("gold_ingot", 15, 2, 7),
-                counted("bamboo", 15, 1, 3),
-                counted("emerald", 2, 1, 3),
-                counted("bone", 20, 4, 6),
-                counted("rotten_flesh", 16, 3, 7),
-                counted("leather", 3, 1, 5),
-                one("copper_horse_armor", 1),
-                one("iron_horse_armor", 1),
-                one("golden_horse_armor", 1),
-                one("diamond_horse_armor", 1),
-                one("book", 1),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 2),
-                counted("wild_armor_trim_smithing_template", 1, 2, 2),
-            ],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/stronghold_corridor.json`
-/// (26.1.2). Mapper gaps: ender_pearl?, horse armors, the otherside
-/// disc, the eye trim; `book` drops UNenchanted.
-pub(crate) const STRONGHOLD_CORRIDOR: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 3,
-            entries: &[
-                one("ender_pearl", 10),
-                counted("diamond", 3, 1, 3),
-                counted("iron_ingot", 10, 1, 5),
-                counted("gold_ingot", 5, 1, 3),
-                counted("redstone", 5, 4, 9),
-                counted("bread", 15, 1, 3),
-                counted("apple", 15, 1, 3),
-                one("iron_pickaxe", 5),
-                one("iron_sword", 5),
-                one("iron_chestplate", 5),
-                one("iron_helmet", 5),
-                one("iron_leggings", 5),
-                one("iron_boots", 5),
-                one("golden_apple", 1),
-                counted("leather", 1, 1, 5),
-                one("copper_horse_armor", 1),
-                one("iron_horse_armor", 1),
-                one("golden_horse_armor", 1),
-                one("diamond_horse_armor", 1),
-                one("music_disc_otherside", 1),
-                one("book", 1),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("", 9), one("eye_armor_trim_smithing_template", 1)],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/stronghold_crossing.json`
-/// (26.1.2).
-pub(crate) const STRONGHOLD_CROSSING: LootTable = LootTable {
-    pools: &[LootPool {
-        rolls_min: 1,
-        rolls_max: 4,
-        entries: &[
-            counted("iron_ingot", 10, 1, 5),
-            counted("gold_ingot", 5, 1, 3),
-            counted("redstone", 5, 4, 9),
-            counted("coal", 10, 3, 8),
-            counted("bread", 15, 1, 3),
-            counted("apple", 15, 1, 3),
-            one("iron_pickaxe", 1),
-            one("book", 1),
-        ],
-    }],
-};
-
-/// `data/minecraft/loot_table/chests/stronghold_library.json`
-/// (26.1.2). Both book rows drop unenchanted.
-pub(crate) const STRONGHOLD_LIBRARY: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 10,
-            entries: &[
-                counted("book", 20, 1, 3),
-                counted("paper", 20, 2, 7),
-                one("map", 1),
-                one("compass", 1),
-                one("book", 10),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("eye_armor_trim_smithing_template", 1)],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/ruined_portal.json` (26.1.2).
-/// Golden gear drops UNenchanted; fire_charge / glistering melon /
-/// lodestone / enchanted_golden_apple etc. ride the name mapper.
-pub(crate) const RUINED_PORTAL: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 4,
-            rolls_max: 8,
-            entries: &[
-                counted("obsidian", 40, 1, 2),
-                counted("flint", 40, 1, 4),
-                counted("iron_nugget", 40, 9, 18),
-                one("flint_and_steel", 40),
-                one("fire_charge", 40),
-                one("golden_apple", 15),
-                counted("gold_nugget", 15, 4, 24),
-                one("golden_sword", 15),
-                one("golden_axe", 15),
-                one("golden_hoe", 15),
-                one("golden_shovel", 15),
-                one("golden_pickaxe", 15),
-                one("golden_boots", 15),
-                one("golden_chestplate", 15),
-                one("golden_helmet", 15),
-                one("golden_leggings", 15),
-                counted("glistering_melon_slice", 5, 4, 12),
-                one("golden_horse_armor", 5),
-                one("light_weighted_pressure_plate", 5),
-                counted("golden_carrot", 5, 4, 12),
-                one("clock", 5),
-                counted("gold_ingot", 5, 2, 8),
-                one("bell", 1),
-                one("enchanted_golden_apple", 1),
-                counted("gold_block", 1, 1, 2),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("", 1), counted("lodestone", 2, 1, 2)],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/woodland_mansion.json`
-/// (26.1.2). Mapper gaps: lead, the music discs, chainmail, the vex
-/// trim, resin clumps; `book` drops unenchanted.
-pub(crate) const WOODLAND_MANSION: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 3,
-            entries: &[
-                one("lead", 20),
-                one("golden_apple", 15),
-                one("enchanted_golden_apple", 2),
-                one("music_disc_13", 15),
-                one("music_disc_cat", 15),
-                one("chainmail_chestplate", 10),
-                one("diamond_hoe", 15),
-                one("diamond_chestplate", 5),
-                one("book", 10),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 4,
-            entries: &[
-                counted("iron_ingot", 10, 1, 4),
-                counted("gold_ingot", 5, 1, 4),
-                one("bread", 20),
-                counted("wheat", 20, 1, 4),
-                one("bucket", 10),
-                counted("redstone", 15, 1, 4),
-                counted("coal", 15, 1, 4),
-                counted("melon_seeds", 10, 2, 4),
-                counted("pumpkin_seeds", 10, 2, 4),
-                counted("beetroot_seeds", 10, 2, 4),
-                counted("resin_clump", 50, 2, 4),
-            ],
-        },
-        LootPool {
-            rolls_min: 3,
-            rolls_max: 3,
-            entries: &[
-                counted("bone", 10, 1, 8),
-                counted("gunpowder", 10, 1, 8),
-                counted("rotten_flesh", 10, 1, 8),
-                counted("string", 10, 1, 8),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("", 1), one("vex_armor_trim_smithing_template", 1)],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/ancient_city.json` (26.1.2).
-/// Unmapped items skip via the roller (compass, leads, horse armor,
-/// music discs / disc fragments, amethyst/echo shards, candles,
-/// experience bottles, potions, smithing templates...); `book` drops
-/// unenchanted, `diamond_hoe`/armor drop unenchanted + undamaged.
-pub(crate) const ANCIENT_CITY: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 5,
-            rolls_max: 10,
-            entries: &[
-                counted("enchanted_golden_apple", 1, 1, 2),
-                one("music_disc_otherside", 1),
-                one("compass", 2),
-                counted("sculk_catalyst", 2, 1, 2),
-                one("diamond_hoe", 2),
-                one("lead", 2),
-                one("diamond_horse_armor", 2),
-                counted("leather", 2, 1, 5),
-                one("music_disc_13", 2),
-                one("music_disc_cat", 2),
-                one("diamond_leggings", 2),
-                one("book", 3),
-                counted("sculk", 3, 4, 10),
-                counted("sculk_sensor", 3, 1, 3),
-                counted("candle", 3, 1, 4),
-                counted("amethyst_shard", 3, 1, 15),
-                counted("experience_bottle", 3, 1, 3),
-                counted("glow_berries", 3, 1, 15),
-                one("iron_leggings", 3),
-                counted("echo_shard", 4, 1, 3),
-                counted("disc_fragment_5", 4, 1, 3),
-                counted("potion", 5, 1, 3),
-                one("book", 5),
-                counted("book", 5, 3, 10),
-                counted("bone", 5, 1, 15),
-                counted("soul_torch", 5, 1, 15),
-                counted("coal", 7, 6, 15),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("", 75),
-                one("ward_armor_trim_smithing_template", 4),
-                one("silence_armor_trim_smithing_template", 1),
-            ],
-        },
-    ],
-};
-
-/// `data/minecraft/loot_table/chests/ancient_city_ice_box.json`
-/// (26.1.2). `suspicious_stew` drops without its stew effects.
-pub(crate) const ANCIENT_CITY_ICE_BOX: LootTable = LootTable {
-    pools: &[LootPool {
-        rolls_min: 4,
-        rolls_max: 10,
-        entries: &[
-            counted("suspicious_stew", 1, 2, 6),
-            counted("golden_carrot", 1, 1, 10),
-            counted("baked_potato", 1, 1, 10),
-            counted("packed_ice", 2, 2, 6),
-            counted("snowball", 4, 2, 6),
-        ],
-    }],
-};
-
-/// `loot_table/chests/nether_bridge.json` (26.1.2). Unmapped items
-/// (saddle, horse armors, flint_and_steel, the trim template) skip
-/// via the roller; enchanted gear drops unenchanted.
-pub(crate) const NETHER_BRIDGE: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 4,
-            entries: &[
-                counted("diamond", 5, 1, 3),
-                counted("iron_ingot", 5, 1, 5),
-                counted("gold_ingot", 15, 1, 3),
-                one("golden_sword", 5),
-                one("golden_chestplate", 5),
-                one("flint_and_steel", 5),
-                counted("nether_wart", 5, 3, 7),
-                one("saddle", 10),
-                one("golden_horse_armor", 8),
-                one("copper_horse_armor", 5),
-                one("iron_horse_armor", 5),
-                one("diamond_horse_armor", 3),
-                counted("obsidian", 2, 2, 4),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("", 14), one("rib_armor_trim_smithing_template", 1)],
-        },
-    ],
-};
-
-/// `loot_table/chests/bastion_*.json` (26.1.2). Unmapped items
-/// (netherite ingots/scrap, smithing templates, spectral arrows,
-/// banner patterns, saddles, lodestone, music discs...) skip via the
-/// roller; enchanted gear drops unenchanted.
-pub(crate) const BASTION_TREASURE: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 3,
-            rolls_max: 3,
-            entries: &[
-                one("netherite_ingot", 15),
-                one("ancient_debris", 10),
-                one("netherite_scrap", 8),
-                counted("ancient_debris", 4, 2, 2),
-                one("diamond_sword", 6),
-                one("diamond_spear", 6),
-                one("diamond_chestplate", 6),
-                one("diamond_helmet", 6),
-                one("diamond_leggings", 6),
-                one("diamond_boots", 6),
-                one("diamond_sword", 6),
-                one("diamond_spear", 6),
-                one("diamond_chestplate", 5),
-                one("diamond_helmet", 5),
-                one("diamond_boots", 5),
-                one("diamond_leggings", 5),
-                counted("diamond", 5, 2, 6),
-                one("enchanted_golden_apple", 2),
-            ],
-        },
-        LootPool {
-            rolls_min: 3,
-            rolls_max: 4,
-            entries: &[
-                counted("spectral_arrow", 1, 12, 25),
-                counted("gold_block", 1, 2, 5),
-                counted("iron_block", 1, 2, 5),
-                counted("gold_ingot", 1, 3, 9),
-                counted("iron_ingot", 1, 3, 9),
-                counted("crying_obsidian", 1, 3, 5),
-                counted("quartz", 1, 8, 23),
-                counted("gilded_blackstone", 1, 5, 15),
-                counted("magma_cream", 1, 3, 8),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("", 11), one("snout_armor_trim_smithing_template", 1)],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("netherite_upgrade_smithing_template", 1)],
-        },
-    ],
-};
-
-pub(crate) const BASTION_OTHER: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("diamond_pickaxe", 6),
-                one("diamond_shovel", 6),
-                one("crossbow", 6),
-                one("ancient_debris", 12),
-                one("netherite_scrap", 4),
-                counted("spectral_arrow", 10, 10, 22),
-                one("piglin_banner_pattern", 9),
-                one("music_disc_pigstep", 5),
-                counted("golden_carrot", 12, 6, 17),
-                one("golden_apple", 9),
-                one("book", 10),
-            ],
-        },
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 2,
-            entries: &[
-                one("iron_sword", 2),
-                one("iron_block", 2),
-                one("golden_boots", 1),
-                one("golden_axe", 1),
-                one("gold_block", 2),
-                one("crossbow", 1),
-                counted("gold_ingot", 2, 1, 6),
-                counted("iron_ingot", 2, 1, 6),
-                one("golden_sword", 1),
-                one("golden_chestplate", 1),
-                one("golden_helmet", 1),
-                one("golden_leggings", 1),
-                one("golden_boots", 1),
-                counted("crying_obsidian", 2, 1, 5),
-            ],
-        },
-        LootPool {
-            rolls_min: 3,
-            rolls_max: 4,
-            entries: &[
-                counted("gilded_blackstone", 2, 1, 5),
-                counted("iron_chain", 1, 2, 10),
-                counted("magma_cream", 2, 2, 6),
-                counted("bone_block", 1, 3, 6),
-                counted("iron_nugget", 1, 2, 8),
-                counted("obsidian", 1, 4, 6),
-                counted("gold_nugget", 1, 2, 8),
-                counted("string", 1, 4, 6),
-                counted("arrow", 2, 5, 17),
-                one("cooked_porkchop", 1),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("", 11), one("snout_armor_trim_smithing_template", 1)],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("", 9), one("netherite_upgrade_smithing_template", 1)],
-        },
-    ],
-};
-
-pub(crate) const BASTION_BRIDGE: LootTable = LootTable {
-    pools: &[
-        LootPool { rolls_min: 1, rolls_max: 1, entries: &[one("lodestone", 1)] },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 2,
-            entries: &[
-                one("crossbow", 1),
-                counted("spectral_arrow", 1, 10, 28),
-                counted("gilded_blackstone", 1, 8, 12),
-                counted("crying_obsidian", 1, 3, 8),
-                one("gold_block", 1),
-                counted("gold_ingot", 1, 4, 9),
-                counted("iron_ingot", 1, 4, 9),
-                one("golden_sword", 1),
-                one("golden_chestplate", 1),
-                one("golden_helmet", 1),
-                one("golden_leggings", 1),
-                one("golden_boots", 1),
-                one("golden_axe", 1),
-            ],
-        },
-        LootPool {
-            rolls_min: 2,
-            rolls_max: 4,
-            entries: &[
-                counted("string", 1, 1, 6),
-                counted("leather", 1, 1, 3),
-                counted("arrow", 1, 5, 17),
-                counted("iron_nugget", 1, 2, 6),
-                counted("gold_nugget", 1, 2, 6),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("", 11), one("snout_armor_trim_smithing_template", 1)],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("", 9), one("netherite_upgrade_smithing_template", 1)],
-        },
-    ],
-};
-
-pub(crate) const BASTION_HOGLIN_STABLE: LootTable = LootTable {
-    pools: &[
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[
-                one("diamond_shovel", 15),
-                one("diamond_pickaxe", 12),
-                one("netherite_scrap", 8),
-                one("ancient_debris", 12),
-                counted("ancient_debris", 5, 2, 2),
-                one("saddle", 12),
-                counted("gold_block", 16, 2, 4),
-                counted("golden_carrot", 10, 8, 17),
-                one("golden_apple", 10),
-            ],
-        },
-        LootPool {
-            rolls_min: 3,
-            rolls_max: 4,
-            entries: &[
-                one("golden_axe", 1),
-                counted("crying_obsidian", 1, 1, 5),
-                counted("glowstone", 1, 3, 6),
-                counted("gilded_blackstone", 1, 2, 5),
-                counted("soul_sand", 1, 2, 7),
-                counted("crimson_nylium", 1, 2, 7),
-                counted("gold_nugget", 1, 2, 8),
-                counted("leather", 1, 1, 3),
-                counted("arrow", 1, 5, 17),
-                counted("string", 1, 3, 8),
-                counted("porkchop", 1, 2, 5),
-                counted("cooked_porkchop", 1, 2, 5),
-                counted("crimson_fungus", 1, 2, 7),
-                counted("crimson_roots", 1, 2, 7),
-            ],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("", 11), one("snout_armor_trim_smithing_template", 1)],
-        },
-        LootPool {
-            rolls_min: 1,
-            rolls_max: 1,
-            entries: &[one("", 9), one("netherite_upgrade_smithing_template", 1)],
-        },
-    ],
-};
-
-/// `loot_table/chests/trial_chambers/*.json` (26.1.2). The reward /
-/// ominous tables belong to the vault mechanic (follow-up wave);
-/// unmapped items (trial_key, tipped arrows, scaffolding, hanging
-/// signs, milk buckets...) skip via the roller.
-pub(crate) const TRIAL_CHAMBERS_CORRIDOR: LootTable = LootTable {
-    pools: &[LootPool {
-        rolls_min: 1,
-        rolls_max: 3,
-        entries: &[
-            one("iron_axe", 1),
-            counted("honeycomb", 1, 2, 8),
-            one("stone_axe", 2),
-            one("stone_pickaxe", 2),
-            counted("ender_pearl", 2, 1, 2),
-            counted("bamboo_hanging_sign", 2, 1, 4),
-            counted("bamboo_planks", 2, 3, 6),
-            counted("scaffolding", 2, 2, 10),
-            counted("torch", 2, 3, 6),
-            counted("tuff", 3, 8, 20),
-        ],
-    }],
-};
-
-pub(crate) const TRIAL_CHAMBERS_ENTRANCE: LootTable = LootTable {
-    pools: &[LootPool {
-        rolls_min: 2,
-        rolls_max: 3,
-        entries: &[
-            one("trial_key", 1),
-            counted("stick", 5, 2, 5),
-            one("wooden_axe", 10),
-            counted("honeycomb", 10, 2, 8),
-            counted("arrow", 10, 5, 10),
-        ],
-    }],
-};
-
-pub(crate) const TRIAL_CHAMBERS_INTERSECTION: LootTable = LootTable {
-    pools: &[LootPool {
-        rolls_min: 1,
-        rolls_max: 3,
-        entries: &[
-            one("diamond_block", 1),
-            counted("emerald_block", 5, 1, 3),
-            one("diamond_axe", 5),
-            one("diamond_pickaxe", 5),
-            counted("diamond", 10, 1, 2),
-            counted("cake", 20, 1, 4),
-            counted("amethyst_shard", 20, 8, 20),
-            counted("iron_block", 20, 1, 2),
-        ],
-    }],
-};
-
-pub(crate) const TRIAL_CHAMBERS_SUPPLY: LootTable = LootTable {
-    pools: &[LootPool {
-        rolls_min: 3,
-        rolls_max: 5,
-        entries: &[
-            counted("arrow", 2, 4, 14),
-            counted("tipped_arrow", 1, 4, 8),
-            counted("tipped_arrow", 1, 4, 8),
-            counted("baked_potato", 2, 2, 4),
-            counted("glow_berries", 2, 2, 10),
-            counted("acacia_planks", 1, 3, 6),
-            counted("moss_block", 1, 2, 5),
-            counted("bone_meal", 1, 2, 5),
-            counted("tuff", 1, 5, 10),
-            counted("torch", 1, 3, 6),
-            counted("potion", 1, 2, 2),
-            counted("potion", 1, 2, 2),
-            one("stone_pickaxe", 2),
-            one("milk_bucket", 1),
-        ],
-    }],
-};
 
 /// MC item name -> our `ITEM_TYPES` name where they differ. Names
 /// not listed resolve verbatim; names that resolve to nothing are
@@ -1195,6 +93,17 @@ const LOOT_NAME_MAP: &[(&str, &str)] = &[
     ("mutton", "raw_mutton"),
     ("cod", "raw_cod"),
     ("salmon", "raw_salmon"),
+    // W477: chest-table names whose items exist under engine-legacy
+    // rows (same convention as the redstone row above). Names with
+    // NO equivalent item (snowball, cake, trident, bundle, the trim
+    // templates...) stay unmapped and ride the once-per-name skip
+    // log until their items land.
+    ("oak_log", "wood"),
+    ("oak_planks", "planks"),
+    ("white_wool", "wool"),
+    ("tall_grass", "tall_grass_bottom"),
+    ("iron_shovel", "shovel_iron"),
+    ("wooden_pickaxe", "pickaxe_wood"),
 ];
 
 fn item_id_for_loot_name(name: &str) -> Option<u16> {
@@ -1265,6 +174,15 @@ pub(crate) fn roll(table: &LootTable, rng: &mut SplitMix64) -> Vec<(u16, u8)> {
                     }
                 })
                 .expect("weighted pick is within total by construction");
+            // W477: `minecraft:loot_table` ref entries (the
+            // trial-chamber reward chain) roll the referenced table
+            // inline. The MC data is acyclic, so the recursion is
+            // bounded (reward -> reward_common is depth 1).
+            if let Some(sub) = entry.subtable {
+                let nested = roll(sub, rng);
+                out.extend(nested);
+                continue;
+            }
             let count = roll_range(rng, entry.count_min, entry.count_max);
             // W243: `minecraft:empty` entries (a real no-drop slot in
             // e.g. abandoned_mineshaft pool 1) roll silently.
@@ -1311,36 +229,62 @@ pub(crate) fn fill_container(
 
 #[cfg(test)]
 mod tests {
+    use super::tables_gen::{ALL_TABLES, SIMPLE_DUNGEON};
     use super::*;
 
-    /// Every simple_dungeon entry either resolves to a real item id
-    /// or is one of the KNOWN parity gaps - a new unmapped name is a
-    /// regression (typo or a renamed item row).
+    /// W477: every entry of every GENERATED chest table either
+    /// resolves to a real item id or is one of the KNOWN parity
+    /// gaps - a new unmapped name is a regression (typo, a renamed
+    /// item row, or an MC data bump growing the frontier).
     #[test]
-    fn simple_dungeon_names_resolve_or_are_known_gaps() {
+    fn all_table_names_resolve_or_are_known_gaps() {
         const KNOWN_GAPS: &[&str] = &[
-            "enchanted_golden_apple",
-            "music_disc_otherside",
-            "music_disc_13",
-            "music_disc_cat",
-            "name_tag",
-            "golden_horse_armor",
-            "copper_horse_armor",
-            "iron_horse_armor",
-            "diamond_horse_armor",
+            "bolt_armor_trim_smithing_template",
+            "bundle",
+            "cake",
+            "copper_spear",
+            "egg",
+            "flow_armor_trim_smithing_template",
+            "flow_banner_pattern",
+            "guster_banner_pattern",
+            "heavy_core",
+            "honey_bottle",
+            "large_fern",
+            "lead",
+            "music_disc_creator",
+            "music_disc_precipice",
+            "ominous_bottle",
+            "snowball",
+            "spire_armor_trim_smithing_template",
+            "spruce_sign",
+            "sweet_berries",
+            "trident",
+            "wind_charge",
         ];
-        for pool in SIMPLE_DUNGEON.pools {
-            for e in pool.entries {
-                if item_id_for_loot_name(e.name).is_none() {
-                    assert!(
-                        KNOWN_GAPS.contains(&e.name),
-                        "loot name {} resolves to nothing and is not a \
-                         known gap",
-                        e.name
-                    );
+        for (table_name, table) in ALL_TABLES {
+            for pool in table.pools {
+                for e in pool.entries {
+                    if e.name.is_empty() {
+                        continue; // empty slots + subtable refs
+                    }
+                    if item_id_for_loot_name(e.name).is_none() {
+                        assert!(
+                            KNOWN_GAPS.contains(&e.name),
+                            "{table_name}: loot name {} resolves to \
+                             nothing and is not a known gap",
+                            e.name
+                        );
+                    }
                 }
             }
         }
+    }
+
+    /// W477: chest coal is the real coal ITEM (325), not the id-13
+    /// ore-block hybrid the pre-wave item table shadowed it with.
+    #[test]
+    fn loot_coal_resolves_to_the_coal_item() {
+        assert_eq!(item_id_for_loot_name("coal"), Some(325));
     }
 
     /// Same seed = same loot; different seeds diverge. (The dungeon
@@ -1352,6 +296,27 @@ mod tests {
         let b = roll(&SIMPLE_DUNGEON, &mut SplitMix64::new(1234));
         assert_eq!(a, b);
         assert!(!a.is_empty(), "3 constant rolls of pool 3 guarantee loot");
+    }
+
+    /// W477: `reft` entries roll the referenced table inline - the
+    /// trial-chamber reward chain produces real stacks through two
+    /// levels of refs (reward -> reward_common/-rare -> items).
+    #[test]
+    fn reward_chain_rolls_through_subtable_refs() {
+        use super::tables_gen_trial::TRIAL_CHAMBERS_REWARD;
+        let mut hits = 0;
+        for seed in 0..64u64 {
+            let stacks =
+                roll(&TRIAL_CHAMBERS_REWARD, &mut SplitMix64::new(seed));
+            hits += usize::from(!stacks.is_empty());
+            let again =
+                roll(&TRIAL_CHAMBERS_REWARD, &mut SplitMix64::new(seed));
+            assert_eq!(stacks, again, "seed {seed}: ref rolls deterministic");
+        }
+        // Pool 1 (1 guaranteed roll into rare/common) + pool 2 make
+        // an all-empty streak over 64 seeds effectively impossible -
+        // only fully-skipped picks (unmapped names) drop stacks.
+        assert!(hits > 32, "reward chain rolled {hits}/64 non-empty");
     }
 
     /// Roll counts stay inside the per-pool bounds: pool1 1-3 +

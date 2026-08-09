@@ -115,7 +115,11 @@ pub(crate) const BLOCK_TYPES: &[BlockType] = &[
         sides: TileSpec { col: 1, row: 3, files: &["meat.png"], keep_alpha: false },
     },
     BlockType {
-        id: 13, name: "coal", color: [0.30, 0.30, 0.30], transparent: false, flags: 0,
+        // W477: renamed from the legacy "coal" - the row IS the coal
+        // ore, and the old name shadowed the coal ITEM (325) in
+        // name-keyed lookups (loot roller, icon resolver) while
+        // missing every "coal_ore" match (ore XP, mineable tags).
+        id: 13, name: "coal_ore", color: [0.30, 0.30, 0.30], transparent: false, flags: 0,
         top: TileSpec { col: 2, row: 3, files: &["coal_ore.png"], keep_alpha: false },
         bottom: TileSpec { col: 2, row: 3, files: &["coal_ore.png"], keep_alpha: false },
         sides: TileSpec { col: 2, row: 3, files: &["coal_ore.png"], keep_alpha: false },

@@ -36,7 +36,7 @@ fn loaded_furnace(
 
 #[test]
 fn tick_advances_fuel_and_cook_in_lockstep() {
-    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 1)), Some(ItemStack::new(13, 1)));
+    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 1)), Some(ItemStack::new(325, 1)));
     step_one_furnace(&mut f, &mut rt, 100);
     assert_eq!(rt.fuel_full_ms, 1600 * TICK_MS);
     assert_eq!(rt.fuel_left_ms, rt.fuel_full_ms - 100);
@@ -48,7 +48,7 @@ fn tick_advances_fuel_and_cook_in_lockstep() {
 
 #[test]
 fn tick_emits_output_at_cook_threshold() {
-    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 1)), Some(ItemStack::new(13, 8)));
+    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 1)), Some(ItemStack::new(325, 8)));
     step_one_furnace(&mut f, &mut rt, FURNACE_COOK_MS_PER_OUTPUT);
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), Some(ItemStack::new(43, 1)));
     assert_eq!(f.slot(FURNACE_INPUT_SLOT), None);
@@ -57,7 +57,7 @@ fn tick_emits_output_at_cook_threshold() {
 
 #[test]
 fn tick_preserves_cook_overflow() {
-    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 2)), Some(ItemStack::new(13, 8)));
+    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 2)), Some(ItemStack::new(325, 8)));
     step_one_furnace(&mut f, &mut rt, FURNACE_COOK_MS_PER_OUTPUT + 50);
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), Some(ItemStack::new(43, 1)));
     assert_eq!(f.slot(FURNACE_INPUT_SLOT), Some(ItemStack::new(14, 1)));
@@ -66,11 +66,11 @@ fn tick_preserves_cook_overflow() {
 
 #[test]
 fn tick_stalls_when_input_is_empty() {
-    let (mut f, mut rt) = loaded_furnace(None, Some(ItemStack::new(13, 1)));
+    let (mut f, mut rt) = loaded_furnace(None, Some(ItemStack::new(325, 1)));
     step_one_furnace(&mut f, &mut rt, 100);
     assert_eq!(rt.fuel_left_ms, 0);
     assert_eq!(rt.cook_progress_ms, 0);
-    assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(13, 1)));
+    assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(325, 1)));
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), None);
 }
 
@@ -80,11 +80,11 @@ fn tick_stalls_when_no_recipe() {
     // the MC stone -> smooth_stone recipe. The accept filter would
     // block dirt from ever landing in slot 0 via the UI; set_slot
     // bypasses it, which is exactly the defensive path under test.
-    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(2, 1)), Some(ItemStack::new(13, 1)));
+    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(2, 1)), Some(ItemStack::new(325, 1)));
     step_one_furnace(&mut f, &mut rt, 100);
     assert_eq!(rt.cook_progress_ms, 0);
     assert_eq!(rt.fuel_left_ms, 0);
-    assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(13, 1)));
+    assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(325, 1)));
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn lava_bucket_burn_leaves_empty_bucket_in_fuel_slot() {
 fn coal_burn_leaves_no_remainder() {
     // W476: only the lava bucket has a crafting remainder - coal
     // still clears the slot like before.
-    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 1)), Some(ItemStack::new(13, 1)));
+    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 1)), Some(ItemStack::new(325, 1)));
     step_one_furnace(&mut f, &mut rt, 100);
     assert_eq!(f.slot(FURNACE_FUEL_SLOT), None);
 }
@@ -145,20 +145,20 @@ fn tick_stalls_when_fuel_runs_out_midway() {
 fn tick_stalls_when_output_full_of_different_item() {
     let mut f = new_furnace();
     f.set_slot(FURNACE_INPUT_SLOT, Some(ItemStack::new(14, 1)));
-    f.set_slot(FURNACE_FUEL_SLOT, Some(ItemStack::new(13, 1)));
+    f.set_slot(FURNACE_FUEL_SLOT, Some(ItemStack::new(325, 1)));
     f.set_slot(FURNACE_OUTPUT_SLOT, Some(ItemStack::new(1, 1)));
     let mut rt = FurnaceRuntime::default();
     step_one_furnace(&mut f, &mut rt, 200);
     assert_eq!(rt.cook_progress_ms, 0);
     assert_eq!(rt.fuel_left_ms, 0);
-    assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(13, 1)));
+    assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(325, 1)));
 }
 
 #[test]
 fn tick_stalls_when_output_full_of_same_item() {
     let mut f = new_furnace();
     f.set_slot(FURNACE_INPUT_SLOT, Some(ItemStack::new(14, 1)));
-    f.set_slot(FURNACE_FUEL_SLOT, Some(ItemStack::new(13, 1)));
+    f.set_slot(FURNACE_FUEL_SLOT, Some(ItemStack::new(325, 1)));
     f.set_slot(FURNACE_OUTPUT_SLOT, Some(ItemStack::new(43, 64)));
     let mut rt = FurnaceRuntime::default();
     step_one_furnace(&mut f, &mut rt, 1000);
@@ -170,7 +170,7 @@ fn tick_stalls_when_output_full_of_same_item() {
 fn tick_merges_output_into_existing_same_id_stack() {
     let mut f = new_furnace();
     f.set_slot(FURNACE_INPUT_SLOT, Some(ItemStack::new(14, 1)));
-    f.set_slot(FURNACE_FUEL_SLOT, Some(ItemStack::new(13, 1)));
+    f.set_slot(FURNACE_FUEL_SLOT, Some(ItemStack::new(325, 1)));
     f.set_slot(FURNACE_OUTPUT_SLOT, Some(ItemStack::new(43, 5)));
     let mut rt = FurnaceRuntime::default();
     step_one_furnace(&mut f, &mut rt, FURNACE_COOK_MS_PER_OUTPUT);
@@ -180,16 +180,16 @@ fn tick_merges_output_into_existing_same_id_stack() {
 
 #[test]
 fn tick_consumes_fuel_one_at_a_time() {
-    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 2)), Some(ItemStack::new(13, 2)));
+    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 2)), Some(ItemStack::new(325, 2)));
     step_one_furnace(&mut f, &mut rt, FURNACE_COOK_MS_PER_OUTPUT);
     assert_eq!(f.slot(FURNACE_OUTPUT_SLOT), Some(ItemStack::new(43, 1)));
-    assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(13, 1)));
+    assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(325, 1)));
     assert_eq!(rt.fuel_left_ms, 80_000 - FURNACE_COOK_MS_PER_OUTPUT);
 }
 
 #[test]
 fn tick_zero_dt_is_noop() {
-    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 1)), Some(ItemStack::new(13, 1)));
+    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 1)), Some(ItemStack::new(325, 1)));
     step_one_furnace(&mut f, &mut rt, 0);
     assert_eq!(rt.fuel_left_ms, rt.fuel_full_ms);
     assert_eq!(rt.cook_progress_ms, 0);
@@ -201,7 +201,7 @@ fn furnace_tick_zero_dt_early_return() {
     let mut r: std::collections::HashMap<[i32; 3], FurnaceRuntime> = std::collections::HashMap::new();
     place_furnace(&mut f, &mut r, [0, 0, 0]);
     f.get_mut(&[0, 0, 0]).unwrap().set_slot(0, Some(ItemStack::new(14, 1)));
-    f.get_mut(&[0, 0, 0]).unwrap().set_slot(1, Some(ItemStack::new(13, 1)));
+    f.get_mut(&[0, 0, 0]).unwrap().set_slot(1, Some(ItemStack::new(325, 1)));
     furnace_tick(&mut f, &mut r, 0);
     let rt = r.get(&[0, 0, 0]).unwrap();
     assert_eq!(rt.fuel_left_ms, 0);
@@ -217,7 +217,7 @@ fn furnace_tick_advances_multiple_furnaces() {
     for pos in [[0i32, 0, 0], [1, 0, 0]] {
         let furnace = f.get_mut(&pos).unwrap();
         furnace.set_slot(0, Some(ItemStack::new(14, 1)));
-        furnace.set_slot(1, Some(ItemStack::new(13, 1)));
+        furnace.set_slot(1, Some(ItemStack::new(325, 1)));
     }
     furnace_tick(&mut f, &mut r, 100);
     for pos in [[0i32, 0, 0], [1, 0, 0]] {
@@ -227,7 +227,7 @@ fn furnace_tick_advances_multiple_furnaces() {
 
 #[test]
 fn full_cook_roundtrip_iron_ore_to_ingot() {
-    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 3)), Some(ItemStack::new(13, 1)));
+    let (mut f, mut rt) = loaded_furnace(Some(ItemStack::new(14, 3)), Some(ItemStack::new(325, 1)));
     let mut elapsed: u32 = 0;
     while elapsed < FURNACE_COOK_MS_PER_OUTPUT {
         step_one_furnace(&mut f, &mut rt, 100);
@@ -334,10 +334,22 @@ fn action_place_into_input_rejects_non_smeltable() {
 fn action_place_into_fuel_accepts_coal_only() {
     let mut f = new_furnace();
     let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
-    let mut held: Option<ItemStack> = Some(ItemStack::new(13, 5));
+    let mut held: Option<ItemStack> = Some(ItemStack::new(325, 5));
     apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Place(FURNACE_FUEL_SLOT), false);
     assert_eq!(held, None);
-    assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(13, 5)));
+    assert_eq!(f.slot(FURNACE_FUEL_SLOT), Some(ItemStack::new(325, 5)));
+}
+
+#[test]
+fn action_place_into_fuel_rejects_the_coal_ore_block() {
+    // W477: the id-13 legacy fuel fallback is gone - the ore BLOCK
+    // is not a fuel, so the accept filter bounces it.
+    let mut f = new_furnace();
+    let mut inv: Vec<Option<ItemStack>> = vec![None; 36];
+    let mut held: Option<ItemStack> = Some(ItemStack::new(13, 5));
+    apply_furnace_action(&mut f, &mut inv, &mut held, GridAction::Place(FURNACE_FUEL_SLOT), false);
+    assert_eq!(held, Some(ItemStack::new(13, 5)));
+    assert_eq!(f.slot(FURNACE_FUEL_SLOT), None);
 }
 
 #[test]

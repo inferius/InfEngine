@@ -44,9 +44,10 @@ pub(crate) const CHEST_ID: u16 = 41;
 /// runs in `block::furnace::furnace_tick`; offline catch-up uses
 /// `Timer::Furnace` from the save layer.
 pub(crate) const FURNACE_ID: u16 = 42;
-/// Coal item id. Re-exported here so the smelting fuel table can
-/// reference a single source of truth instead of a bare literal.
-pub(crate) const COAL_ID: u16 = 13;
+/// Coal-ore BLOCK id. W477: the id-13 "ore-coal" fuel/item hybrid is
+/// dead - mining drops the real coal item (325) via
+/// `break_drops::break_drop_override`, and nothing burns this id.
+pub(crate) const COAL_ORE_ID: u16 = 13;
 /// Iron-ore block id (raw form, smelts into IRON_INGOT_ID).
 #[allow(dead_code)]
 pub(crate) const IRON_ORE_ID: u16 = 14;

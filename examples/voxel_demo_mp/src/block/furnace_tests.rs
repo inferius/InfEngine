@@ -39,10 +39,11 @@ fn input_slot_accepts_smeltables_only() {
 #[test]
 fn fuel_slot_accepts_fuels_only() {
     let c = new_furnace();
-    assert!(c.accepts(FURNACE_FUEL_SLOT, 13)); // coal
+    assert!(c.accepts(FURNACE_FUEL_SLOT, 325)); // coal item (W477)
     assert!(c.accepts(FURNACE_FUEL_SLOT, 7)); // planks
     assert!(c.accepts(FURNACE_FUEL_SLOT, 5)); // wood
     assert!(!c.accepts(FURNACE_FUEL_SLOT, 1)); // stone
+    assert!(!c.accepts(FURNACE_FUEL_SLOT, 13)); // coal ORE (W477)
     assert!(!c.accepts(FURNACE_FUEL_SLOT, 14)); // iron ore
 }
 
@@ -79,7 +80,12 @@ fn accept_predicates_match_smelting_module() {
     // (2) is the canonical non-smeltable probe.
     assert!(accept_smeltable(1));
     assert!(!accept_smeltable(2));
-    assert!(accept_fuel(13));
+    // W477: the coal ITEM (325) is the fuel; the ore block (13)
+    // lost its legacy fallback burn (it still SMELTS - MC coal_ore
+    // -> coal).
+    assert!(accept_fuel(325));
+    assert!(!accept_fuel(13));
+    assert!(accept_smeltable(13));
     assert!(!accept_fuel(1));
     // W476: the generated FuelValues rows flow through the same
     // predicate - lava bucket + charcoal accept, empty bucket not.

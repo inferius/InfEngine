@@ -75,7 +75,6 @@
 //   librarian/3/emerald_and_book_enchanted_book: given_item_modifiers
 //   librarian/4/emerald_book_and_enchanted_book: given_item_modifiers
 //   librarian/4/writable_book_emerald: unmapped writable_book
-//   mason/1/clay_ball_emerald: unmapped clay_ball
 //   mason/5/emerald_quartz_pillar: unmapped quartz_pillar
 //   shepherd/4/emerald_black_banner: unmapped black_banner
 //   shepherd/4/emerald_blue_banner: unmapped blue_banner
@@ -246,6 +245,9 @@ pub(crate) const TRADES: &[TradeDef] = &[
     TradeDef { profession: "librarian", tier: 5, want: 317, want_n: 3, want2: None, give: 747, give_n: 1, max_uses: 12, xp: 30 },
     // librarian/5/emerald_yellow_candle
     TradeDef { profession: "librarian", tier: 5, want: 317, want_n: 3, want2: None, give: 737, give_n: 1, max_uses: 12, xp: 30 },
+    // mason/1/clay_ball_emerald (W477: clay_ball 994 exists now -
+    // this row was in the skip list only for the missing item)
+    TradeDef { profession: "mason", tier: 1, want: 994, want_n: 10, want2: None, give: 317, give_n: 1, max_uses: 16, xp: 2 },
     // mason/1/emerald_brick
     TradeDef { profession: "mason", tier: 1, want: 317, want_n: 1, want2: None, give: 675, give_n: 10, max_uses: 16, xp: 1 },
     // mason/2/emerald_chiseled_stone_bricks

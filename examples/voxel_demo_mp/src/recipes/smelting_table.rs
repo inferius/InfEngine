@@ -18,10 +18,9 @@
 //! - blasting / smoking / campfire_cooking recipe types are IGNORED -
 //!   the engine has only the classic furnace (smoker / blast furnace
 //!   run the standard set per the W163 note in `block/furnace.rs`).
-//! - id 13 (legacy ore-coal row) keeps its 1600-tick burn via the
-//!   hand fallback in `src/smelting.rs`, not here - MC does not burn
-//!   coal_ore, but engine mining still drops id 13 until the W477
-//!   loot routing lands.
+//! - W477: the id-13 hand fallback in `src/smelting.rs` is GONE -
+//!   mining routes coal-ore drops onto the coal item (325), so the
+//!   ore block no longer burns, matching MC's FuelValues.
 
 use super::smelting::SmeltingRecipe;
 

@@ -98,7 +98,8 @@ const FALLBACK_DIG: BlockDig = BlockDig {
 /// generator script's `RENAMES`.
 const ENGINE_RENAMES: &[(&str, &str)] = &[
     ("bed", "white_bed"),
-    ("coal", "coal_ore"),
+    // W477: the ("coal", "coal_ore") row left with the registry
+    // rename - block 13 IS "coal_ore" now.
     ("cobble", "cobblestone"),
     ("flower", "poppy"),
     ("flower_blue", "blue_orchid"),

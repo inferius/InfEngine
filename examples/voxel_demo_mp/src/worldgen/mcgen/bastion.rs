@@ -191,6 +191,23 @@ pub(crate) fn bastion_chest_at(ctx: &WorldgenCtx, pos: [i32; 3]) -> Option<Basti
             let Some(layout) = layout_for_start(ctx, scx, scz) else {
                 continue;
             };
+            // W477: the chest cell's own LootTable nbt rules - the
+            // rampart/wall chests of a treasure or stable bastion
+            // carry bastion_OTHER, which the path family got wrong.
+            if let Some(id) = village::layout_loot_table_at(&layout, ctx, pos) {
+                let stem = id.strip_prefix("minecraft:").unwrap_or(&id);
+                match stem.strip_prefix("chests/") {
+                    Some("bastion_treasure") => {
+                        return Some(BastionChest::Treasure);
+                    }
+                    Some("bastion_hoglin_stable") => {
+                        return Some(BastionChest::HoglinStable);
+                    }
+                    Some("bastion_bridge") => return Some(BastionChest::Bridge),
+                    Some("bastion_other") => return Some(BastionChest::Other),
+                    _ => {}
+                }
+            }
             for piece in layout.iter() {
                 let Some(t) = super::village_data::template(&piece.template) else {
                     continue;

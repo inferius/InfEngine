@@ -21,6 +21,7 @@
 
 use infengine_voxel::BlockId;
 
+pub(crate) mod break_drops;
 pub(crate) mod brewing;
 pub(crate) mod chest;
 pub(crate) mod crop_stages;

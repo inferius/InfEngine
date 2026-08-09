@@ -126,9 +126,10 @@ pub(crate) const RECIPES: &[Recipe] = &[
     },
     // 4 coal -> 1 glowstone block. Loose interpretation since
     // the demo has no nether biome; gives the player a use for
-    // surplus coal beyond torches.
+    // surplus coal beyond torches. W477: consumes the real coal
+    // ITEM (325) - the id-13 ore-coal hybrid is dead.
     Recipe {
-        inputs: &[(13, 1), (13, 1), (13, 1), (13, 1)],
+        inputs: &[(325, 1), (325, 1), (325, 1), (325, 1)],
         output: (28, 1),
         name: "Glowstone",
     },
@@ -234,8 +235,10 @@ pub(crate) const RECIPES: &[Recipe] = &[
     Recipe { inputs: &[(302, 1), (302, 1), (302, 1), (302, 1)], output: (595, 1), name: "Ladder" },
     // Stone bricks: 4 stone -> 4 stone_bricks (placeholder; real MC uses chiseled pattern).
     Recipe { inputs: &[(1, 1), (1, 1), (1, 1), (1, 1)], output: (8, 4), name: "Stone bricks alt" },
-    // 4 brick -> 1 bricks block (4 brick items to 1 bricks block).
-    Recipe { inputs: &[(13, 1), (13, 1), (13, 1), (13, 1)], output: (86, 1), name: "Brick block" },
+    // 4 brick -> 1 bricks block. W477: consumes the real brick ITEM
+    // (675) - the row used to eat the id-13 ore-coal hybrid, which
+    // never matched MC's brick recipe.
+    Recipe { inputs: &[(675, 1), (675, 1), (675, 1), (675, 1)], output: (86, 1), name: "Brick block" },
     // 4 bone_meal stand-in: 4 wheat -> hay_bale.
     Recipe { inputs: &[(493, 1), (493, 1), (493, 1), (493, 1)], output: (435, 1), name: "Hay bale" },
     // 4 sugar_cane -> 1 paper (shapeless).
@@ -249,3 +252,33 @@ pub(crate) const RECIPES: &[Recipe] = &[
     // Honey block (4 honey bottles - using ID 444 honeycomb_block as proxy).
     Recipe { inputs: &[(444, 1)], output: (443, 1), name: "Honey block" },
 ];
+
+#[cfg(test)]
+mod w477_tests {
+    use super::*;
+
+    /// W477: the id-13 ore-coal hybrid is dead - no shapeless recipe
+    /// may consume it (glowstone eats the coal ITEM 325, the brick
+    /// block eats the brick ITEM 675).
+    #[test]
+    fn no_recipe_consumes_the_legacy_ore_coal_id() {
+        for r in RECIPES {
+            assert!(
+                r.inputs.iter().all(|(id, _)| *id != 13),
+                "{} still consumes id 13",
+                r.name
+            );
+        }
+        let glowstone = RECIPES
+            .iter()
+            .find(|r| r.name == "Glowstone")
+            .expect("glowstone recipe exists");
+        assert!(glowstone.inputs.iter().all(|(id, _)| *id == 325));
+        let brick = RECIPES
+            .iter()
+            .find(|r| r.name == "Brick block")
+            .expect("brick block recipe exists");
+        assert!(brick.inputs.iter().all(|(id, _)| *id == 675));
+        assert_eq!(brick.output, (86, 1));
+    }
+}

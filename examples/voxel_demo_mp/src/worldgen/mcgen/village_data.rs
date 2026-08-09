@@ -427,6 +427,23 @@ mod tests {
         assert!(t.jigsaws().count() > 0);
     }
 
+    /// W477: the chest cell's `LootTable` block-entity nbt survives
+    /// parsing - the loot routing reads per-building identity from
+    /// it (position + id pinned against the 26.1.2 nbt).
+    #[test]
+    fn chest_loot_table_nbt_survives_template_parse() {
+        let t = template("minecraft:village/plains/houses/plains_small_house_7")
+            .expect("template loads");
+        assert_eq!(t.loot_cells.len(), 1);
+        let (pos, id) = &t.loot_cells[0];
+        assert_eq!(id, "minecraft:chests/village/village_plains_house");
+        assert_eq!(*pos, [4, 1, 5]);
+        // A house without a chest parses to an empty list.
+        let bare = template("minecraft:village/plains/houses/plains_small_house_1")
+            .expect("template loads");
+        assert!(bare.loot_cells.is_empty());
+    }
+
     /// W245.3 prep: the blockstate inventory across ALL village
     /// templates - the worklist for the blockstate -> engine-id map.
     /// `cargo test -p voxel_demo_mp --release --lib

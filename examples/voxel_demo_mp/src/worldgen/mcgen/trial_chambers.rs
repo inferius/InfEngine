@@ -17,11 +17,13 @@
 //! (slime / cave_spider / silverfish / baby_zombie).
 //!
 //! Honest gaps: trial spawners + vaults carve as decorative shells
-//! (the trial-wave gameplay + reward loot is a mob-parity follow-up);
-//! `terrain_adaptation: encapsulate` is not modelled; dispensers /
-//! pots / tripwire traps follow their KNOWN_SKIPS status; chest loot
-//! keys off the containing piece's template path (corridor /
-//! entrance / intersection / supply) instead of the per-chest NBT.
+//! (the trial-wave gameplay + the OMINOUS vault reward tables are a
+//! mob-parity follow-up); `terrain_adaptation: encapsulate` is not
+//! modelled; dispensers / pots / tripwire traps follow their
+//! KNOWN_SKIPS status. W477: chest + barrel loot keys off the
+//! container cell's own `LootTable` nbt (corridor / entrance /
+//! intersection / intersection_barrel / reward / supply), with the
+//! piece's template path as fallback.
 
 use infengine_voxel::{CHUNK_SIZE, Chunk, ChunkCoord};
 use std::cell::RefCell;
@@ -199,13 +201,37 @@ pub(crate) fn place_trial_chambers(
     }
 }
 
-/// Which chest table `pos` rolls, by the containing piece's template
-/// path (`None` = not inside the chambers).
+/// Which container table `pos` rolls (`None` = not inside the
+/// chambers). W477: identity comes from the container cell's own
+/// `LootTable` nbt first (which is what tells a reward chest and an
+/// intersection BARREL apart); the piece's template path stays as
+/// the fallback for a cell the nbt scan misses.
 pub(crate) enum ChamberChest {
     Corridor,
     Entrance,
     Intersection,
+    IntersectionBarrel,
+    Reward,
     Supply,
+}
+
+/// The `chests/trial_chambers/*` nbt ids -> kinds. The reward
+/// SUB-tables (reward_common/-rare/...) never appear on cells - they
+/// are `reft` targets of reward.json itself.
+fn chamber_kind_for_loot_id(id: &str) -> Option<ChamberChest> {
+    let stem = id
+        .strip_prefix("minecraft:")
+        .unwrap_or(id)
+        .strip_prefix("chests/trial_chambers/")?;
+    Some(match stem {
+        "corridor" => ChamberChest::Corridor,
+        "entrance" => ChamberChest::Entrance,
+        "intersection" => ChamberChest::Intersection,
+        "intersection_barrel" => ChamberChest::IntersectionBarrel,
+        "reward" => ChamberChest::Reward,
+        "supply" => ChamberChest::Supply,
+        _ => return None,
+    })
 }
 
 pub(crate) fn chamber_chest_at(ctx: &WorldgenCtx, pos: [i32; 3]) -> Option<ChamberChest> {
@@ -223,6 +249,14 @@ pub(crate) fn chamber_chest_at(ctx: &WorldgenCtx, pos: [i32; 3]) -> Option<Chamb
             let Some(layout) = layout_for_start(ctx, scx, scz) else {
                 continue;
             };
+            // W477: the exact container cell's own LootTable nbt
+            // rules (reward chests + barrels live in pieces whose
+            // PATH says corridor/intersection).
+            if let Some(id) = village::layout_loot_table_at(&layout, ctx, pos)
+                && let Some(k) = chamber_kind_for_loot_id(&id)
+            {
+                return Some(k);
+            }
             for piece in layout.iter() {
                 let Some(t) = super::village_data::template(&piece.template) else {
                     continue;

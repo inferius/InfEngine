@@ -226,6 +226,31 @@ fn try_dungeon_at_column(chunk_x: i32, chunk_z: i32, seed: u32) -> Option<Dungeo
 /// this chunk, so we check a neighbourhood of columns. The outer
 /// box is at most ROOM_OUTER_W = 7 blocks wide, fitting within a
 /// single chunk column.
+/// W477: does a Realistic/Natural-profile dungeon place a CHEST
+/// exactly at `pos`? Pure hash replay of `place`'s neighbourhood
+/// scan, so the loot routing can keep feeding these rooms the
+/// simple_dungeon table now that the blanket else-arm is gone.
+pub(crate) fn pos_is_dungeon_chest(ctx: &WorldgenCtx, pos: [i32; 3]) -> bool {
+    use infengine_voxel::CHUNK_SIZE;
+    let seed = ctx.effective_seed();
+    let cs = CHUNK_SIZE as i32;
+    let (ccx, ccz) = (pos[0].div_euclid(cs), pos[2].div_euclid(cs));
+    for dcx in -1..=1 {
+        for dcz in -1..=1 {
+            let Some(d) = try_dungeon_at_column(ccx + dcx, ccz + dcz, seed)
+            else {
+                continue;
+            };
+            if d.block_at(pos[0], pos[1], pos[2])
+                == Some(BlockId(CHEST_BLOCK))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn place(chunk: &mut Chunk, coord: ChunkCoord, ctx: &WorldgenCtx) {
     use infengine_voxel::CHUNK_SIZE;
 

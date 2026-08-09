@@ -391,8 +391,43 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                             needs_rail_remesh = true;
                         }
                         ChunkSideEffect::DungeonChest { pos: wv, table } => {
-                            // W353: the render set - see draw_chests.
-                            vx.chest_render_positions.insert(*wv);
+                            // W477: the worker scan ships chests AND
+                            // barrels (trial-chamber corridor loot)
+                            // down this channel. Only a real chest
+                            // joins the chest-model render set + the
+                            // facing latch - a barrel renders as its
+                            // plain block and only mints a container.
+                            let cs = CHUNK_SIZE as i32;
+                            let ov = World::chunk_world_origin(coord);
+                            let org =
+                                [ov.x as i32, ov.y as i32, ov.z as i32];
+                            let local_id = {
+                                let (lx, ly, lz) = (
+                                    wv[0] - org[0],
+                                    wv[1] - org[1],
+                                    wv[2] - org[2],
+                                );
+                                if (0..cs).contains(&lx)
+                                    && (0..cs).contains(&ly)
+                                    && (0..cs).contains(&lz)
+                                {
+                                    chunk
+                                        .get(
+                                            lx as usize,
+                                            ly as usize,
+                                            lz as usize,
+                                        )
+                                        .0
+                                } else {
+                                    vx.world.get(*wv).0
+                                }
+                            };
+                            let is_chest =
+                                local_id == crate::block::CHEST_ID;
+                            if is_chest {
+                                // W353: the render set - see draw_chests.
+                                vx.chest_render_positions.insert(*wv);
+                            }
                             // W242: mint the structure chest ONCE with a
                             // seed+position-deterministic loot roll. A
                             // container that already exists (saved world,
@@ -411,97 +446,21 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                 // need the worldgen caches - on the main
                                 // thread they built the whole MC noise
                                 // stack: 100-200 ms delivery folds).
-                                let table = match table {
-                                    crate::workers::ChestLootKind::AbandonedMineshaft => {
-                                        &crate::loot::ABANDONED_MINESHAFT
-                                    }
-                                    crate::workers::ChestLootKind::DesertPyramid => {
-                                        &crate::loot::DESERT_PYRAMID
-                                    }
-                                    crate::workers::ChestLootKind::IglooChest => {
-                                        &crate::loot::IGLOO_CHEST
-                                    }
-                                    crate::workers::ChestLootKind::PillagerOutpost => {
-                                        &crate::loot::PILLAGER_OUTPOST
-                                    }
-                                    crate::workers::ChestLootKind::ShipwreckMap => {
-                                        &crate::loot::SHIPWRECK_MAP
-                                    }
-                                    crate::workers::ChestLootKind::ShipwreckTreasure => {
-                                        &crate::loot::SHIPWRECK_TREASURE
-                                    }
-                                    crate::workers::ChestLootKind::ShipwreckSupply => {
-                                        &crate::loot::SHIPWRECK_SUPPLY
-                                    }
-                                    crate::workers::ChestLootKind::BuriedTreasure => {
-                                        &crate::loot::BURIED_TREASURE
-                                    }
-                                    crate::workers::ChestLootKind::UnderwaterRuinSmall => {
-                                        &crate::loot::UNDERWATER_RUIN_SMALL
-                                    }
-                                    crate::workers::ChestLootKind::UnderwaterRuinBig => {
-                                        &crate::loot::UNDERWATER_RUIN_BIG
-                                    }
-                                    crate::workers::ChestLootKind::JungleTemple => {
-                                        &crate::loot::JUNGLE_TEMPLE
-                                    }
-                                    crate::workers::ChestLootKind::StrongholdCorridor => {
-                                        &crate::loot::STRONGHOLD_CORRIDOR
-                                    }
-                                    crate::workers::ChestLootKind::StrongholdCrossing => {
-                                        &crate::loot::STRONGHOLD_CROSSING
-                                    }
-                                    crate::workers::ChestLootKind::StrongholdLibrary => {
-                                        &crate::loot::STRONGHOLD_LIBRARY
-                                    }
-                                    crate::workers::ChestLootKind::RuinedPortal => {
-                                        &crate::loot::RUINED_PORTAL
-                                    }
-                                    crate::workers::ChestLootKind::WoodlandMansion => {
-                                        &crate::loot::WOODLAND_MANSION
-                                    }
-                                    crate::workers::ChestLootKind::AncientCity => {
-                                        &crate::loot::ANCIENT_CITY
-                                    }
-                                    crate::workers::ChestLootKind::AncientCityIceBox => {
-                                        &crate::loot::ANCIENT_CITY_ICE_BOX
-                                    }
-                                    crate::workers::ChestLootKind::TrialChambersCorridor => {
-                                        &crate::loot::TRIAL_CHAMBERS_CORRIDOR
-                                    }
-                                    crate::workers::ChestLootKind::TrialChambersEntrance => {
-                                        &crate::loot::TRIAL_CHAMBERS_ENTRANCE
-                                    }
-                                    crate::workers::ChestLootKind::TrialChambersIntersection => {
-                                        &crate::loot::TRIAL_CHAMBERS_INTERSECTION
-                                    }
-                                    crate::workers::ChestLootKind::TrialChambersSupply => {
-                                        &crate::loot::TRIAL_CHAMBERS_SUPPLY
-                                    }
-                                    crate::workers::ChestLootKind::BastionTreasure => {
-                                        &crate::loot::BASTION_TREASURE
-                                    }
-                                    crate::workers::ChestLootKind::BastionOther => {
-                                        &crate::loot::BASTION_OTHER
-                                    }
-                                    crate::workers::ChestLootKind::BastionBridge => {
-                                        &crate::loot::BASTION_BRIDGE
-                                    }
-                                    crate::workers::ChestLootKind::BastionHoglinStable => {
-                                        &crate::loot::BASTION_HOGLIN_STABLE
-                                    }
-                                    crate::workers::ChestLootKind::NetherBridge => {
-                                        &crate::loot::NETHER_BRIDGE
-                                    }
-                                    crate::workers::ChestLootKind::SimpleDungeon => {
-                                        &crate::loot::SIMPLE_DUNGEON
-                                    }
-                                };
-                                let stacks = crate::loot::roll(table, &mut rng);
+                                // W477: kind -> generated table via the
+                                // routing module; `Unrouted` fills
+                                // NOTHING - an empty chest is honest,
+                                // dungeon loot in an unwired structure
+                                // is not.
                                 let mut c = crate::block::chest::new_chest();
-                                crate::loot::fill_container(
-                                    &mut c, &stacks, &mut rng,
-                                );
+                                if let Some(table) =
+                                    crate::loot::routing::table_for(*table)
+                                {
+                                    let stacks =
+                                        crate::loot::roll(table, &mut rng);
+                                    crate::loot::fill_container(
+                                        &mut c, &stacks, &mut rng,
+                                    );
+                                }
                                 vx.chests.insert(*wv, c);
                                 // Latch faces the room: the dungeon rule
                                 // places chests with exactly one solid
@@ -513,10 +472,6 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                 // in-chunk neighbours read from the local
                                 // chunk; border neighbours fall back to
                                 // the world (may be unloaded = air).
-                                let cs = CHUNK_SIZE as i32;
-                                let ov = World::chunk_world_origin(coord);
-                                let org =
-                                    [ov.x as i32, ov.y as i32, ov.z as i32];
                                 let nb_id = |dx: i32, dz: i32| -> u16 {
                                     let (x, y, z) =
                                         (wv[0] + dx, wv[1], wv[2] + dz);
@@ -549,7 +504,7 @@ pub(crate) fn stream_chunks(vx: &mut Voxel) {
                                                     !bt.transparent
                                                 })
                                     });
-                                if let Some(d) = solid_dir {
+                                if is_chest && let Some(d) = solid_dir {
                                     vx.chest_facing
                                         .entry(*wv)
                                         .or_insert((codes[d] + 2) % 4);

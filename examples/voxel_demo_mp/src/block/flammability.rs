@@ -335,7 +335,7 @@ pub(crate) fn flammability_checksum() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block::{COAL_ID, FLINT_AND_STEEL_ID, GLOWSTONE_ID, STONE_ID};
+    use crate::block::{COAL_ORE_ID, FLINT_AND_STEEL_ID, GLOWSTONE_ID, STONE_ID};
 
     #[test]
     fn oak_planks_flammability_matches_mc_5_20() {
@@ -482,8 +482,8 @@ mod tests {
     fn engine_tool_is_non_flammable() {
         // Flint+steel is a tool, not a block -> no flammability.
         assert_eq!(flammability_for_id(FLINT_AND_STEEL_ID), (0, 0));
-        // Coal-ore item id (also tool tier 1) -> no flammability.
-        assert_eq!(flammability_for_id(COAL_ID), (0, 0));
+        // Coal-ore block id -> no flammability.
+        assert_eq!(flammability_for_id(COAL_ORE_ID), (0, 0));
     }
 
     #[test]
