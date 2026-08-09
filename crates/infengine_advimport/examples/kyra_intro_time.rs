@@ -53,6 +53,13 @@ const SCENES: &[Scene] = &[
     Scene { at: 0x2e7b0, end: 0x2ea17, pieces: &[("intro4_mal-kal", 4, "MAL-KAL.WSA", "MAL-KAL.COL")] },
 ];
 
+/// A drawShape riding on a shown frame: which play it followed, the
+/// shape index, and the screen position.
+type Draw = (usize, usize, i32, i32);
+/// One animation's play log: frames in shown order, the ticks its span
+/// took, and the shape draws over it.
+type PlayLog = (Vec<usize>, u32, Vec<Draw>);
+
 /// The three hand-with-quill shapes from WRITING.CPS: a bank of
 /// `u16 count`, word offsets, and per shape a small header
 /// (flags u16, height u8, width u16, height again, sizes) followed by
@@ -225,14 +232,10 @@ fn main() {
 
 /// Interpret one stream: which frames each WSA showed, and the ticks
 /// its span of the scene took. Loops replay their body.
-fn played(
-    data: &[u8],
-    at: usize,
-    end: usize,
-) -> std::collections::HashMap<usize, (Vec<usize>, u32, Vec<(usize, usize, i32, i32)>)> {
+fn played(data: &[u8], at: usize, end: usize) -> std::collections::HashMap<usize, PlayLog> {
     use std::collections::HashMap;
     let mut current: HashMap<usize, usize> = HashMap::new();
-    let mut order: HashMap<usize, (Vec<usize>, u32, Vec<(usize, usize, i32, i32)>)> = HashMap::new();
+    let mut order: HashMap<usize, PlayLog> = HashMap::new();
     let mut last_play: Option<usize> = None;
     let mut spans: HashMap<usize, (u32, u32)> = HashMap::new();
     let mut ticks = 0u32;
@@ -314,7 +317,7 @@ fn played(
 }
 
 fn note(
-    order: &mut std::collections::HashMap<usize, (Vec<usize>, u32, Vec<(usize, usize, i32, i32)>)>,
+    order: &mut std::collections::HashMap<usize, PlayLog>,
     spans: &mut std::collections::HashMap<usize, (u32, u32)>,
     wsa: usize,
     frame: usize,
