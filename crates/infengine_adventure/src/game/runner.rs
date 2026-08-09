@@ -295,6 +295,9 @@ impl Runner {
                 }
             }
             Action::SetFlag { flag, value } => state.set_flag(flag.clone(), *value),
+            Action::SetVar { var, value } => {
+                state.vars.insert(var.clone(), *value);
+            }
             Action::Give { item } => state.give(item.clone()),
             Action::Take { item } => state.take(item),
             Action::EnableHotspot { hotspot, enabled } => {
@@ -311,6 +314,9 @@ impl Runner {
                 // the importer not knowing.
                 let yes = match on {
                     crate::action::Condition::Flag(flag) => state.flag(flag),
+                    crate::action::Condition::Var { var, op, value } => {
+                        op.holds(state.vars.get(var).copied().unwrap_or(0), *value)
+                    }
                     crate::action::Condition::Holding(item) => state.hand == *item,
                     crate::action::Condition::ClickPastActor => state
                         .click

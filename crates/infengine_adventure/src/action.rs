@@ -98,6 +98,8 @@ pub enum Action {
     Wait { seconds: f32 },
     /// Set a story flag.
     SetFlag { flag: String, value: bool },
+    /// Set a story counter.
+    SetVar { var: String, value: i32 },
     /// Put an item in the inventory.
     Give { item: String },
     /// Remove one.
@@ -152,6 +154,41 @@ pub enum Action {
     },
 }
 
+/// How a numeric test compares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Compare {
+    Eq,
+    Ne,
+    Gt,
+    Ge,
+    Lt,
+    Le,
+}
+
+impl Compare {
+    pub fn holds(self, left: i32, right: i32) -> bool {
+        match self {
+            Compare::Eq => left == right,
+            Compare::Ne => left != right,
+            Compare::Gt => left > right,
+            Compare::Ge => left >= right,
+            Compare::Lt => left < right,
+            Compare::Le => left <= right,
+        }
+    }
+
+    pub fn sign(self) -> &'static str {
+        match self {
+            Compare::Eq => "==",
+            Compare::Ne => "!=",
+            Compare::Gt => ">",
+            Compare::Ge => ">=",
+            Compare::Lt => "<",
+            Compare::Le => "<=",
+        }
+    }
+}
+
 /// What a branch tests.
 ///
 /// A flag is the condition an author writes. The other one exists
@@ -164,6 +201,12 @@ pub enum Action {
 pub enum Condition {
     /// A story flag, true when it has been set.
     Flag(String),
+    /// A story counter compared against a number.
+    ///
+    /// Imported state machines count in these: which line of a
+    /// conversation comes next, how far a ritual has got. A flag is a
+    /// counter that only knows 0 and 1.
+    Var { var: String, op: Compare, value: i32 },
     /// What the actor's hand holds: a particular item, or nothing.
     Holding(Option<String>),
     /// Whether the last click fell at or past the actor, left to right.
@@ -188,6 +231,7 @@ impl Condition {
     pub fn label(&self) -> String {
         match self {
             Condition::Flag(flag) => flag.clone(),
+            Condition::Var { var, op, value } => format!("{var} {} {value}", op.sign()),
             Condition::Holding(Some(item)) => format!("holding {item}"),
             Condition::Holding(None) => "empty-handed".into(),
             Condition::ClickPastActor => "clicked right of the actor".into(),
@@ -199,7 +243,10 @@ impl Condition {
     pub fn is_resolved(&self) -> bool {
         matches!(
             self,
-            Condition::Flag(_) | Condition::Holding(_) | Condition::ClickPastActor
+            Condition::Flag(_)
+                | Condition::Var { .. }
+                | Condition::Holding(_)
+                | Condition::ClickPastActor
         )
     }
 }
@@ -235,6 +282,7 @@ impl Action {
             },
             Action::Wait { seconds } => format!("wait {seconds}s"),
             Action::SetFlag { flag, value } => format!("set {flag} = {value}"),
+            Action::SetVar { var, value } => format!("set {var} = {value}"),
             Action::Give { item } => format!("give {item}"),
             Action::Take { item } => format!("take {item}"),
             Action::PlaceItem { item, at } => {

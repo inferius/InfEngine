@@ -151,6 +151,14 @@ pub const ADVENTURE_NODES: &[NodeKindDef] = &[
         contexts: &[],
     },
     NodeKindDef {
+        id: "adv_set_var",
+        label: "Set Counter",
+        category: "Adventure",
+        inputs: EXEC_IN,
+        outputs: EXEC_OUT,
+        contexts: &[],
+    },
+    NodeKindDef {
         id: "adv_give",
         label: "Give Item",
         category: "Adventure",
@@ -351,6 +359,7 @@ fn kind_of(action: &Action) -> &'static str {
         Action::PlayMusic { .. } => "adv_play_music",
         Action::Wait { .. } => "adv_wait",
         Action::SetFlag { .. } => "adv_set_flag",
+        Action::SetVar { .. } => "adv_set_var",
         Action::Give { .. } => "adv_give",
         Action::Take { .. } => "adv_take",
         Action::SetHand { .. } => "adv_set_hand",
@@ -423,6 +432,10 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
             set("flag", flag.clone());
             set("value", value.to_string());
         }
+        Action::SetVar { var, value } => {
+            set("var", var.clone());
+            set("value", value.to_string());
+        }
         Action::Give { item } | Action::Take { item } => set("item", item.clone()),
         Action::PlaceItem { item, at } => {
             set("item", item.clone());
@@ -453,6 +466,11 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
         // import could not read this" rather than two.
         Action::Branch { on, .. } => match on {
             Condition::Flag(flag) => set("flag", flag.clone()),
+            Condition::Var { var, op, value } => {
+                set("var", var.clone());
+                set("op", op.sign().to_string());
+                set("value", value.to_string());
+            }
             // The marker parameter keeps "holding nothing" distinct
             // from "no condition written yet".
             Condition::Holding(Some(item)) => set("held", item.clone()),
@@ -522,6 +540,10 @@ fn read_action(node: &infengine_blueprint::Node) -> Option<Action> {
         "adv_set_flag" => Action::SetFlag {
             flag: param(node, "flag"),
             value: flag(node, "value"),
+        },
+        "adv_set_var" => Action::SetVar {
+            var: param(node, "var"),
+            value: param(node, "value").parse().unwrap_or(0),
         },
         "adv_give" => Action::Give {
             item: param(node, "item"),
@@ -595,6 +617,22 @@ fn condition_of(node: &infengine_blueprint::Node) -> Condition {
     }
     let call = param(node, "call");
     if call.is_empty() {
+        let var = param(node, "var");
+        if !var.is_empty() {
+            let op = match param(node, "op").as_str() {
+                "!=" => infengine_adventure::action::Compare::Ne,
+                ">" => infengine_adventure::action::Compare::Gt,
+                ">=" => infengine_adventure::action::Compare::Ge,
+                "<" => infengine_adventure::action::Compare::Lt,
+                "<=" => infengine_adventure::action::Compare::Le,
+                _ => infengine_adventure::action::Compare::Eq,
+            };
+            return Condition::Var {
+                var,
+                op,
+                value: param(node, "value").parse().unwrap_or(0),
+            };
+        }
         Condition::Flag(param(node, "flag"))
     } else {
         Condition::Unresolved {

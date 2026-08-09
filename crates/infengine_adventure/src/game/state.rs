@@ -62,6 +62,10 @@ pub struct GameState {
     /// Not the inventory; scripts test it with `Condition::Holding`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hand: Option<String>,
+    /// Story counters, for imported state machines and anything an
+    /// author wants to count. A flag is a counter that stops at one.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub vars: BTreeMap<String, i32>,
     /// Where the last click landed, while its actions run.
     ///
     /// Scripts branch on where the player pointed relative to the

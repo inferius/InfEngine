@@ -191,7 +191,8 @@ impl Widget {
             // A screen only sees the flags; a condition it cannot ask
             // holds never, the same reading a branch gives it.
             Some(
-                Condition::Holding(_)
+                Condition::Var { .. }
+                | Condition::Holding(_)
                 | Condition::ClickPastActor
                 | Condition::Unresolved { .. },
             ) => false,

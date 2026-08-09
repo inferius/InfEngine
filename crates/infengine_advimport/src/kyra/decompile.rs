@@ -489,6 +489,23 @@ impl Pass<'_> {
                 }
             }
 
+            // A register assignment: the value pushed just before, the
+            // register popped here. Computed values stay a visible
+            // unknown rather than a silent loss - a conversation's
+            // state machine dies without its counter.
+            if let (Op::PopReg, Some(register)) = (instruction.op, instruction.operand) {
+                match self.constant_before(index) {
+                    Some(value) => out.push(Action::SetVar {
+                        var: format!("kyra.reg{register}"),
+                        value,
+                    }),
+                    None => out.push(Action::Unknown {
+                        call: format!("kyra:reg{register} = computed"),
+                        args: Vec::new(),
+                    }),
+                }
+            }
+
             if let Some(site) = vm::call_at(self.instructions, index) {
                 self.slots.observe(&site, self.texts);
                 self.step(&mut out, &site);
@@ -660,17 +677,31 @@ impl Pass<'_> {
             return match compare {
                 Some((EVAL_EQ, value)) if register == REG_HAND => (held(value), flip),
                 Some((EVAL_NE, value)) if register == REG_HAND => (held(value), !flip),
-                Some((op, value)) => (
-                    Condition::Unresolved {
-                        call: format!("kyra:reg{register} {} {}", sign(op), value),
-                        args: Vec::new(),
-                    },
-                    flip,
-                ),
+                // Any other register is a story counter the engine can
+                // carry as a variable, compared as the script wrote it.
+                Some((op, value)) => match compare_op(op) {
+                    Some(op) => (
+                        Condition::Var {
+                            var: format!("kyra.reg{register}"),
+                            op,
+                            value,
+                        },
+                        flip,
+                    ),
+                    None => (
+                        Condition::Unresolved {
+                            call: format!("kyra:reg{register} {} {}", sign(op), value),
+                            args: Vec::new(),
+                        },
+                        flip,
+                    ),
+                },
+                // A bare register reads as "is it set at all".
                 None => (
-                    Condition::Unresolved {
-                        call: format!("kyra:reg{register}"),
-                        args: Vec::new(),
+                    Condition::Var {
+                        var: format!("kyra.reg{register}"),
+                        op: infengine_adventure::action::Compare::Ne,
+                        value: 0,
                     },
                     flip,
                 ),
@@ -712,6 +743,23 @@ impl Pass<'_> {
         }
     }
 
+    /// The constant sitting on the stack when `at` runs: the last plain
+    /// push, looking back over the bookkeeping. `None` when the value
+    /// was computed.
+    fn constant_before(&self, at: usize) -> Option<i32> {
+        let mut back = at;
+        while back > 0 {
+            back -= 1;
+            let previous = self.instructions[back];
+            match previous.op {
+                Op::Push | Op::PushAlt | Op::JumpOrConst => return previous.operand,
+                Op::Eval => continue,
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// Whether the value pushed just before a call's own arguments is
     /// the click's x: register 1, or the hit-test's first local.
     fn click_x_before(&self, call: usize) -> bool {
@@ -749,6 +797,20 @@ impl Pass<'_> {
 /// `<`, `<=` - greater-than first, the reverse of the tempting guess.
 const EVAL_EQ: i32 = 2;
 const EVAL_NE: i32 = 3;
+
+/// The engine comparison an Eval operand means, when it means one.
+fn compare_op(op: i32) -> Option<infengine_adventure::action::Compare> {
+    use infengine_adventure::action::Compare;
+    match op {
+        2 => Some(Compare::Eq),
+        3 => Some(Compare::Ne),
+        4 => Some(Compare::Gt),
+        5 => Some(Compare::Ge),
+        6 => Some(Compare::Lt),
+        7 => Some(Compare::Le),
+        _ => None,
+    }
+}
 
 /// What negation the Negate instruction's operand asks for. Only the
 /// logical one may swap branch sides.
