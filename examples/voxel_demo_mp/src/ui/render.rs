@@ -190,15 +190,17 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
                 Some((format!("{name}{hint}"), pct))
             });
         // W395: every kind shows its real name (Title Case from the
-        // registry) and its real max HP (initial_health_for) - the
-        // hardcoded 7-name table labelled everything newer "Mob"
-        // with a wrong bar scale (the R23 report).
+        // registry) and its real max HP - the hardcoded 7-name table
+        // labelled everything newer "Mob" with a wrong bar scale
+        // (the R23 report). W475: the max is size-aware
+        // (sized_max_health) so a tiny slime shows a 1-HP bar and a
+        // size-4 one a 16-HP bar.
         let targeted_mob_info: Option<(String, u8, u8)> = vx
             .raycast_mob(aim_origin, aim_forward, MOB_ATTACK_REACH * 1.5)
             .and_then(|(id, _)| vx.remote_mobs.get(&id).copied())
             .map(|m| {
                 let max =
-                    crate::mob::spawn::initial_health_for(m.kind) as u8;
+                    crate::mob::spawn::sized_max_health(m.kind, m.size) as u8;
                 (mob_display_name(m.kind), m.health, max)
             });
         let mob_bars: Vec<([f32; 3], u8, u8)> = vx
@@ -207,12 +209,12 @@ pub(crate) fn render(vx: &mut Voxel, window: &EngineWindow) {
             .filter(|m| {
                 let dying = vx.mob_dying.get(&m.id).copied().unwrap_or(0.0);
                 let max =
-                    crate::mob::spawn::initial_health_for(m.kind) as u8;
+                    crate::mob::spawn::sized_max_health(m.kind, m.size) as u8;
                 m.health > 0 && m.health < max && dying <= 0.0
             })
             .map(|m| {
                 let max =
-                    crate::mob::spawn::initial_health_for(m.kind) as u8;
+                    crate::mob::spawn::sized_max_health(m.kind, m.size) as u8;
                 (m.pos, m.health, max)
             })
             .collect();

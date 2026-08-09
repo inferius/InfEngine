@@ -266,11 +266,13 @@ pub(crate) fn kind_panic_mult(kind: u8) -> f32 {
 /// every peer.
 pub(crate) const MOB_DEATH_FADE: f32 = 0.55;
 
-// W52: bumped from 12 to 25. MC's per-player mob density caps land
-// at 70 hostile + 10 passive + 15 ambient + 5 water within a
-// 128x128 column; the demo runs a single global cap, so 25 keeps
-// the world feeling populated without overwhelming the renderer.
-pub(crate) const MOB_CAP_DEFAULT: usize = 25;
+// W52: bumped from 12 to 25. W475: raised to 50 = the sum of the
+// per-category caps (`pool::SpawnCategory::cap`, MC MobCategory
+// ratios scaled 2/5 to the engine's 80-block despawn radius). The
+// real density control is per category now; this global value
+// survives as the user-tweakable total ceiling (`/mobcap` + the
+// debug slider) and the HUD denominator.
+pub(crate) const MOB_CAP_DEFAULT: usize = 50;
 /// The unit of the `damage_mob_scaled` multiplier API: callers pass
 /// `mult = absolute_damage / MOB_HIT_DAMAGE`. W474: no longer any
 /// mob's actual damage value - per-kind melee reads
@@ -307,15 +309,11 @@ pub(crate) fn contact_damage_of(m: &MobState) -> f32 {
 }
 
 /// W474: the regen / heal ceiling for a live mob - the attribute
-/// table's MAX_HEALTH with the same spawn-time special cases
-/// `initial_health_for` applies (slime-family size^2, horse-family
-/// generateMaxHealth midpoints).
+/// table's MAX_HEALTH with the same spawn-time special cases the
+/// mint paths apply (slime-family size^2 for EVERY size since W475,
+/// horse-family generateMaxHealth midpoints).
 pub(crate) fn max_health_of(m: &MobState) -> f32 {
-    use super::kinds::{KIND_MAGMA_CUBE, KIND_SLIME};
-    if (m.kind == KIND_SLIME || m.kind == KIND_MAGMA_CUBE) && m.size > 1 {
-        return (m.size as f32) * (m.size as f32);
-    }
-    super::spawn::initial_health_for(m.kind)
+    super::spawn::sized_max_health(m.kind, m.size)
 }
 
 // ---------------------------------------------------------------

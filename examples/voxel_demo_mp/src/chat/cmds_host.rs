@@ -265,8 +265,8 @@ pub(crate) fn cmd_horde(
 /// W408: shared spawn for `/summon` + `/spawnmob`. Resolves the
 /// kind by its `MobKind::name()` (EVERY registered kind, not a
 /// hard-coded subset - the R24 rule) and spawns it a few blocks in
-/// front of the player with its MC max health
-/// (`initial_health_for`).
+/// front of the player via the shared mint (W475: sized slime
+/// family, MC max health).
 fn spawn_named_mob(
     voxel: &mut Voxel,
     arg: &str,
@@ -300,38 +300,14 @@ fn spawn_named_mob(
     )
     .normalize_or_zero();
     let spawn_at = voxel.player_pos + fwd_h * 3.0;
-    let id = voxel.next_mob_id;
-    voxel.next_mob_id = voxel.next_mob_id.wrapping_add(1).max(1);
     let pos = [spawn_at.x, spawn_at.y, spawn_at.z];
-    let hp = crate::mob::spawn::initial_health_for(kind);
-    let mut mob = MobState::new_natural(
-        id,
-        kind,
-        pos,
-        pos,
-        0.0,
-        (voxel.day_time + 1.0).rem_euclid(DAY_LENGTH_S),
-        hp,
-    );
-    // Command spawns are persistent (MC summoned mobs carry
-    // PersistenceRequired).
-    mob.persistent = true;
-    voxel.mobs.push(mob);
-    voxel.remote_mobs.insert(
-        id,
-        MobMsg {
-            id,
-            kind,
-            pos,
-            yaw: 0.0,
-            health: hp as u8,
-            head_yaw: 0.0,
-            head_pitch: 0.0,
-            baby: false,
-            size: 1,
-            sheared: false,
-        },
-    );
+    // W475: route through the shared mint so the slime family rolls
+    // its MC size (HP = size^2) here too, then flip the persistence
+    // flag (MC summoned mobs carry PersistenceRequired).
+    crate::mob::spawn::mint_mob(voxel, kind, pos, 0.0);
+    if let Some(m) = voxel.mobs.last_mut() {
+        m.persistent = true;
+    }
     lines.push(format!(
         "Spawned {}.",
         crate::mob::kinds::MobKind::from_u8(kind).name()

@@ -1,56 +1,58 @@
 //! Mob spawn loop: pick a candidate ring position around the host,
-//! probe light + standing room, decide hostile vs passive, push a
-//! fresh `MobState` + broadcast a `MobMsg`.
+//! resolve the biome's category pools, draw a weighted pack and
+//! scatter its members MC-style, each member re-validating placement.
 //!
-//! H.2 layers in the MC-style light + biome gates on top of the
-//! H.1 refactor: hostile mobs need block_light <= 7 AND
-//! effective_sky_light <= 7; passive mobs need sky_light >= 9 AND
-//! a grass block under their feet. A per-chunk soft cap (4) keeps
-//! the density tolerable around the player.
-//!
-//! H.3 will plug a biome-aware weighted pool in place of the
-//! ad-hoc kind picker at the bottom.
+//! W475 replaces the one-mob-per-attempt day / night picker with the
+//! `NaturalSpawner` shape: per-`MobCategory` pools (generated from
+//! the 26.1.2 biome jsons into `pool_table.rs`), per-category live
+//! caps, pack sizes rolled from `minCount..=maxCount` and the
+//! member scatter walk (`x += nextInt(6) - nextInt(6)` per member).
 //!
 //! MC mirror:
-//! - `net/minecraft/world/level/NaturalSpawner.java` - per-chunk
-//!   spawn dispatch + density gates. We collapse the per-chunk
-//!   loop to "one candidate per host tick" since the demo world
-//!   has a single live player at most.
+//! - `net/minecraft/world/level/NaturalSpawner.java` -
+//!   `spawnCategoryForPosition`: pack roll + scatter + per-member
+//!   validation; `SpawnState` - per-category caps.
 //! - `net/minecraft/world/entity/monster/Monster.java::checkMonsterSpawnRules`
 //!   - block_light <= 7 gate (light-driven spawn).
 //! - `net/minecraft/world/entity/animal/Animal.java::checkAnimalSpawnRules`
-//!   - sky_light >= 9 + grass-below gate.
+//!   - sky_light >= 9 + spawnable-floor gate (per-kind block tags).
+//!
+//! The per-species placement predicates (slime / bat / glow squid /
+//! floor tags) live in `spawn_rules.rs`.
 
 use infengine_voxel::CHUNK_SIZE;
 
 use crate::net::{MobMsg, NetRole};
+use crate::worldgen::biome_at;
 use crate::{DAY_LENGTH_S, Voxel, day_night};
 
-use super::kinds::{KIND_SKELETON, KIND_SPIDER, KIND_ZOMBIE};
-use super::light::{
-    has_solid_floor, has_standing_room, is_bright_enough_for_passive,
-    is_dark_enough_for_hostile, is_grass_below,
+use super::kinds::{KIND_MAGMA_CUBE, KIND_SLIME};
+use super::light::{has_solid_floor, has_standing_room};
+use super::pool::{
+    ALL_CATEGORIES, CategoryPools, SpawnCategory, SpawnRow, category_of_kind,
+    pool_for, rows_of, weighted_pick,
 };
-use super::pool::{pool_for, weighted_pick};
+use super::pool_table;
+use super::spawn_rules::{is_water_at, validate_member};
 use super::state::MobState;
-use crate::worldgen::biome_at;
 
 /// Period (seconds) between spawn attempts. W52 - tightened from
 /// 6.0 to 2.0. Each attempt now tries SPAWN_ATTEMPTS_PER_TICK
-/// columns and bails on the first that lands; the per-chunk cap
-/// + global mob_cap still hold the density.
+/// columns and bails on the first that lands a pack; the per-chunk
+/// cap + per-category caps still hold the density.
 pub(crate) const MOB_SPAWN_PERIOD: f32 = 2.0;
 
 /// W52: number of candidate columns the spawner probes per spawn
 /// pass. MC's NaturalSpawner walks every nearby chunk and tries 3
 /// "pack" attempts per chunk; we approximate with N attempts in a
 /// single tick over the ring around the player. The first
-/// successful spawn wins; the rest are dropped without retry.
+/// successful pack wins; the rest are dropped without retry.
 pub(crate) const SPAWN_ATTEMPTS_PER_TICK: usize = 4;
 
-/// Per-chunk soft cap on simultaneous mobs. MC keeps a per-mob-
-/// category cap; we use a single all-kinds cap of 4 to stop a
-/// single grass field from monopolising the spawn budget.
+/// Per-chunk soft cap on simultaneous mobs, checked at the pack
+/// ANCHOR (members of one pack may briefly push a chunk past it -
+/// MC has no per-chunk mob cap at all, only the category caps, so
+/// the anchor gate is the engine's stricter extra).
 pub(crate) const PER_CHUNK_SOFT_CAP: usize = 4;
 
 /// Inner radius (blocks) of the spawn ring around the player.
@@ -99,6 +101,19 @@ pub(crate) fn mobs_in_chunk(voxel: &Voxel, wpos: [i32; 3]) -> usize {
         .count()
 }
 
+/// W475: live mobs counted against one MC `MobCategory` cap. A kind
+/// counts toward the category `EntityType.getCategory()` names for
+/// it, regardless of which pool list drew it (the jungle ocelot is
+/// drawn from the monster list but counts as a CREATURE - exactly
+/// MC's bookkeeping). MISC kinds (villager, iron golem) never count.
+pub(crate) fn category_count(voxel: &Voxel, cat: SpawnCategory) -> usize {
+    voxel
+        .mobs
+        .iter()
+        .filter(|m| category_of_kind(m.kind) == Some(cat))
+        .count()
+}
+
 /// Probe the column at `(wx, wz)` for a placement target. Returns
 /// the world voxel coord of the spawn cell (the AIR cell the mob
 /// will stand in - one above the surface block) plus the surface
@@ -143,19 +158,6 @@ pub(crate) fn is_slime_chunk(world_seed: u32, cx: i32, cz: i32) -> bool {
     bits % 10 == 0
 }
 
-/// True for hostile kinds in the H.3 pool. Mirrors
-/// `MobKind::is_hostile` but consumes the raw u8 the pool stores.
-fn is_hostile_kind(kind: u8) -> bool {
-    matches!(
-        kind,
-        KIND_ZOMBIE
-            | KIND_SKELETON
-            | KIND_SPIDER
-            | super::kinds::KIND_MAGMA_CUBE
-            | super::kinds::KIND_ZOMBIE_VILLAGER
-    )
-}
-
 /// W145: mint one mob from a spawn egg at `pos` (clicked-cell
 /// centre). Host/offline only - mirrors the /spawnmob mint but the
 /// mob stays a NATURAL spawn (despawnable), exactly like MC eggs.
@@ -173,18 +175,16 @@ pub(crate) fn mint_mob(voxel: &mut crate::Voxel, kind: u8, pos: [f32; 3], yaw: f
     }
     let id = voxel.next_mob_id;
     voxel.next_mob_id = voxel.next_mob_id.wrapping_add(1).max(1);
-    // W429: slimes mint at a random MC size (1 << rng(3) = 1/2/4)
-    // with HP = size^2 (Slime.setSize).
-    let size: u8 = if kind == crate::mob::kinds::KIND_SLIME {
+    // W429/W475: the slime FAMILY mints at a random MC size
+    // (`Slime.finalizeSpawn`: 1 << rng(3) = 1/2/4; the magma cube
+    // inherits it) with HP = size^2 (`Slime.setSize`). W475 extends
+    // the roll to magma cubes - they minted stuck at size 1 before.
+    let size: u8 = if kind == KIND_SLIME || kind == KIND_MAGMA_CUBE {
         1u8 << ((id.wrapping_mul(0x9E37_79B9) >> 9) % 3)
     } else {
         1
     };
-    let hp = if size > 1 {
-        (size as f32) * (size as f32)
-    } else {
-        initial_health_for(kind)
-    };
+    let hp = sized_max_health(kind, size);
     let mut mob =
         crate::mob::state::MobState::new_natural(id, kind, pos, pos, yaw, 0.0, hp);
     mob.size = size;
@@ -241,20 +241,16 @@ pub(crate) fn mint_structure_mob(
 ///
 /// W474: reads the generated `attributes::MOB_ATTRIBUTES` table
 /// (per-kind `createAttributes` MAX_HEALTH from the decompiled
-/// source) - this fixed zombie/skeleton 14 -> 20, spider 12 -> 16
-/// and cow 8 -> 10. The arms below are the kinds whose LIVE spawn
-/// HP deviates from the registry base in MC itself:
+/// source). The arms below are the kinds whose LIVE spawn HP
+/// deviates from the registry base in MC itself:
 pub(crate) fn initial_health_for(kind: u8) -> f32 {
     match kind {
-        // Slime: HP is size^2 (`Slime.setSize`); the mint path
-        // overrides for rolled sizes > 1 and this 16 stands in for
-        // the un-sized natural-spawn path (a "large" size-4 slime).
-        // Sizing natural spawns is queued with the spawn-pool wave.
-        x if x == super::kinds::KIND_SLIME => 16.0,
-        // Magma cube: engine cubes carry the MC size-2 identity
-        // (hitbox 1.02) -> size^2 = 4 HP, though `MobState.size`
-        // still mints at 1 (size mint queued with the spawn wave).
-        x if x == super::kinds::KIND_MAGMA_CUBE => 4.0,
+        // Slime family: HP is size^2 (`Slime.setSize`). W475 sizes
+        // every mint path via `sized_max_health`; these arms are the
+        // no-size-context fallback only (16 = the old size-4
+        // stand-in, 4 = the magma size-2 identity).
+        x if x == KIND_SLIME => 16.0,
+        x if x == KIND_MAGMA_CUBE => 4.0,
         // Horse family: `randomizeAttributes` rerolls MAX_HEALTH via
         // generateMaxHealth (15 + rand(8) + rand(9) = 15..30) at
         // spawn - the table's 53 base never walks. Midpoint 22.
@@ -265,185 +261,296 @@ pub(crate) fn initial_health_for(kind: u8) -> f32 {
     }
 }
 
-/// Decide which kind to spawn at the candidate cell. Returns
-/// `None` when the light gates reject every entry in the biome's
-/// active pool.
-///
-/// H.3: looks up the biome at `(wx, wz)` via `biome_at`, fetches
-/// the day / night pool from `pool::pool_for`, draws a weighted
-/// candidate, then validates the candidate against the light
-/// gates. If the draw fails the gate the spawn is skipped (no
-/// retries this tick - the caller will try a fresh ring position
-/// on the next spawn period).
-pub(crate) fn pick_kind_for(
-    voxel: &Voxel,
-    wpos: [i32; 3],
-    day_time: f32,
-    rng: &mut SpawnRng<'_>,
-) -> Option<u8> {
-    let (sun_dir, _sky) = day_night(day_time);
-    let is_night = sun_dir.y < 0.0;
-    // W378: structure spawn overrides (MC per-structure monster
-    // pools). The outpost yard breeds pillagers day and night; the
-    // mansion grounds their vindicators + the odd evoker.
-    if matches!(
-        voxel.current_worldgen_ctx().profile,
-        crate::worldgen::WorldGen::Mc
-    ) {
-        let ctx = voxel.current_worldgen_ctx();
-        // W383: register this thread for the probe cold-build
-    // budget (worker threads stay exempt).
-    crate::worldgen::mcgen::probe_budget::mark_frame_thread();
-    if crate::worldgen::mcgen::outpost::pos_in_outpost(&ctx, wpos) {
-            return Some(super::kinds::KIND_PILLAGER);
-        }
-        // W380: monument waters teem with guardians (1-in-20 an
-        // elder) - the MC monument spawn override.
-        if crate::worldgen::mcgen::monument::pos_in_monument(&ctx, wpos) {
-            return Some(if rng.next_u32().is_multiple_of(20) {
-                super::kinds::KIND_ELDER_GUARDIAN
-            } else {
-                super::kinds::KIND_GUARDIAN
-            });
-        }
-        if crate::worldgen::mcgen::mansion::pos_in_mansion(&ctx, wpos) {
-            return Some(if rng.next_u32().is_multiple_of(5) {
-                super::kinds::KIND_EVOKER
-            } else {
-                super::kinds::KIND_VINDICATOR
-            });
-        }
+/// W475: max HP for a `(kind, size)` pair - the slime family scales
+/// as size^2 (`Slime.setSize` updates MAX_HEALTH), every other kind
+/// reads the flat per-kind value.
+pub(crate) fn sized_max_health(kind: u8, size: u8) -> f32 {
+    if kind == KIND_SLIME || kind == KIND_MAGMA_CUBE {
+        let s = size.max(1) as f32;
+        return s * s;
     }
-    // W298/W300/W327: ceiled dims use the NETHER pool - the real
-    // MC nether_wastes weights (zombified_piglin 100 / ghast 50 /
-    // magma_cube 2), all three kinds ported. Any light level, no
-    // grass gate - zombified piglins spawn in full glowstone light
-    // in vanilla.
+    initial_health_for(kind)
+}
+
+// ----------------------------------------------------------------
+// W475 - bucket + category selection.
+// ----------------------------------------------------------------
+
+/// Resolve the category pools + context flags for a spawn column.
+/// Returns `(pools, in_swamp_bucket, ceiled_dim)`.
+pub(crate) fn spawn_bucket(
+    voxel: &Voxel,
+    wx: i32,
+    wz: i32,
+) -> (&'static CategoryPools, bool, bool) {
     let dim_def =
         crate::worldgen::dim_registry::dim_def_or_overworld(&voxel.current_dim);
     if dim_def.has_ceiling {
-        static NETHER_POOL_LOGGED: std::sync::Once = std::sync::Once::new();
-        NETHER_POOL_LOGGED.call_once(|| {
-            // W473: the old text claimed ZOMBIE/SKELETON/SPIDER
-            // stand-ins; the pool below has spawned the real kinds
-            // since W300/W327. Striders + regular piglins have no
-            // pool slot yet (not ported).
-            tracing::info!(
-                "W298: nether pool active - zombified_piglin 100 / \
-                 ghast 50 / magma_cube 2 (strider + piglin pool \
-                 slots pending their ports)"
-            );
-        });
-        let roll = rng.next_f32() * 152.0;
-        // W300/W327: the real nether_wastes pool - zombified piglin
-        // 100 / ghast 50 / magma cube 2, all three ported now.
-        return if roll < 100.0 {
-            Some(super::kinds::KIND_ZOMBIFIED_PIGLIN)
-        } else if roll < 150.0 {
-            Some(super::kinds::KIND_GHAST)
-        } else {
-            Some(super::kinds::KIND_MAGMA_CUBE)
-        };
+        // W300/W327/W475: the real nether_wastes pool (now incl.
+        // enderman 1; strider + piglin skip-logged).
+        return (&pool_table::NETHER, false, true);
     }
-    // W354: the pool biome comes from the ACTIVE worldgen. The old
-    // call always sampled the legacy noise biome map - under the Mc
-    // profile that map has nothing to do with the generated world,
-    // so cows and chickens spawned in deserts (the R17 report).
-    let biome = {
-        let ctx = voxel.current_worldgen_ctx();
-        if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
-            // W464: Slime.checkSlimeSpawnRules - inside a
-            // deterministic slime chunk below y=40 a spawn attempt
-            // becomes a slime on the 1-in-10 roll, at ANY light
-            // level (the swamp night surface path stays in the
-            // biome pools).
-            if wpos[1] < 40
-                && is_slime_chunk(
-                    ctx.effective_seed(),
-                    wpos[0].div_euclid(16),
-                    wpos[2].div_euclid(16),
-                )
-                && rng.next_f32() < 0.1
-            {
-                return Some(super::kinds::KIND_SLIME);
-            }
-            // W382: mushroom fields have their own pool (mooshroom
-            // herds by day, NOTHING at night - the legacy Biome
-            // enum has no variant for it, so branch before the
-            // mapper).
-            let mc = crate::worldgen::mcgen::terrain::mc_full_biome_at(
-                &ctx, wpos[0], wpos[2],
-            );
-            if mc.name().contains("mushroom") {
-                let active = if is_night {
-                    super::pool::MUSHROOM_NIGHT
-                } else {
-                    super::pool::MUSHROOM_DAY
-                };
-                return weighted_pick(active, rng.next_f32());
-            }
-            // W388: oceans run their own pool. The spawn pos sits
-            // one above the ocean FLOOR (mc_floor_at = top solid),
-            // i.e. submerged - exactly where squid belong. Aquatic
-            // kinds swap the grass/light gates for a water check;
-            // the drowned keeps the hostile dark gate.
-            if mc.name().contains("ocean") {
-                let active = if is_night {
-                    super::pool::OCEAN_NIGHT
-                } else {
-                    super::pool::OCEAN_DAY
-                };
-                let k = weighted_pick(active, rng.next_f32())?;
-                let aquatic = k == super::kinds::KIND_SQUID
-                    || k == super::kinds::KIND_GLOW_SQUID;
-                if aquatic {
-                    if voxel.world.get(wpos).0 != crate::block::WATER_ID {
-                        return None;
-                    }
-                    return Some(k);
-                }
-                if is_hostile_kind(k)
-                    && !is_dark_enough_for_hostile(voxel, wpos)
-                {
-                    return None;
-                }
-                return Some(k);
-            }
-            mc_biome_to_pool(
-                crate::worldgen::mcgen::terrain::mc_full_biome_at(
-                    &ctx, wpos[0], wpos[2],
-                )
-                .name(),
-            )
-        } else {
-            biome_at(wpos[0] as f32, wpos[2] as f32, voxel.base_seed)
+    let ctx = voxel.current_worldgen_ctx();
+    if matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+        // W383: register this thread for the probe cold-build
+        // budget (worker threads stay exempt).
+        crate::worldgen::mcgen::probe_budget::mark_frame_thread();
+        let mc =
+            crate::worldgen::mcgen::terrain::mc_full_biome_at(&ctx, wx, wz);
+        let name = mc.name();
+        // W382: mushroom fields have their own pool (mooshroom
+        // herds, NO monster category at all - the island is safe).
+        if name.contains("mushroom") {
+            return (&pool_table::MUSHROOM, false, false);
         }
-    };
-    let pool = pool_for(biome);
-    let active = if is_night { pool.night } else { pool.day };
-    let candidate = weighted_pick(active, rng.next_f32())?;
-    // Validate via the H.2 light + grass gates.
-    if is_hostile_kind(candidate) {
-        if !is_dark_enough_for_hostile(voxel, wpos) {
-            return None;
+        // W388: oceans run the ocean.json pools.
+        if name.contains("ocean") {
+            return (&pool_table::OCEAN, false, false);
         }
+        let bucket = mc_biome_to_pool(name);
+        let in_swamp = matches!(bucket, crate::worldgen::Biome::Swamp);
+        (pool_for(bucket), in_swamp, false)
     } else {
-        // Passive: bright enough AND grass below.
-        if !is_bright_enough_for_passive(voxel, wpos) {
-            return None;
-        }
-        if !is_grass_below(voxel, wpos) {
-            return None;
-        }
+        let biome = biome_at(wx as f32, wz as f32, voxel.base_seed);
+        let in_swamp = matches!(biome, crate::worldgen::Biome::Swamp);
+        (pool_for(biome), in_swamp, false)
     }
-    Some(candidate)
 }
 
-/// Try to spawn one mob this tick. Returns the new `next_mob_id`
-/// (incremented if a mob was placed, unchanged otherwise).
+/// W378 structure spawn overrides (MC per-structure monster pools).
+/// The outpost yard breeds pillagers day and night; the monument
+/// waters teem with guardians (1-in-20 an elder); the mansion
+/// grounds vindicators + the odd evoker.
+fn structure_override(
+    voxel: &Voxel,
+    wpos: [i32; 3],
+    rng: &mut SpawnRng<'_>,
+) -> Option<u8> {
+    let ctx = voxel.current_worldgen_ctx();
+    if !matches!(ctx.profile, crate::worldgen::WorldGen::Mc) {
+        return None;
+    }
+    crate::worldgen::mcgen::probe_budget::mark_frame_thread();
+    if crate::worldgen::mcgen::outpost::pos_in_outpost(&ctx, wpos) {
+        return Some(super::kinds::KIND_PILLAGER);
+    }
+    if crate::worldgen::mcgen::monument::pos_in_monument(&ctx, wpos) {
+        return Some(if rng.next_u32().is_multiple_of(20) {
+            super::kinds::KIND_ELDER_GUARDIAN
+        } else {
+            super::kinds::KIND_GUARDIAN
+        });
+    }
+    if crate::worldgen::mcgen::mansion::pos_in_mansion(&ctx, wpos) {
+        return Some(if rng.next_u32().is_multiple_of(5) {
+            super::kinds::KIND_EVOKER
+        } else {
+            super::kinds::KIND_VINDICATOR
+        });
+    }
+    None
+}
+
+/// The categories a spawn attempt may draw from right now.
 ///
-/// Caller has already established: server-role authority, cap not
-/// breached, last spawn was at least `MOB_SPAWN_PERIOD` ago.
+/// R24 NOTE (the engine's monster gate approximation): MC gates
+/// monster spawning by LIGHT only - monsters spawn in dark caves at
+/// noon. The engine approximates with the day / night clock (night
+/// == dark surface) because its column probe lands on the surface;
+/// keeping the clock gate preserves the pre-W475 spawning cadence.
+/// Ceiled dims (nether) have no sun, so Monster stays active around
+/// the clock there. Creature keeps the inverse day gate; ambient +
+/// water categories run any time (bats + glow squids probe
+/// underground where the clock does not reach).
+pub(crate) fn eligible_categories(
+    voxel: &Voxel,
+    pools: &'static CategoryPools,
+    is_night: bool,
+    ceiled: bool,
+) -> ([SpawnCategory; 6], usize) {
+    let mut cats = [SpawnCategory::Monster; 6];
+    let mut n = 0;
+    for c in ALL_CATEGORIES {
+        let clock_ok = match c {
+            SpawnCategory::Monster => is_night || ceiled,
+            SpawnCategory::Creature => !is_night,
+            _ => true,
+        };
+        if clock_ok
+            && !rows_of(pools, c).is_empty()
+            && category_count(voxel, c) < c.cap()
+        {
+            cats[n] = c;
+            n += 1;
+        }
+    }
+    (cats, n)
+}
+
+/// Random y-scan for a cave cell strictly below the column surface:
+/// pick a start y, descend to the first air pocket, land on its
+/// floor. Serves the ambient (bat) category.
+fn probe_cave(
+    voxel: &Voxel,
+    wx: i32,
+    wz: i32,
+    rng: &mut SpawnRng<'_>,
+) -> Option<[i32; 3]> {
+    let surface = voxel.surface_y_below(wx, wz, crate::WORLD_MAX_Y)?;
+    let lo = crate::WORLD_MIN_Y + 2;
+    let hi = surface - 5;
+    if hi <= lo {
+        return None;
+    }
+    let mut y = lo + (rng.next_u32() % (hi - lo) as u32) as i32;
+    // Descend out of solid rock into the first air cell.
+    while y > crate::WORLD_MIN_Y && !voxel.world.get([wx, y, wz]).is_air() {
+        y -= 1;
+    }
+    if y <= crate::WORLD_MIN_Y {
+        return None;
+    }
+    // Descend through the pocket onto its floor.
+    while y > crate::WORLD_MIN_Y && voxel.world.get([wx, y - 1, wz]).is_air() {
+        y -= 1;
+    }
+    if y <= crate::WORLD_MIN_Y {
+        return None;
+    }
+    Some([wx, y, wz])
+}
+
+/// Random y-scan for an underground water cell at or below the glow
+/// squid depth (`sea_level - 33`). Serves the
+/// underground_water_creature category.
+fn probe_underground_water(
+    voxel: &Voxel,
+    wx: i32,
+    wz: i32,
+    rng: &mut SpawnRng<'_>,
+) -> Option<[i32; 3]> {
+    let surface = voxel.surface_y_below(wx, wz, crate::WORLD_MAX_Y)?;
+    let hi = (crate::worldgen::climate::SEA_LEVEL - 33).min(surface - 1);
+    let lo = crate::WORLD_MIN_Y + 1;
+    if hi <= lo {
+        return None;
+    }
+    let mut y = lo + (rng.next_u32() % (hi - lo) as u32) as i32;
+    while y > crate::WORLD_MIN_Y {
+        if is_water_at(voxel, [wx, y, wz]) {
+            return Some([wx, y, wz]);
+        }
+        y -= 1;
+    }
+    None
+}
+
+/// Mint one natural pack member at `wpos`. Rolls the slime-family
+/// size (`Slime.finalizeSpawn`: 1 << rng(3); the difficulty-scaled
+/// bump toward bigger sizes is left out - the engine has no local
+/// difficulty) with HP = size^2, and gives the mob a random yaw the
+/// way `NaturalSpawner` snaps fresh entities to `rand * 360`.
+fn mint_pack_member(
+    voxel: &mut Voxel,
+    kind: u8,
+    wpos: [i32; 3],
+    day_time: f32,
+    mut next_id: u32,
+    rng: &mut SpawnRng<'_>,
+) -> u32 {
+    let id = next_id;
+    next_id = next_id.wrapping_add(1).max(1);
+    let pos = [
+        wpos[0] as f32 + 0.5,
+        wpos[1] as f32,
+        wpos[2] as f32 + 0.5,
+    ];
+    let yaw = rng.next_f32() * std::f32::consts::TAU;
+    let size: u8 = if kind == KIND_SLIME || kind == KIND_MAGMA_CUBE {
+        1u8 << (rng.next_u32() % 3)
+    } else {
+        1
+    };
+    let hp = sized_max_health(kind, size);
+    let mut mob = MobState::new_natural(
+        id,
+        kind,
+        pos,
+        pos,
+        yaw,
+        (day_time + 1.0).rem_euclid(DAY_LENGTH_S),
+        hp,
+    );
+    mob.size = size;
+    voxel.mobs.push(mob);
+    voxel.remote_mobs.insert(
+        id,
+        MobMsg {
+            id,
+            kind,
+            pos,
+            yaw,
+            health: hp.max(0.0).round() as u8,
+            head_yaw: yaw,
+            head_pitch: 0.0,
+            baby: false,
+            size,
+            sheared: false,
+        },
+    );
+    next_id
+}
+
+/// Context one spawn pack shares across its members.
+pub(crate) struct PackCtx {
+    pub(crate) cat: SpawnCategory,
+    pub(crate) in_swamp: bool,
+    pub(crate) ceiled: bool,
+    pub(crate) day_time: f32,
+}
+
+/// Scatter + validate + mint one pack of `row.kind` around `anchor`.
+/// The MC member walk: every member (including the first) shifts
+/// `x += nextInt(6) - nextInt(6)` / same for z from the previous
+/// member's spot, keeps the anchor Y, and re-validates placement.
+/// Returns `(next_id, minted)`.
+pub(crate) fn spawn_pack(
+    voxel: &mut Voxel,
+    row: &'static SpawnRow,
+    ctx: &PackCtx,
+    anchor: [i32; 3],
+    mut next_id: u32,
+    rng: &mut SpawnRng<'_>,
+) -> (u32, usize) {
+    let span = (row.max_count - row.min_count) as u32 + 1;
+    let pack = row.min_count as u32 + rng.next_u32() % span;
+    let mut x = anchor[0];
+    let mut z = anchor[2];
+    let y = anchor[1];
+    let mut minted = 0usize;
+    for _ in 0..pack {
+        x += (rng.next_u32() % 6) as i32 - (rng.next_u32() % 6) as i32;
+        z += (rng.next_u32() % 6) as i32 - (rng.next_u32() % 6) as i32;
+        let wpos = [x, y, z];
+        if !validate_member(
+            voxel, row.kind, ctx.cat, wpos, ctx.in_swamp, ctx.ceiled, rng,
+        ) {
+            continue;
+        }
+        next_id =
+            mint_pack_member(voxel, row.kind, wpos, ctx.day_time, next_id, rng);
+        minted += 1;
+    }
+    (next_id, minted)
+}
+
+/// Try to spawn one PACK this tick. Returns the new `next_mob_id`
+/// (advanced if at least one member was placed, unchanged
+/// otherwise).
+///
+/// Caller has already established: server-role authority, global
+/// cap not breached, last spawn was at least `MOB_SPAWN_PERIOD`
+/// ago.
 pub(crate) fn try_spawn_one(
     voxel: &mut Voxel,
     day_time: f32,
@@ -459,51 +566,68 @@ pub(crate) fn try_spawn_one(
     let cz = voxel.player_pos.z;
     let wx = (cx + angle.cos() * radius).round() as i32;
     let wz = (cz + angle.sin() * radius).round() as i32;
-    let Some((spawn_pos, _sy)) = probe_column(voxel, wx, wz) else {
+    let Some((surface_anchor, _sy)) = probe_column(voxel, wx, wz) else {
         return next_id;
     };
     // Per-chunk cap: bail if this chunk already holds N mobs.
-    if mobs_in_chunk(voxel, spawn_pos) >= PER_CHUNK_SOFT_CAP {
+    if mobs_in_chunk(voxel, surface_anchor) >= PER_CHUNK_SOFT_CAP {
         return next_id;
     }
-    // Structural gate: need a solid floor + two air cells stacked.
-    if !has_solid_floor(voxel, spawn_pos) || !has_standing_room(voxel, spawn_pos) {
+    // W378 structure overrides stay single-mob mints (their MC
+    // spawner data is a follow-up; the override IS the pool here).
+    if let Some(kind) = structure_override(voxel, surface_anchor, rng) {
+        if !has_solid_floor(voxel, surface_anchor)
+            || !has_standing_room(voxel, surface_anchor)
+        {
+            return next_id;
+        }
+        next_id = mint_pack_member(
+            voxel,
+            kind,
+            surface_anchor,
+            day_time,
+            next_id,
+            rng,
+        );
+        voxel.last_mob_spawn_time = day_time;
         return next_id;
     }
-    // Decide kind via light + biome rules.
-    let Some(kind) = pick_kind_for(voxel, spawn_pos, day_time, rng) else {
+    let (pools, in_swamp, ceiled) = spawn_bucket(voxel, wx, wz);
+    let (sun_dir, _sky) = day_night(day_time);
+    let is_night = sun_dir.y < 0.0;
+    let (cats, n) = eligible_categories(voxel, pools, is_night, ceiled);
+    if n == 0 {
+        return next_id;
+    }
+    let cat = cats[(rng.next_u32() as usize) % n];
+    let Some(row) = weighted_pick(rows_of(pools, cat), rng.next_f32()) else {
         return next_id;
     };
-    let id = next_id;
-    next_id = next_id.wrapping_add(1).max(1);
-    let pos = [spawn_pos[0] as f32 + 0.5, spawn_pos[1] as f32, spawn_pos[2] as f32 + 0.5];
-    let mob = MobState::new_natural(
-        id,
-        kind,
-        pos,
-        pos,
-        0.0,
-        (day_time + 1.0).rem_euclid(DAY_LENGTH_S),
-        initial_health_for(kind),
-    );
-    let initial_hp = initial_health_for(kind) as u8;
-    voxel.mobs.push(mob);
-    voxel.remote_mobs.insert(
-        id,
-        MobMsg {
-            id,
-            kind,
-            pos,
-            yaw: 0.0,
-            health: initial_hp,
-            head_yaw: 0.0,
-            head_pitch: 0.0,
-            baby: false,
-            size: 1,
-            sheared: false,
-        },
-    );
-    voxel.last_mob_spawn_time = day_time;
+    // Category-specific anchor: ambient (bat) + underground water
+    // (glow squid) probe BELOW the surface; everyone else uses the
+    // surface column cell (water_creature lands one above the ocean
+    // floor = submerged, the W388 squid spot).
+    let anchor = match cat {
+        SpawnCategory::Ambient => {
+            let Some(a) = probe_cave(voxel, wx, wz, rng) else {
+                return next_id;
+            };
+            a
+        }
+        SpawnCategory::UndergroundWaterCreature => {
+            let Some(a) = probe_underground_water(voxel, wx, wz, rng) else {
+                return next_id;
+            };
+            a
+        }
+        _ => surface_anchor,
+    };
+    let pack_ctx = PackCtx { cat, in_swamp, ceiled, day_time };
+    let (id_after, minted) = spawn_pack(voxel, row, &pack_ctx, anchor, next_id, rng);
+    next_id = id_after;
+    if minted > 0 {
+        voxel.last_mob_spawn_time = day_time;
+    }
     next_id
 }
 
@@ -518,11 +642,13 @@ pub(crate) fn spawn_pass(voxel: &mut Voxel, day_time: f32, rng_state: &mut u32) 
     if matches!(voxel.net, NetRole::Client { .. }) {
         return;
     }
+    // W475: name the MC species the generated pool table had to
+    // skip, once per process.
+    super::pool::log_skipped_species_once();
     // W52: try up to SPAWN_ATTEMPTS_PER_TICK ring positions before
-    // giving up this tick. Stops on the first successful spawn so
-    // density still respects the per-chunk + global caps.
+    // giving up this tick. Stops on the first successful pack so
+    // density still respects the per-chunk + category caps.
     let mut rng = SpawnRng::new(rng_state);
-    let before = voxel.next_mob_id;
     for _ in 0..SPAWN_ATTEMPTS_PER_TICK {
         if voxel.mobs.len() >= voxel.mob_cap {
             break;
@@ -533,9 +659,6 @@ pub(crate) fn spawn_pass(voxel: &mut Voxel, day_time: f32, rng_state: &mut u32) 
             break;
         }
     }
-    // Defensive: if every attempt bailed without spawning, leave
-    // next_mob_id untouched (try_spawn_one already preserved it).
-    let _ = before;
 }
 
 /// W354: MC biome name -> spawn-pool bucket. Substring matching over
@@ -586,56 +709,19 @@ pub(crate) fn mc_biome_to_pool(name: &str) -> crate::worldgen::Biome {
 
 #[cfg(test)]
 mod tests {
-    //! Live-Voxel tests for the spawn-loop gates. Each test stamps
-    //! the world + lighting state by hand, then calls the gate
-    //! predicates + the `try_spawn_one` entry point.
+    //! Live-Voxel tests for the pack / category machinery. The
+    //! per-kind placement predicates are tested next door in
+    //! `spawn_rules.rs`; the world-stamping helpers are shared from
+    //! `spawn_rules::teststamp`.
 
+    use super::super::kinds::{KIND_SHEEP, KIND_ZOMBIE};
+    use super::super::spawn_rules::teststamp::stamp_platform;
     use super::*;
-    use super::super::kinds::KIND_SHEEP;
     use crate::Voxel;
-    use infengine_voxel::{BlockId, CHUNK_SIZE, ChunkCoord};
-
-    fn stamp_light(v: &mut Voxel, w: [i32; 3], block: u8, sky: u8) {
-        let cs = CHUNK_SIZE as i32;
-        let cc: ChunkCoord = [
-            w[0].div_euclid(cs),
-            w[1].div_euclid(cs),
-            w[2].div_euclid(cs),
-        ];
-        let lc = [
-            w[0].rem_euclid(cs) as u32,
-            w[1].rem_euclid(cs) as u32,
-            w[2].rem_euclid(cs) as u32,
-        ];
-        let g = v.lighting.ensure(cc);
-        g.set_block(lc, block);
-        g.set_sky(lc, sky);
-    }
-
-    fn stamp_grass_platform(v: &mut Voxel, w: [i32; 3]) {
-        // Place a grass block one below the spawn target so passive
-        // rules + standing room both pass. The voxel world is empty
-        // on `Voxel::new()` so we need to mint the owning chunk
-        // before writing - `World::set` is a no-op for unloaded
-        // chunks.
-        use infengine_voxel::{Chunk, CHUNK_SIZE};
-        let cs = CHUNK_SIZE as i32;
-        let floor_w = [w[0], w[1] - 1, w[2]];
-        let cc = [
-            floor_w[0].div_euclid(cs),
-            floor_w[1].div_euclid(cs),
-            floor_w[2].div_euclid(cs),
-        ];
-        if v.world.chunk(cc).is_none() {
-            v.world.insert_chunk(cc, Chunk::empty());
-        }
-        v.world.set(floor_w, BlockId(3));
-    }
 
     #[test]
     fn per_chunk_cap_blocks_excess_spawns() {
         let mut v = Voxel::new();
-        // Stuff the chunk at world origin with the per-chunk cap.
         for i in 0..PER_CHUNK_SOFT_CAP {
             v.mobs.push(MobState::new_natural(
                 (i as u32) + 1,
@@ -701,76 +787,182 @@ mod tests {
     }
 
     #[test]
-    fn pick_kind_chooses_hostile_in_dark() {
-        // Dark cell (block + sky both 0): hostile gate passes. At
-        // night with roll < 0.6 we get a zombie; with roll >= 0.6
-        // we fall through to passive, which also gates on grass.
+    fn spawn_pack_respects_bounds_scatter_and_validation() {
+        // A 4-4 sheep row on a big lit grass platform mints exactly
+        // 4 members, all within the MC scatter envelope (4 steps of
+        // +-5 = Chebyshev 20) and all standing on grass.
+        static ROW: SpawnRow = SpawnRow {
+            kind: KIND_SHEEP,
+            weight: 12,
+            min_count: 4,
+            max_count: 4,
+        };
+        let mut v = Voxel::new();
+        v.day_time = 0.0;
+        stamp_platform(&mut v, 0, 0, 59, 30, 3, 15);
+        let mut seed = 0xBEEFu32;
+        let mut rng = SpawnRng::new(&mut seed);
+        let day_ctx = PackCtx {
+            cat: SpawnCategory::Creature,
+            in_swamp: false,
+            ceiled: false,
+            day_time: 0.0,
+        };
+        let (next_id, minted) =
+            spawn_pack(&mut v, &ROW, &day_ctx, [0, 60, 0], 1, &mut rng);
+        assert_eq!(minted, 4, "full pack on a perfect platform");
+        assert_eq!(next_id, 5);
+        for m in &v.mobs {
+            assert_eq!(m.kind, KIND_SHEEP);
+            let dx = (m.pos[0] - 0.5).abs();
+            let dz = (m.pos[2] - 0.5).abs();
+            assert!(dx <= 20.0 && dz <= 20.0, "scatter escaped: {:?}", m.pos);
+        }
+        // Variable pack bounds: a 2-5 row over many seeds stays in
+        // 0..=5 and hits the min..=max span when everything
+        // validates.
+        static TROW: SpawnRow = SpawnRow {
+            kind: KIND_SHEEP,
+            weight: 5,
+            min_count: 2,
+            max_count: 5,
+        };
+        for s in 1..40u32 {
+            let mut v = Voxel::new();
+            v.day_time = 0.0;
+            stamp_platform(&mut v, 0, 0, 59, 30, 3, 15);
+            let mut seed = s.wrapping_mul(0x9E37_79B9);
+            let mut rng = SpawnRng::new(&mut seed);
+            let (_, minted) =
+                spawn_pack(&mut v, &TROW, &day_ctx, [0, 60, 0], 1, &mut rng);
+            assert!(minted <= 5, "pack overshot maxCount: {minted}");
+        }
+        // Validation per member: the same row on STONE mints zero.
+        let mut v = Voxel::new();
+        v.day_time = 0.0;
+        stamp_platform(&mut v, 0, 0, 59, 30, 1, 15);
+        let mut seed = 0xBEEFu32;
+        let mut rng = SpawnRng::new(&mut seed);
+        let (_, minted) =
+            spawn_pack(&mut v, &ROW, &day_ctx, [0, 60, 0], 1, &mut rng);
+        assert_eq!(minted, 0, "sheep pack on stone must fail per member");
+    }
+
+    #[test]
+    fn sized_slime_packs_mint_hp_size_squared() {
+        static ROW: SpawnRow = SpawnRow {
+            kind: KIND_SLIME,
+            weight: 100,
+            min_count: 4,
+            max_count: 4,
+        };
         let mut v = Voxel::new();
         v.day_time = crate::DAY_LENGTH_S * 0.75; // midnight
-        stamp_light(&mut v, [10, 60, 10], 0, 0);
-        // No grass under the cell -> passive fallback fails too,
-        // so a roll >= 0.6 returns None. We deterministically pick
-        // a seed that lands < 0.6 on the first call.
-        let mut seed = 0x12345u32;
-        let mut rng = SpawnRng::new(&mut seed);
-        let kind = pick_kind_for(&v, [10, 60, 10], v.day_time, &mut rng);
-        assert!(kind == Some(KIND_ZOMBIE) || kind.is_none());
+        // Swamp-band platform in the dark (slime swamp branch).
+        stamp_platform(&mut v, 0, 0, 59, 30, 3, 0);
+        let night_ctx = PackCtx {
+            cat: SpawnCategory::Monster,
+            in_swamp: true,
+            ceiled: false,
+            day_time: v.day_time,
+        };
+        let mut minted_total = 0usize;
+        for s in 1..64u32 {
+            let mut seed = s.wrapping_mul(0x0061_C886);
+            let mut rng = SpawnRng::new(&mut seed);
+            let (_, minted) = spawn_pack(
+                &mut v,
+                &ROW,
+                &night_ctx,
+                [0, 60, 0],
+                s * 100 + 1,
+                &mut rng,
+            );
+            minted_total += minted;
+        }
+        assert!(minted_total > 0, "no swamp slimes over 63 seeds");
+        let mut sizes_seen = std::collections::HashSet::new();
+        for m in &v.mobs {
+            assert_eq!(m.kind, KIND_SLIME);
+            assert!(matches!(m.size, 1 | 2 | 4), "bad size {}", m.size);
+            assert_eq!(
+                m.health,
+                (m.size as f32) * (m.size as f32),
+                "HP must be size^2"
+            );
+            sizes_seen.insert(m.size);
+        }
+        assert!(sizes_seen.len() >= 2, "size roll stuck: {sizes_seen:?}");
+        // The wire mirror carries the size byte.
+        for m in &v.mobs {
+            assert_eq!(v.remote_mobs.get(&m.id).unwrap().size, m.size);
+        }
     }
 
     #[test]
-    fn pick_kind_passes_passive_on_grass_in_daylight() {
+    fn category_caps_enforced_independently() {
         let mut v = Voxel::new();
-        v.day_time = 0.0; // noon - daylight kills hostile gate
-        stamp_light(&mut v, [20, 60, 20], 0, 15);
-        stamp_grass_platform(&mut v, [20, 60, 20]);
-        let mut seed = 0xC0FFEEu32;
-        let mut rng = SpawnRng::new(&mut seed);
-        let kind = pick_kind_for(&v, [20, 60, 20], v.day_time, &mut rng);
-        // W162: the plains day pool now also carries cow + rabbit, so
-        // assert the picked kind is *passive* rather than enumerating
-        // the exact set (which is brittle against pool re-weighting).
-        let k = kind.expect("a passive mob should spawn on lit grass at noon");
-        assert!(
-            super::super::kinds::MobKind::from_u8(k).is_passive(),
-            "expected a passive day spawn, got kind {k}"
+        // Fill the monster cap with zombies.
+        for i in 0..SpawnCategory::Monster.cap() {
+            v.mobs.push(MobState::new_natural(
+                (i as u32) + 1,
+                KIND_ZOMBIE,
+                [0.5, 64.0, 0.5],
+                [0.5, 64.0, 0.5],
+                0.0,
+                0.0,
+                20.0,
+            ));
+        }
+        assert_eq!(
+            category_count(&v, SpawnCategory::Monster),
+            SpawnCategory::Monster.cap()
         );
+        assert_eq!(category_count(&v, SpawnCategory::Creature), 0);
+        let pools = pool_for(crate::worldgen::Biome::Plains);
+        // Night: monster is capped out, but ambient (bat) + the
+        // underground water category stay eligible.
+        let (cats, n) = eligible_categories(&v, pools, true, false);
+        assert!(!cats[..n].contains(&SpawnCategory::Monster));
+        assert!(cats[..n].contains(&SpawnCategory::Ambient));
+        // Day: creature spawning is NOT blocked by the full monster
+        // cap.
+        let (cats, n) = eligible_categories(&v, pools, false, false);
+        assert!(cats[..n].contains(&SpawnCategory::Creature));
+        // MISC kinds never count toward any cap.
+        v.mobs.push(MobState::new_natural(
+            999,
+            super::super::kinds::KIND_VILLAGER,
+            [0.5, 64.0, 0.5],
+            [0.5, 64.0, 0.5],
+            0.0,
+            0.0,
+            20.0,
+        ));
+        assert_eq!(category_count(&v, SpawnCategory::Creature), 0);
     }
 
     #[test]
-    fn pick_kind_rejects_dark_non_grass_during_day() {
-        // Daylight: hostile gate fails (effective sky high).
-        // Passive gate fails: not enough sky_light AND no grass.
-        let mut v = Voxel::new();
-        v.day_time = 0.0;
-        stamp_light(&mut v, [30, 60, 30], 0, 8); // sky_light = 8 (one below floor)
-        // No grass placed.
-        let mut seed = 1u32;
-        let mut rng = SpawnRng::new(&mut seed);
-        assert_eq!(pick_kind_for(&v, [30, 60, 30], v.day_time, &mut rng), None);
-    }
-
-    #[test]
-    fn pick_kind_rejects_passive_on_non_grass() {
-        // Bright sky but no grass below -> passive gate fails.
-        let mut v = Voxel::new();
-        v.day_time = 0.0;
-        stamp_light(&mut v, [40, 60, 40], 0, 15);
-        // No grass under the spawn cell.
-        let mut seed = 2u32;
-        let mut rng = SpawnRng::new(&mut seed);
-        assert_eq!(pick_kind_for(&v, [40, 60, 40], v.day_time, &mut rng), None);
-    }
-
-    #[test]
-    fn pick_kind_rejects_bright_lit_corner_at_night() {
-        // Torch-lit cell at night: block_light = 14 -> hostile
-        // gate fails (block_light > 7). sky_light = 0 + no grass
-        // -> passive gate fails too.
-        let mut v = Voxel::new();
-        v.day_time = crate::DAY_LENGTH_S * 0.75;
-        stamp_light(&mut v, [50, 60, 50], 14, 0);
-        let mut seed = 3u32;
-        let mut rng = SpawnRng::new(&mut seed);
-        assert_eq!(pick_kind_for(&v, [50, 60, 50], v.day_time, &mut rng), None);
+    fn eligible_categories_gate_monster_by_clock() {
+        let v = Voxel::new();
+        let pools = pool_for(crate::worldgen::Biome::Plains);
+        // Day: no Monster, Creature present.
+        let (cats, n) = eligible_categories(&v, pools, false, false);
+        assert!(!cats[..n].contains(&SpawnCategory::Monster));
+        assert!(cats[..n].contains(&SpawnCategory::Creature));
+        // Night: Monster present, Creature gone.
+        let (cats, n) = eligible_categories(&v, pools, true, false);
+        assert!(cats[..n].contains(&SpawnCategory::Monster));
+        assert!(!cats[..n].contains(&SpawnCategory::Creature));
+        // Ceiled dim (nether pools): Monster active regardless of
+        // the clock.
+        let (cats, n) =
+            eligible_categories(&v, &pool_table::NETHER, false, true);
+        assert!(cats[..n].contains(&SpawnCategory::Monster));
+        // Empty pools never become eligible: mushroom fields have
+        // no monster category at all.
+        let (cats, n) =
+            eligible_categories(&v, &pool_table::MUSHROOM, true, false);
+        assert!(!cats[..n].contains(&SpawnCategory::Monster));
     }
 }

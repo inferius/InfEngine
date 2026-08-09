@@ -1,217 +1,171 @@
-//! Per-biome spawn pools: weighted (MobKind, weight) tables sorted
-//! by time-of-day.
+//! Per-biome spawn pools: MC `MobCategory` lists with weighted
+//! `(kind, weight, minCount, maxCount)` rows, generated from the
+//! 26.1.2 biome jsons into `pool_table.rs` (W475).
 //!
-//! Adapts MC's `MobSpawnSettings::SpawnerData` pattern - each biome
-//! carries a per-`MobCategory` list of weighted spawn candidates,
-//! and the spawner picks one via a weighted draw over the full
-//! list. We collapse `MobCategory` into a day / night split (the
-//! light gate already discriminates between hostile + passive in
-//! `light.rs`) and ship one static table per biome.
+//! Pre-W475 the pools were hand-written day / night `(kind, weight)`
+//! pairs; the categories + pack counts now come straight from the
+//! data files and the day / night split lives in the spawner's
+//! category gate instead (see `spawn::eligible_categories`).
 //!
 //! Cited MC source files:
 //! - `net/minecraft/world/level/biome/MobSpawnSettings.java` -
 //!   per-biome spawner data: spawners + spawn-cost map.
-//! - `net/minecraft/world/level/biome/MobSpawnSettings$SpawnerData`
-//!   - the `(EntityType, weight, min, max)` 4-tuple - we ship only
-//!     `(MobKind, weight)`.
-//! - `net/minecraft/world/level/biome/Biomes.java` - per-biome
-//!   spawn pool literals (Plains: 8x chicken / 4x cow / etc.).
+//! - `net/minecraft/world/entity/MobCategory.java` - the per-category
+//!   caps (monster 70 / creature 10 / ambient 15 / water_creature 5 /
+//!   water_ambient 20 / underground_water_creature 5, each per 17x17
+//!   spawnable chunks).
+//! - `net/minecraft/world/entity/EntityType.java` - the category each
+//!   entity type COUNTS against (`type.getCategory()` in
+//!   `NaturalSpawner.isValidSpawnPostitionForType`).
 
 use crate::worldgen::Biome;
 
-use super::kinds::{
-    KIND_SQUID, KIND_GLOW_SQUID, KIND_WANDERING_TRADER, KIND_FOX, KIND_OCELOT,
-    KIND_PARROT, KIND_GOAT, KIND_TURTLE, KIND_PANDA, KIND_CAMEL,
-    KIND_CHICKEN, KIND_COW, KIND_PIG, KIND_POLAR_BEAR, KIND_RABBIT, KIND_SHEEP,
-    KIND_CREEPER, KIND_DONKEY, KIND_SKELETON, KIND_SPIDER, KIND_WOLF,
-    KIND_ZOMBIE, KIND_SLIME, KIND_DROWNED, KIND_HUSK, KIND_STRAY, KIND_ENDERMAN, KIND_MOOSHROOM, KIND_PHANTOM,
-};
+pub(crate) use super::pool_table::{CategoryPools, SpawnRow};
+use super::pool_table;
 
-/// Per-biome day / night spawn lists. Each entry is `(kind, weight)`
-/// where higher weight = more likely. An empty list (e.g. `Beach`'s
-/// pools) means no mobs spawn for that time-of-day in that biome.
-///
-/// Weights follow MC's `Biomes.java` shape: passive mobs land in
-/// the 1..=8 range, hostile in 30..=80. Skeletons get a slightly
-/// higher weight in deserts (MC: stray + skeleton variant cluster
-/// in cold + dry biomes).
-pub(crate) struct BiomeSpawnPool {
-    pub(crate) day: &'static [(u8, u32)],
-    pub(crate) night: &'static [(u8, u32)],
+/// MC `MobCategory` port - the spawn cycles + caps discriminator.
+/// `MISC` is intentionally absent: MISC kinds (villager, iron golem)
+/// never naturally spawn and never count toward a cap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpawnCategory {
+    Monster,
+    Creature,
+    Ambient,
+    WaterCreature,
+    WaterAmbient,
+    UndergroundWaterCreature,
 }
 
-const EMPTY: &[(u8, u32)] = &[];
-
-// W162: rabbits roam plains, deserts and snowy/taiga biomes in MC.
-// W354: vanilla common-farm weights (sheep 12 / pig 10 /
-// chicken 10 / cow 8); the rabbit stays for the meadow biomes this
-// bucket also covers.
-const PLAINS_DAY: &[(u8, u32)] = &[
-    (KIND_SHEEP, 12),
-    (KIND_PIG, 10),
-    (KIND_CHICKEN, 10),
-    (KIND_COW, 8),
-    (KIND_RABBIT, 2),
-    (KIND_DONKEY, 1),
-    // W389: rare roaming trader (MC spawns him via a timed server
-    // attempt near the player; a weight-1 pool row approximates the
-    // rarity until that timer is ported).
-    (KIND_WANDERING_TRADER, 1),
+/// Iteration order mirrors `MobCategory.values()` (minus the
+/// unported `axolotls` + the never-spawning `misc`).
+pub(crate) const ALL_CATEGORIES: [SpawnCategory; 6] = [
+    SpawnCategory::Monster,
+    SpawnCategory::Creature,
+    SpawnCategory::Ambient,
+    SpawnCategory::WaterCreature,
+    SpawnCategory::WaterAmbient,
+    SpawnCategory::UndergroundWaterCreature,
 ];
-// W382: a light phantom presence stands in for MC insomnia
-// spawning (no sleep-deprivation tracking yet - follow-up).
-const PLAINS_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10), (KIND_PHANTOM, 5)];
 
-// W162: the desert is a classic rabbit biome (gold/desert variant).
-// W354: vanilla deserts spawn NO farm animals - rabbit only (the
-// R17 "cows and chickens in the desert" report).
-// W409: MC 26.1.2 desert creature rows - rabbit 12, camel 1
-// (biome json; the pre-W409 rabbit 4 predates the MC-weight port).
-const DESERT_DAY: &[(u8, u32)] = &[(KIND_RABBIT, 12), (KIND_CAMEL, 1)];
-// W377: the desert swaps most zombies for husks, the tundra its
-// skeletons for strays, and the swamp nights raise drowned near
-// water (MC per-biome monster overrides).
-const DESERT_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 10), (KIND_HUSK, 70), (KIND_SKELETON, 80), (KIND_SPIDER, 20), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10)];
-
-// W158: MC forest pools carry wolves (weight 5).
-const FOREST_DAY: &[(u8, u32)] = &[
-    (KIND_SHEEP, 12),
-    (KIND_PIG, 10),
-    (KIND_CHICKEN, 10),
-    (KIND_COW, 8),
-    (KIND_WOLF, 5),
-];
-const FOREST_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_SPIDER, 30), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10)];
-
-// W158: the taiga is the wolf's home biome in MC (weight 8).
-const TAIGA_DAY: &[(u8, u32)] = &[
-    (KIND_SHEEP, 12),
-    (KIND_PIG, 10),
-    (KIND_CHICKEN, 10),
-    (KIND_COW, 8),
-    (KIND_WOLF, 8),
-    (KIND_RABBIT, 4),
-    // W390: MC taiga fox weight 8.
-    (KIND_FOX, 8),
-];
-const TAIGA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 40), (KIND_CREEPER, 40), (KIND_ENDERMAN, 10)];
-
-// W161: snowy tundra is the polar bear's home (MC: frozen biomes).
-// W162: snowy rabbits (white variant) roam the same tundra.
-// W354: vanilla snowy plains carry NO sheep - rabbit 10 + polar
-// bear 1.
-const TUNDRA_DAY: &[(u8, u32)] =
-    &[(KIND_RABBIT, 10), (KIND_POLAR_BEAR, 1)];
-const TUNDRA_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 8), (KIND_STRAY, 64), (KIND_CREEPER, 40), (KIND_ENDERMAN, 10)];
-
-// W354: vanilla jungles run the common farm list PLUS an extra
-// chicken entry (10 + 10).
-const JUNGLE_DAY: &[(u8, u32)] = &[
-    (KIND_SHEEP, 12),
-    (KIND_PIG, 10),
-    (KIND_CHICKEN, 20),
-    (KIND_COW, 8),
-    // W390: MC jungle ocelot weight 2.
-    (KIND_OCELOT, 2),
-    // W391: MC jungle parrot weight 40.
-    (KIND_PARROT, 40),
-    // W393: rare panda (MC bamboo-jungle 80 - plain jungle keeps
-    // it a rarity until bamboo groves land).
-    (KIND_PANDA, 1),
-];
-const JUNGLE_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 70), (KIND_SKELETON, 40), (KIND_SPIDER, 30), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10)];
-
-// W354: vanilla swamps spawn no farm animals (slime / frog only,
-// neither ported yet).
-// W382: mushroom fields grow mooshroom herds (the only
-// creature in the MC pool) and stay hostile-free at night.
-pub(crate) const MUSHROOM_DAY: &[(u8, u32)] = &[(KIND_MOOSHROOM, 8)];
-pub(crate) const MUSHROOM_NIGHT: &[(u8, u32)] = &[];
-
-// W388: oceans - squid pods by day; glow squids surface at night
-// (their MC underground-water spawn is a follow-up) alongside the
-// drowned.
-pub(crate) const OCEAN_DAY: &[(u8, u32)] = &[(KIND_SQUID, 8)];
-pub(crate) const OCEAN_NIGHT: &[(u8, u32)] =
-    &[(KIND_SQUID, 4), (KIND_GLOW_SQUID, 4), (KIND_DROWNED, 30)];
-
-// W392: the one beach resident.
-const BEACH_DAY: &[(u8, u32)] = &[(KIND_TURTLE, 5)];
-
-const SWAMP_DAY: &[(u8, u32)] = EMPTY;
-// W376: swamp nights grow slimes (surface slime spawning is a
-// swamp signature; the witch stays hut-resident, not pooled).
-const SWAMP_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 60), (KIND_DROWNED, 30), (KIND_SKELETON, 20), (KIND_CREEPER, 40), (KIND_SLIME, 30), (KIND_ENDERMAN, 10)];
-
-const SAVANNA_DAY: &[(u8, u32)] = &[
-    (KIND_SHEEP, 12),
-    (KIND_PIG, 10),
-    (KIND_CHICKEN, 10),
-    (KIND_COW, 8),
-    (KIND_DONKEY, 1),
-    (KIND_WANDERING_TRADER, 1),
-];
-const SAVANNA_NIGHT: &[(u8, u32)] =
-    &[(KIND_ZOMBIE, 60), (KIND_SKELETON, 50), (KIND_SPIDER, 30), (KIND_CREEPER, 50), (KIND_ENDERMAN, 10)];
-
-// W354: windswept hills run the common farm list + llama (not
-// ported).
-const MOUNTAIN_DAY: &[(u8, u32)] = &[
-    (KIND_SHEEP, 12),
-    (KIND_PIG, 10),
-    (KIND_CHICKEN, 10),
-    (KIND_COW, 8),
-    // W392: goats climb the peaks (MC frozen/windswept goat 5).
-    (KIND_GOAT, 5),
-];
-const MOUNTAIN_NIGHT: &[(u8, u32)] = &[(KIND_ZOMBIE, 80), (KIND_SKELETON, 40), (KIND_CREEPER, 40), (KIND_ENDERMAN, 10)];
-
-/// Look up the active spawn pool for `biome`. Returns the static
-/// pool struct; the spawner pulls the right list (day / night) at
-/// the call site based on `compute_day_factor`.
-pub(crate) fn pool_for(biome: Biome) -> BiomeSpawnPool {
-    match biome {
-        Biome::Plains => BiomeSpawnPool { day: PLAINS_DAY, night: PLAINS_NIGHT },
-        Biome::Desert => BiomeSpawnPool { day: DESERT_DAY, night: DESERT_NIGHT },
-        Biome::Mountain => {
-            BiomeSpawnPool { day: MOUNTAIN_DAY, night: MOUNTAIN_NIGHT }
-        }
-        Biome::Tundra => {
-            BiomeSpawnPool { day: TUNDRA_DAY, night: TUNDRA_NIGHT }
-        }
-        Biome::Taiga => BiomeSpawnPool { day: TAIGA_DAY, night: TAIGA_NIGHT },
-        Biome::Forest => {
-            BiomeSpawnPool { day: FOREST_DAY, night: FOREST_NIGHT }
-        }
-        Biome::Jungle => {
-            BiomeSpawnPool { day: JUNGLE_DAY, night: JUNGLE_NIGHT }
-        }
-        Biome::Swamp => BiomeSpawnPool { day: SWAMP_DAY, night: SWAMP_NIGHT },
-        Biome::Savanna => {
-            BiomeSpawnPool { day: SAVANNA_DAY, night: SAVANNA_NIGHT }
-        }
-        Biome::SnowyMountain => {
-            BiomeSpawnPool { day: TUNDRA_DAY, night: TUNDRA_NIGHT }
-        }
-        Biome::Beach => {
-            // W392: turtles nest on beaches (MC beach turtle 5);
-            // nights stay empty.
-            BiomeSpawnPool { day: BEACH_DAY, night: EMPTY }
+impl SpawnCategory {
+    /// W475: per-category live-mob caps, replacing the old single
+    /// all-kinds cap of 25.
+    ///
+    /// Scaling choice: MC's `MobCategory` caps (monster 70 /
+    /// creature 10 / ambient 15 / water_creature 5 / water_ambient
+    /// 20 / underground_water_creature 5) are normalised per 17x17
+    /// spawnable chunks - exactly one player's spawn region, so for
+    /// the engine's single-host world the plain values apply. The
+    /// engine however despawns mobs beyond an 80-block radius vs
+    /// MC's 128-block despawn sphere, so the population the caps
+    /// govern lives in a (80/128)^2 ~= 0.39 smaller area. We scale
+    /// every cap by 2/5 (all six land on integers): monster 28 /
+    /// creature 4 / ambient 6 / water_creature 2 / water_ambient 8 /
+    /// underground_water_creature 2. The MC RATIOS are exact; the
+    /// sum (50) is about the old day+night average around the single
+    /// cap 25 - monsters only fill at night, creatures by day, so
+    /// the typical live count stays in the former band.
+    pub(crate) fn cap(self) -> usize {
+        match self {
+            SpawnCategory::Monster => 28,
+            SpawnCategory::Creature => 4,
+            SpawnCategory::Ambient => 6,
+            SpawnCategory::WaterCreature => 2,
+            SpawnCategory::WaterAmbient => 8,
+            SpawnCategory::UndergroundWaterCreature => 2,
         }
     }
 }
 
-/// Pick one entry from `pool` weighted by `weight`. Returns `None`
-/// when the pool is empty. `roll01` is a uniform sample in `[0, 1]`.
-pub(crate) fn weighted_pick(pool: &[(u8, u32)], roll01: f32) -> Option<u8> {
-    if pool.is_empty() {
+/// The spawner rows of `pools` for one category.
+pub(crate) fn rows_of(
+    pools: &'static CategoryPools,
+    cat: SpawnCategory,
+) -> &'static [SpawnRow] {
+    match cat {
+        SpawnCategory::Monster => pools.monster,
+        SpawnCategory::Creature => pools.creature,
+        SpawnCategory::Ambient => pools.ambient,
+        SpawnCategory::WaterCreature => pools.water_creature,
+        SpawnCategory::WaterAmbient => pools.water_ambient,
+        SpawnCategory::UndergroundWaterCreature => {
+            pools.underground_water_creature
+        }
+    }
+}
+
+/// The MC `EntityType` category a kind COUNTS against (the cap
+/// bookkeeping side; which pool LIST a kind is drawn from is the
+/// biome json's business - e.g. the jungle ocelot sits in the
+/// `monster` spawner list yet counts as a CREATURE, exactly like
+/// MC). `None` = `MobCategory.MISC` (villager, iron golem):
+/// never counted, never drawn.
+pub(crate) fn category_of_kind(kind: u8) -> Option<SpawnCategory> {
+    use super::kinds::MobKind;
+    Some(match MobKind::from_u8(kind) {
+        MobKind::Zombie
+        | MobKind::Skeleton
+        | MobKind::Spider
+        | MobKind::ZombifiedPiglin
+        | MobKind::Ghast
+        | MobKind::MagmaCube
+        | MobKind::ZombieVillager
+        | MobKind::Creeper
+        | MobKind::Witch
+        | MobKind::Slime
+        | MobKind::Drowned
+        | MobKind::Husk
+        | MobKind::Stray
+        | MobKind::Pillager
+        | MobKind::Vindicator
+        | MobKind::Evoker
+        | MobKind::Blaze
+        | MobKind::WitherSkeleton
+        | MobKind::Guardian
+        | MobKind::ElderGuardian
+        | MobKind::Enderman
+        | MobKind::CaveSpider
+        | MobKind::Silverfish
+        | MobKind::Phantom => SpawnCategory::Monster,
+        MobKind::Bat => SpawnCategory::Ambient,
+        MobKind::Squid => SpawnCategory::WaterCreature,
+        MobKind::GlowSquid => SpawnCategory::UndergroundWaterCreature,
+        MobKind::Villager | MobKind::IronGolem => return None,
+        // Every remaining kind is EntityType category CREATURE
+        // (sheep..camel incl. cat, wandering trader, horse family).
+        _ => SpawnCategory::Creature,
+    })
+}
+
+/// Look up the generated category pools for `biome`. The
+/// off-`Biome`-enum buckets (`MUSHROOM`, `OCEAN`, `NETHER`) are
+/// selected directly by the spawner before this mapper runs.
+pub(crate) fn pool_for(biome: Biome) -> &'static CategoryPools {
+    match biome {
+        Biome::Plains => &pool_table::PLAINS,
+        Biome::Desert => &pool_table::DESERT,
+        Biome::Mountain => &pool_table::MOUNTAIN,
+        Biome::Tundra | Biome::SnowyMountain => &pool_table::TUNDRA,
+        Biome::Taiga => &pool_table::TAIGA,
+        Biome::Forest => &pool_table::FOREST,
+        Biome::Jungle => &pool_table::JUNGLE,
+        Biome::Swamp => &pool_table::SWAMP,
+        Biome::Savanna => &pool_table::SAVANNA,
+        Biome::Beach => &pool_table::BEACH,
+    }
+}
+
+/// Pick one row from `rows` weighted by `weight`. Returns `None`
+/// when the list is empty or all-zero. `roll01` is a uniform sample
+/// in `[0, 1]`.
+pub(crate) fn weighted_pick(
+    rows: &'static [SpawnRow],
+    roll01: f32,
+) -> Option<&'static SpawnRow> {
+    if rows.is_empty() {
         return None;
     }
-    let total: u32 = pool.iter().map(|(_, w)| *w).sum();
+    let total: u32 = rows.iter().map(|r| r.weight).sum();
     if total == 0 {
         return None;
     }
@@ -219,133 +173,312 @@ pub(crate) fn weighted_pick(pool: &[(u8, u32)], roll01: f32) -> Option<u8> {
     // cumulative bins until the running sum exceeds it.
     let r = (roll01.clamp(0.0, 0.9999) * total as f32) as u32;
     let mut acc = 0u32;
-    for (kind, w) in pool {
-        acc += *w;
+    for row in rows {
+        acc += row.weight;
         if r < acc {
-            return Some(*kind);
+            return Some(row);
         }
     }
     // Floating-point edge: clamp to last entry.
-    pool.last().map(|(k, _)| *k)
+    rows.last()
+}
+
+/// Log the MC species the generated table had to skip (no engine
+/// `MobKind` yet) - once per process, one line for all names.
+pub(crate) fn log_skipped_species_once() {
+    static LOGGED: std::sync::Once = std::sync::Once::new();
+    LOGGED.call_once(|| {
+        tracing::info!(
+            "W475: spawn pools skip {} MC species (no engine kind \
+             yet): {}",
+            pool_table::SKIPPED_SPECIES.len(),
+            pool_table::SKIPPED_SPECIES.join(", ")
+        );
+    });
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::kinds::{
+        KIND_BAT, KIND_CAMEL, KIND_CHICKEN, KIND_COW, KIND_DONKEY,
+        KIND_ENDERMAN, KIND_GLOW_SQUID, KIND_HORSE, KIND_HUSK,
+        KIND_IRON_GOLEM, KIND_MOOSHROOM, KIND_PHANTOM, KIND_PIG,
+        KIND_RABBIT, KIND_SHEEP, KIND_SKELETON, KIND_SLIME, KIND_SQUID,
+        KIND_STRAY, KIND_TURTLE, KIND_VILLAGER, KIND_WANDERING_TRADER,
+        KIND_WITCH, KIND_WOLF, KIND_ZOMBIE, KIND_ZOMBIE_VILLAGER,
+    };
     use super::*;
     use crate::worldgen::Biome;
 
-    #[test]
-    fn beach_pools_turtles_by_day_empty_at_night() {
-        // W392: turtles joined the beach day pool; nights stay
-        // hostile-free (the beach was fully empty before).
-        let p = pool_for(Biome::Beach);
-        assert_eq!(p.day, &[(KIND_TURTLE, 5)]);
-        assert!(p.night.is_empty());
+    fn weight_of(rows: &[SpawnRow], kind: u8) -> u32 {
+        rows.iter().filter(|r| r.kind == kind).map(|r| r.weight).sum()
+    }
+
+    fn row_of(rows: &'static [SpawnRow], kind: u8) -> &'static SpawnRow {
+        rows.iter()
+            .find(|r| r.kind == kind)
+            .unwrap_or_else(|| panic!("kind {kind} missing"))
     }
 
     #[test]
-    fn plains_pool_has_distinct_day_and_night() {
-        let p = pool_for(Biome::Plains);
-        assert!(!p.day.is_empty());
-        assert!(!p.night.is_empty());
-        // Day should be predominantly passive, night predominantly
-        // hostile.
-        let day_passive_w: u32 = p
-            .day
-            .iter()
-            .filter(|(k, _)| {
-                *k == KIND_CHICKEN
-                    || *k == KIND_COW
-                    || *k == KIND_PIG
-                    || *k == KIND_SHEEP
-                    // W162: rabbit is a passive day spawner too.
-                    || *k == KIND_RABBIT
-                    // W344: donkey too.
-                    || *k == KIND_DONKEY
-                    // W389: the roaming trader is a passive day
-                    // spawner as well.
-                    || *k == KIND_WANDERING_TRADER
-            })
-            .map(|(_, w)| *w)
-            .sum();
-        let night_hostile_w: u32 = p
-            .night
-            .iter()
-            .filter(|(k, _)| {
-                *k == KIND_ZOMBIE
-                    || *k == KIND_SKELETON
-                    || *k == KIND_SPIDER
-                    || *k == KIND_CREEPER
-                    // W381: the enderman haunts every overworld
-                    // night pool at MC weight 10.
-                    || *k == KIND_ENDERMAN
-                    // W382: the phantom insomnia stand-in.
-                    || *k == KIND_PHANTOM
-            })
-            .map(|(_, w)| *w)
-            .sum();
-        let day_total: u32 = p.day.iter().map(|(_, w)| *w).sum();
-        let night_total: u32 = p.night.iter().map(|(_, w)| *w).sum();
-        assert_eq!(day_passive_w, day_total);
-        assert_eq!(night_hostile_w, night_total);
+    fn plains_creature_rows_match_plains_json() {
+        // plains.json creature list: sheep 12 / pig 10 / chicken 10 /
+        // cow 8 (all 4-4 packs) + horse 5 (2-6) + donkey 1 (1-3) +
+        // the R24 wandering-trader stand-in.
+        let c = pool_for(Biome::Plains).creature;
+        for (kind, w, mn, mx) in [
+            (KIND_SHEEP, 12, 4, 4),
+            (KIND_PIG, 10, 4, 4),
+            (KIND_CHICKEN, 10, 4, 4),
+            (KIND_COW, 8, 4, 4),
+            (KIND_HORSE, 5, 2, 6),
+            (KIND_DONKEY, 1, 1, 3),
+            (KIND_WANDERING_TRADER, 1, 1, 1),
+        ] {
+            let r = row_of(c, kind);
+            assert_eq!((r.weight, r.min_count, r.max_count), (w, mn, mx));
+        }
+        assert_eq!(c.len(), 7);
+    }
+
+    #[test]
+    fn plains_monster_rows_match_plains_json() {
+        // The 100-weight quartet + zombie 90 (zombie_horse holds the
+        // other 5 in MC - skip-logged) + zombie_villager 5 + witch 5
+        // + enderman 10 (1-4) + the R24 phantom stand-in.
+        let m = pool_for(Biome::Plains).monster;
+        for (kind, w) in [
+            (super::super::kinds::KIND_SPIDER, 100),
+            (KIND_SKELETON, 100),
+            (super::super::kinds::KIND_CREEPER, 100),
+            (KIND_SLIME, 100),
+            (KIND_ZOMBIE, 90),
+            (KIND_ZOMBIE_VILLAGER, 5),
+            (KIND_WITCH, 5),
+            (KIND_ENDERMAN, 10),
+            (KIND_PHANTOM, 5),
+        ] {
+            assert_eq!(weight_of(m, kind), w, "kind {kind}");
+        }
+        let e = row_of(m, KIND_ENDERMAN);
+        assert_eq!((e.min_count, e.max_count), (1, 4));
+    }
+
+    #[test]
+    fn desert_night_biases_husk_over_skeleton_over_zombie() {
+        // desert.json: husk 80 > skeleton 50 > zombie 19 (the old
+        // hand pool had skeleton 80 > husk 70 - inverted vs MC).
+        let m = pool_for(Biome::Desert).monster;
+        assert_eq!(weight_of(m, KIND_HUSK), 80);
+        assert_eq!(weight_of(m, KIND_SKELETON), 50);
+        assert_eq!(weight_of(m, KIND_ZOMBIE), 19);
+        assert_eq!(weight_of(m, KIND_ZOMBIE_VILLAGER), 1);
+    }
+
+    #[test]
+    fn desert_creatures_are_rabbit_and_camel() {
+        let c = pool_for(Biome::Desert).creature;
+        let r = row_of(c, KIND_RABBIT);
+        assert_eq!((r.weight, r.min_count, r.max_count), (12, 2, 3));
+        let cm = row_of(c, KIND_CAMEL);
+        assert_eq!((cm.weight, cm.min_count, cm.max_count), (1, 1, 1));
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn tundra_swaps_skeletons_for_strays() {
+        // snowy_plains.json: stray 80 vs skeleton 20.
+        let m = pool_for(Biome::Tundra).monster;
+        assert_eq!(weight_of(m, KIND_STRAY), 80);
+        assert_eq!(weight_of(m, KIND_SKELETON), 20);
+    }
+
+    #[test]
+    fn beach_turtles_pack_2_to_5_and_nights_are_hostile() {
+        // beach.json: turtle 5 (2-5) is the one creature; the
+        // monster list is the full 8-entry overworld set (the old
+        // hand pool shipped an EMPTY beach night).
+        let b = pool_for(Biome::Beach);
+        let t = row_of(b.creature, KIND_TURTLE);
+        assert_eq!((t.weight, t.min_count, t.max_count), (5, 2, 5));
+        assert_eq!(b.creature.len(), 1);
+        assert_eq!(b.monster.len(), 8);
+    }
+
+    #[test]
+    fn nether_monster_rows_include_enderman() {
+        // nether_wastes.json: zombified_piglin 100 / ghast 50 /
+        // magma_cube 2 / enderman 1 (strider + piglin skip-logged).
+        let m = pool_table::NETHER.monster;
+        assert_eq!(
+            weight_of(m, super::super::kinds::KIND_ZOMBIFIED_PIGLIN),
+            100
+        );
+        assert_eq!(weight_of(m, super::super::kinds::KIND_GHAST), 50);
+        assert_eq!(weight_of(m, super::super::kinds::KIND_MAGMA_CUBE), 2);
+        assert_eq!(weight_of(m, KIND_ENDERMAN), 1);
+        assert_eq!(m.len(), 4);
+        // All nether packs are 4-4 per the json.
+        assert!(m.iter().all(|r| (r.min_count, r.max_count) == (4, 4)));
+    }
+
+    #[test]
+    fn mushroom_fields_spawn_mooshrooms_and_no_monsters() {
+        let p = &pool_table::MUSHROOM;
+        assert!(p.monster.is_empty());
+        let m = row_of(p.creature, KIND_MOOSHROOM);
+        assert_eq!((m.weight, m.min_count, m.max_count), (8, 4, 8));
+    }
+
+    #[test]
+    fn ocean_water_rows_match_ocean_json() {
+        // ocean.json: squid 1 (1-4) in water_creature; drowned 5 in
+        // monster; glow_squid 10 (4-6) underground_water_creature.
+        let p = &pool_table::OCEAN;
+        let s = row_of(p.water_creature, KIND_SQUID);
+        assert_eq!((s.weight, s.min_count, s.max_count), (1, 1, 4));
+        assert_eq!(weight_of(p.monster, super::super::kinds::KIND_DROWNED), 5);
+        let g = row_of(p.underground_water_creature, KIND_GLOW_SQUID);
+        assert_eq!((g.weight, g.min_count, g.max_count), (10, 4, 6));
+        // Cod / dolphin / nautilus have no engine kind yet.
+        assert!(p.water_ambient.is_empty());
+    }
+
+    #[test]
+    fn every_overworld_bucket_has_bat_and_glow_squid_rows() {
+        // Every mapped overworld biome json carries bat 10 (8-8)
+        // ambient + glow_squid 10 (4-6) underground water rows.
+        for b in [
+            Biome::Plains,
+            Biome::Desert,
+            Biome::Mountain,
+            Biome::Tundra,
+            Biome::Taiga,
+            Biome::Forest,
+            Biome::Jungle,
+            Biome::Swamp,
+            Biome::Savanna,
+            Biome::Beach,
+        ] {
+            let p = pool_for(b);
+            let bat = row_of(p.ambient, KIND_BAT);
+            assert_eq!((bat.weight, bat.min_count, bat.max_count), (10, 8, 8));
+            let g = row_of(p.underground_water_creature, KIND_GLOW_SQUID);
+            assert_eq!((g.weight, g.min_count, g.max_count), (10, 4, 6));
+        }
+    }
+
+    #[test]
+    fn forest_carries_wolves_plains_does_not() {
+        let f = pool_for(Biome::Forest).creature;
+        let p = pool_for(Biome::Plains).creature;
+        assert_eq!(weight_of(f, KIND_WOLF), 5);
+        assert_eq!(weight_of(p, KIND_WOLF), 0);
+    }
+
+    #[test]
+    fn snowy_mountain_shares_the_tundra_pool() {
+        let sm = pool_for(Biome::SnowyMountain);
+        let t = pool_for(Biome::Tundra);
+        assert!(std::ptr::eq(sm, t));
+    }
+
+    #[test]
+    fn category_caps_keep_mc_ratios() {
+        // 2/5 of MC's 70/10/15/5/20/5 (see cap() doc).
+        assert_eq!(SpawnCategory::Monster.cap(), 28);
+        assert_eq!(SpawnCategory::Creature.cap(), 4);
+        assert_eq!(SpawnCategory::Ambient.cap(), 6);
+        assert_eq!(SpawnCategory::WaterCreature.cap(), 2);
+        assert_eq!(SpawnCategory::WaterAmbient.cap(), 8);
+        assert_eq!(SpawnCategory::UndergroundWaterCreature.cap(), 2);
+        let sum: usize = ALL_CATEGORIES.iter().map(|c| c.cap()).sum();
+        assert_eq!(sum, crate::mob::state::MOB_CAP_DEFAULT);
+    }
+
+    #[test]
+    fn category_of_kind_maps_the_entity_type_registry() {
+        assert_eq!(category_of_kind(KIND_ZOMBIE), Some(SpawnCategory::Monster));
+        assert_eq!(category_of_kind(KIND_PHANTOM), Some(SpawnCategory::Monster));
+        assert_eq!(category_of_kind(KIND_SHEEP), Some(SpawnCategory::Creature));
+        // The jungle ocelot: drawn from the monster LIST but counts
+        // as a CREATURE (EntityType.OCELOT category).
+        assert_eq!(
+            category_of_kind(super::super::kinds::KIND_OCELOT),
+            Some(SpawnCategory::Creature)
+        );
+        assert_eq!(category_of_kind(KIND_BAT), Some(SpawnCategory::Ambient));
+        assert_eq!(
+            category_of_kind(KIND_SQUID),
+            Some(SpawnCategory::WaterCreature)
+        );
+        assert_eq!(
+            category_of_kind(KIND_GLOW_SQUID),
+            Some(SpawnCategory::UndergroundWaterCreature)
+        );
+        // MISC kinds are never counted / drawn.
+        assert_eq!(category_of_kind(KIND_VILLAGER), None);
+        assert_eq!(category_of_kind(KIND_IRON_GOLEM), None);
     }
 
     #[test]
     fn weighted_pick_on_empty_returns_none() {
-        assert_eq!(weighted_pick(&[], 0.5), None);
+        assert_eq!(weighted_pick(&[], 0.5).map(|r| r.kind), None);
     }
 
     #[test]
-    fn weighted_pick_with_single_entry_always_returns_it() {
-        assert_eq!(weighted_pick(&[(KIND_SHEEP, 1)], 0.0), Some(KIND_SHEEP));
-        assert_eq!(weighted_pick(&[(KIND_SHEEP, 1)], 0.5), Some(KIND_SHEEP));
-        assert_eq!(weighted_pick(&[(KIND_SHEEP, 1)], 0.99), Some(KIND_SHEEP));
+    fn weighted_pick_single_entry_always_returns_it() {
+        static ONE: &[SpawnRow] = &[SpawnRow {
+            kind: KIND_SHEEP,
+            weight: 1,
+            min_count: 1,
+            max_count: 1,
+        }];
+        for roll in [0.0, 0.5, 0.99] {
+            assert_eq!(weighted_pick(ONE, roll).map(|r| r.kind), Some(KIND_SHEEP));
+        }
     }
 
     #[test]
     fn weighted_pick_zero_total_returns_none() {
-        // All-zero weights are degenerate; the picker must not
-        // divide by zero.
-        let degenerate: &[(u8, u32)] = &[(KIND_SHEEP, 0), (KIND_ZOMBIE, 0)];
-        assert_eq!(weighted_pick(degenerate, 0.5), None);
+        static DEGENERATE: &[SpawnRow] = &[
+            SpawnRow { kind: KIND_SHEEP, weight: 0, min_count: 1, max_count: 1 },
+            SpawnRow { kind: KIND_ZOMBIE, weight: 0, min_count: 1, max_count: 1 },
+        ];
+        assert!(weighted_pick(DEGENERATE, 0.5).is_none());
     }
 
     #[test]
     fn weighted_pick_distribution_over_many_samples() {
         // 10_000 deterministic draws over `[(sheep, 1), (zombie, 3)]`
-        // should land ~25% sheep + ~75% zombie. Use the same xorshift
-        // family the live spawner runs so we're testing the actual
-        // picking path.
+        // should land ~25% sheep + ~75% zombie, via the same
+        // xorshift family the live spawner runs.
         use super::super::spawn::SpawnRng;
-        let pool: &[(u8, u32)] = &[(KIND_SHEEP, 1), (KIND_ZOMBIE, 3)];
+        static POOL: &[SpawnRow] = &[
+            SpawnRow { kind: KIND_SHEEP, weight: 1, min_count: 1, max_count: 1 },
+            SpawnRow { kind: KIND_ZOMBIE, weight: 3, min_count: 1, max_count: 1 },
+        ];
         let mut seed = 0xC0FFEEu32;
         let mut rng = SpawnRng::new(&mut seed);
         let mut sheep = 0u32;
-        let mut zombie = 0u32;
         let n = 10_000u32;
         for _ in 0..n {
-            match weighted_pick(pool, rng.next_f32()) {
-                Some(KIND_SHEEP) => sheep += 1,
-                Some(KIND_ZOMBIE) => zombie += 1,
+            match weighted_pick(POOL, rng.next_f32()).map(|r| r.kind) {
+                Some(k) if k == KIND_SHEEP => sheep += 1,
+                Some(k) if k == KIND_ZOMBIE => {}
                 _ => panic!("unexpected"),
             }
         }
         let ratio = sheep as f32 / n as f32;
-        // Expect ~0.25 +/- 0.03 (3% slack over 10k draws is generous).
         assert!(
             (0.22..=0.28).contains(&ratio),
-            "sheep ratio out of band: {} ({} sheep, {} zombie)",
-            ratio,
-            sheep,
-            zombie
+            "sheep ratio out of band: {ratio}"
         );
     }
 
     #[test]
     fn every_biome_has_a_pool() {
-        // Pool lookup must be total over the Biome enum. Adding a
-        // new variant requires editing `pool_for`; this test makes
-        // the failure loud.
+        // Pool lookup must be total over the Biome enum.
         for b in [
             Biome::Plains,
             Biome::Desert,
@@ -361,49 +494,5 @@ mod tests {
         ] {
             let _ = pool_for(b);
         }
-    }
-
-    #[test]
-    fn desert_skeletons_outweigh_other_hostiles() {
-        // Desert at night biases toward skeletons (MC convention).
-        // Specific check: skeleton weight > zombie weight in the
-        // desert night pool.
-        let p = pool_for(Biome::Desert);
-        let zombie_w: u32 = p
-            .night
-            .iter()
-            .filter(|(k, _)| *k == KIND_ZOMBIE)
-            .map(|(_, w)| *w)
-            .sum();
-        let skeleton_w: u32 = p
-            .night
-            .iter()
-            .filter(|(k, _)| *k == KIND_SKELETON)
-            .map(|(_, w)| *w)
-            .sum();
-        assert!(skeleton_w > zombie_w, "{} > {}", skeleton_w, zombie_w);
-    }
-
-    #[test]
-    fn forest_carries_wolves_plains_does_not() {
-        // W354: the vanilla common-farm weights are IDENTICAL across
-        // forest and plains (sheep 12 / pig 10 / chicken 10 / cow 8),
-        // so the old more-sheep-in-forest pin no longer holds. The
-        // biome flavour that DOES distinguish them in MC is the wolf.
-        let f = pool_for(Biome::Forest);
-        let p = pool_for(Biome::Plains);
-        assert!(f.day.iter().any(|(k, _)| *k == KIND_WOLF));
-        assert!(!p.day.iter().any(|(k, _)| *k == KIND_WOLF));
-    }
-
-    #[test]
-    fn snowy_mountain_inherits_tundra_pool() {
-        // Both cold biomes share a sparse passive list + a
-        // hostile-only night list (matches MC: snowy taiga + snowy
-        // plains share most spawners).
-        let sm = pool_for(Biome::SnowyMountain);
-        let t = pool_for(Biome::Tundra);
-        assert_eq!(sm.day.len(), t.day.len());
-        assert_eq!(sm.night.len(), t.night.len());
     }
 }

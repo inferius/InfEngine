@@ -141,8 +141,15 @@ pub fn draw_remote_mobs(
                 // W429: slimes scale by their size state (the
                 // model is the size-1 cube); everything else keeps
                 // the baby halving.
+                // W475: magma cubes are sized too now - their mesh
+                // + hitbox are authored at the size-2 identity
+                // (1.02 box), so the scale is size/2: a size-2
+                // cube keeps today's look, size-4 doubles, size-1
+                // halves.
                 let mob_scale = if mob.kind == crate::mob::kinds::KIND_SLIME {
                     mob.size.max(1) as f32
+                } else if mob.kind == crate::mob::kinds::KIND_MAGMA_CUBE {
+                    mob.size.max(1) as f32 / 2.0
                 } else if mob.baby {
                     0.5f32
                 } else {

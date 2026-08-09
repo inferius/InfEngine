@@ -37,10 +37,12 @@ pub(crate) mod fangs;
 pub(crate) mod loot_table;
 pub(crate) mod pathfind;
 pub(crate) mod pool;
+pub(crate) mod pool_table;
 pub(crate) mod riding;
 pub(crate) mod raycast;
 pub(crate) mod shear;
 pub(crate) mod spawn;
+pub(crate) mod spawn_rules;
 pub(crate) mod spawner;
 pub(crate) mod state;
 

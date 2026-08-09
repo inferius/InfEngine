@@ -16,6 +16,10 @@ impl Voxel {
             let def = BlockDef::with_pbr(bt.name, bt.color, bt.transparent, metallic, roughness);
             registry.insert(BlockId(bt.id), def);
         }
+        // W475: name the MC species the generated spawn-pool table
+        // had to skip, once per process (the table is static, so
+        // boot is the honest place - the spawner repeats nothing).
+        crate::mob::pool::log_skipped_species_once();
         Self {
             state: AppState::MainMenu,
             settings: Settings::default(),

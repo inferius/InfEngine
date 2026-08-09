@@ -10,7 +10,8 @@
 //! - `net/minecraft/world/entity/monster/Monster.java::checkMonsterSpawnRules`
 //!   - block_light <= 7 AND effective_sky_light <= 7 AND difficulty > 0.
 //! - `net/minecraft/world/entity/animal/Animal.java::checkAnimalSpawnRules`
-//!   - sky_light >= 9 AND on top of grass.
+//!   - sky_light >= 9 (the spawnable-floor half moved to
+//!     `spawn::creature_floor_ok` in W475).
 //!
 //! All free fns over `(&Voxel, [i32; 3])` so they compose into the
 //! spawn loop in `spawn.rs` without coupling to the AI tick body.
@@ -20,12 +21,6 @@ use infengine_voxel::CHUNK_SIZE;
 use crate::Voxel;
 use crate::lighting::compute_day_factor;
 use crate::DAY_LENGTH_S;
-
-/// Block id for grass-top blocks. Matches the `block::BLOCK_TYPES`
-/// table entry at `id: 3`. Kept inline (no top-level const) so the
-/// gate stays close to the call sites; if the worldgen team
-/// renumbers grass they'll regrep `is_grass_below`.
-const GRASS_BLOCK_ID: u16 = 3;
 
 /// MC's hostile spawn-gate ceiling. `block_light` strictly above
 /// this kills the spawn. MC uses 7 here too
@@ -97,19 +92,12 @@ pub(crate) fn is_dark_enough_for_hostile(voxel: &Voxel, wpos: [i32; 3]) -> bool 
     bl <= HOSTILE_MAX_BLOCK_LIGHT && esl <= HOSTILE_MAX_SKY_LIGHT
 }
 
-/// MC's `Animal::checkAnimalSpawnRules`: sky_light >= 9 AND the
-/// cell below is grass. We split the grass check out (`is_grass_below`
-/// below) so the spawn-loop call site can short-circuit cheaper
-/// surface checks.
+/// MC's `Animal::checkAnimalSpawnRules`: sky_light >= 9 AND a
+/// spawnable floor below. The floor half lives in
+/// `spawn::creature_floor_ok` since W475 (per-kind MC block tags
+/// replaced the old grass-only check).
 pub(crate) fn is_bright_enough_for_passive(voxel: &Voxel, wpos: [i32; 3]) -> bool {
     sky_light_at(voxel, wpos) >= PASSIVE_MIN_SKY_LIGHT
-}
-
-/// True when `(wx, wy-1, wz)` is a grass block. MC's passive spawn
-/// rule requires the cell directly below the spawn target to be
-/// grass; we match that.
-pub(crate) fn is_grass_below(voxel: &Voxel, wpos: [i32; 3]) -> bool {
-    voxel.world.get([wpos[0], wpos[1] - 1, wpos[2]]).0 == GRASS_BLOCK_ID
 }
 
 /// Standing-room check: the cell at `wpos` is air AND the cell at
