@@ -428,7 +428,9 @@ fn scripts(
     b.anim("intro1_kyrandia", true, 0.0, 39.0);
     b.clear_anim();
     b.wait(0.3);
-    b.act("MoveCamera", &[("to", "Vec2(0.0, 112.0)".into()), ("seconds", "3.7".into())]);
+    // Slowed from the first guess of 3.7: against the original the
+    // pan is a leisurely reveal, not a swish.
+    b.act("MoveCamera", &[("to", "Vec2(0.0, 112.0)".into()), ("seconds", "7.4".into())]);
     b.wait(0.4);
     // The storm, narrated. The waves are the room's own ambient; the
     // lightning is one animation whose baked timing carries the ten

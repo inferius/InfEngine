@@ -114,6 +114,31 @@ fn main() {
             indices.extend_from_slice(&top.indices[91 * 320..195 * 320]);
             indices.extend_from_slice(&top.indices[..64 * 320]);
             indices.extend_from_slice(&bottom.indices[64 * 320..176 * 320]);
+            // BOTTOM.CPS holds the island as the storm leaves it -
+            // forest blasted clear. The scene opens whole: the original
+            // draws the animations' first frames before the pan, and so
+            // does the strip, or the pan scrolls over spoilers.
+            for (name, at_x, at_y) in [("SHORE.WSA", 0usize, 112usize), ("DESTRUCT.WSA", 152, 160)] {
+                let Some(first) = read(name)
+                    .and_then(|data| wsa::decode(&data).ok())
+                    .and_then(|anim| {
+                        anim.frames
+                            .first()
+                            .map(|frame| (anim.width as usize, anim.height as usize, frame.clone()))
+                    })
+                else {
+                    continue;
+                };
+                let (w, h, frame) = first;
+                for y in 0..h.min(280usize.saturating_sub(at_y)) {
+                    for x in 0..w.min(320usize.saturating_sub(at_x)) {
+                        let pixel = frame[y * w + x];
+                        if pixel != 0 {
+                            indices[(at_y + y) * 320 + at_x + x] = pixel;
+                        }
+                    }
+                }
+            }
             let rgba = top
                 .palette
                 .as_ref()

@@ -392,40 +392,55 @@ fn render_sfx(
 
     let (mut roland, mut opl, mut silent) = (0usize, 0usize, 0usize);
     for (bank, n, path) in &sequences {
-        let midi = std::fs::read(path)?;
-        let rendered = module.render(&midi).ok().filter(|samples| !samples.is_empty());
+        // The AdLib bank speaks first. The Roland "effects" are mostly
+        // chord stingers on stock patches - thunder as an accordion
+        // cluster - because the module has no effect voices to give;
+        // the era's canonical setup was Roland for music, AdLib for
+        // effects, and that is what this builds. The Roland sequence
+        // only steps in where the OPL bank has nothing.
+        let opl_rel = if bank == "intro" {
+            format!("sounds/sfx{n:03}.wav")
+        } else {
+            format!("sounds/{bank}/sfx{n:03}.wav")
+        };
+        let from_opl = read_wav(&project.join(&opl_rel))
+            .filter(|(samples, _, _)| samples.iter().any(|s| s.unsigned_abs() >= 16));
 
-        let (rel, samples, rate, channels) = match rendered {
-            Some(samples) => {
-                let rel = format!("sfx_mt32/{bank}/sfx{n:03}.ogg");
-                (rel, samples, mt32::RATE, 2u16)
-            }
-            None => {
-                // The Roland score never covered this track; the OPL
-                // render is the fallback, carried over as ogg.
-                let opl_rel = if bank == "intro" {
-                    format!("sounds/sfx{n:03}.wav")
-                } else {
-                    format!("sounds/{bank}/sfx{n:03}.wav")
-                };
-                let Some((samples, rate, channels)) = read_wav(&project.join(&opl_rel)) else {
-                    silent += 1;
-                    continue;
-                };
-                // An OPL track that rendered to nothing is a track the
-                // release does not have; registering it would turn
-                // "missing" into two seconds of silence.
-                if samples.iter().all(|s| s.unsigned_abs() < 16) {
-                    silent += 1;
-                    continue;
-                }
+        let (rel, samples, rate, channels) = match from_opl {
+            Some((samples, rate, channels)) => {
                 opl += 1;
                 (format!("sfx_opl/{bank}/sfx{n:03}.ogg"), samples, rate, channels)
             }
+            None => {
+                let Some(samples) = module.render(&std::fs::read(path)?).ok().filter(|s| !s.is_empty())
+                else {
+                    // Silent in both scores: a track the release does
+                    // not have. Registering it would turn "missing"
+                    // into two seconds of silence.
+                    silent += 1;
+                    continue;
+                };
+                roland += 1;
+                (format!("sfx_mt32/{bank}/sfx{n:03}.ogg"), samples, mt32::RATE, 2u16)
+            }
         };
-        if rel.starts_with("sfx_mt32") {
-            roland += 1;
-        }
+        // Effects sit against full-scale music and speech, and the OPL
+        // renders peak around a tenth of scale - bring every effect up
+        // to a common loudness. Boost only: quiet by design stays
+        // quieter than a strike, just audibly so.
+        let samples = {
+            let mut samples = samples;
+            let peak = samples.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+            if peak > 0 {
+                let gain = (0.71 * 32767.0) / peak as f32;
+                if gain > 1.0 {
+                    for sample in &mut samples {
+                        *sample = ((f32::from(*sample)) * gain).clamp(-32767.0, 32767.0) as i16;
+                    }
+                }
+            }
+            samples
+        };
 
         let target = project.join(&rel);
         if let Some(parent) = target.parent() {
