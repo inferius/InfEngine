@@ -39,11 +39,16 @@ pub struct Game {
     /// The music that is playing, held so the next PlayMusic replaces
     /// it instead of layering a second track over it.
     music: Option<infengine_audio::ActiveSound>,
+    /// The line being spoken, so a new one can silence it and the
+    /// music knows when to come back up.
+    voice: Option<infengine_audio::ActiveSound>,
     /// How far into the walk cycle the actor is.
     ///
     /// Kept across rooms: a figure that restarts its stride every time
     /// it walks through a door looks like it stumbles.
     step: f32,
+    /// Always-running clock for the room's own ambient animations.
+    clock: f32,
     cursor: Vec2,
     status: String,
     /// Screen art and appearance animation state.
@@ -77,7 +82,9 @@ impl Game {
             animation: None,
             still: None,
             music: None,
+            voice: None,
             step: 0.0,
+            clock: 0.0,
             cursor: Vec2::ZERO,
             status: String::new(),
             quit: false,
@@ -110,13 +117,22 @@ impl Game {
         self.animation = None;
         self.still = None;
 
-        let images: Vec<String> = self
+        let mut images: Vec<String> = self
             .host
             .room
             .layers
             .iter()
             .map(|layer| layer.image.clone())
             .collect();
+        // The room's own ambient animations draw too, so their sheets
+        // load with the room rather than never.
+        images.extend(
+            self.host
+                .project
+                .animations
+                .for_room(&self.host.room.id)
+                .map(|animation| animation.image.clone()),
+        );
         for image in images {
             self.upload(&image);
         }
@@ -241,7 +257,22 @@ impl Game {
             let left = if seconds > 0.0 { seconds } else { f32::INFINITY };
             self.still = Some((image, left));
         }
-        for file in [request.voice, request.sound].into_iter().flatten() {
+        // One voice at a time, and the music out of its way: a new
+        // line stops the one still ringing, and while anyone speaks
+        // the music ducks so the words carry over it.
+        if let Some(file) = request.voice {
+            tracing::info!(%file, "voice");
+            if let Some(mut old) = self.voice.take() {
+                old.stop(0.05);
+            }
+            self.voice = self.play_tracked(&file);
+            if self.voice.is_some()
+                && let Some(music) = self.music.as_mut()
+            {
+                music.set_volume(0.3, 0.15);
+            }
+        }
+        if let Some(file) = request.sound {
             // Named out loud so a silent run can say whether the sound
             // was never asked for or asked for and unheard.
             tracing::info!(%file, "sfx");
@@ -467,11 +498,20 @@ impl AppHandler for Game {
         if self.host.game.state.actor.is_walking() {
             self.step += ctx.delta_time;
         }
+        self.clock += ctx.delta_time;
 
         if let Some((_, left)) = self.still.as_mut() {
             *left -= ctx.delta_time;
             if *left <= 0.0 {
                 self.still = None;
+            }
+        }
+
+        // The voice ending is when the music comes back up.
+        if self.voice.as_ref().is_some_and(|voice| voice.is_stopped()) {
+            self.voice = None;
+            if let Some(music) = self.music.as_mut() {
+                music.set_volume(1.0, 0.4);
             }
         }
 
@@ -499,6 +539,23 @@ impl AppHandler for Game {
             (position, self.host.room.scale.scale_at(position.y))
         };
         let sprite = self.actor_frame();
+        // The room's own looping ambients - the sea under the intro's
+        // lightning - play on the global clock, under the script's one.
+        let ambients: Vec<(Animation, u32, Option<Texture2dHandle>, Vec2)> = self
+            .host
+            .project
+            .animations
+            .for_room(&self.host.room.id)
+            .filter(|animation| animation.looping)
+            .map(|animation| {
+                (
+                    animation.clone(),
+                    animation.frame_at(self.clock),
+                    self.textures.get(&animation.image).copied(),
+                    animation.position_in(room_size),
+                )
+            })
+            .collect();
         let frame = self.animation.as_ref().map(|(animation, time, at)| {
             (
                 animation.clone(),
@@ -560,6 +617,11 @@ impl AppHandler for Game {
             }
             if let Some(&handle) = self.textures.get(&cursor_image) {
                 draw::cursor(renderer, &self.view, self.cursor, handle, cursor_centred);
+            }
+            for (animation, index, handle, at) in &ambients {
+                if let Some(handle) = handle {
+                    draw::animation_frame(renderer, &self.view, animation, *handle, *index, *at);
+                }
             }
             if let Some((animation, index, Some(handle), placed)) = frame {
                 // Where the script said, or where the animation says

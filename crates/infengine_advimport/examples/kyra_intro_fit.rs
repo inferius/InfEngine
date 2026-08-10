@@ -22,7 +22,13 @@ use std::path::{Path, PathBuf};
 
 use glam::Vec2;
 use infengine_advimport::kyra::palette::Palette;
-use infengine_advimport::kyra::{cps, wsa};
+use infengine_advimport::kyra::{cps, seqtime, wsa};
+
+/// Where the island storm's bytecode sits in the floppy `MAIN.EXE`,
+/// and which movie slot in it is the lightning. Measured once, like
+/// every other sequence address in these tools.
+const ISLAND_SEQ: usize = 0x2EA17;
+const DESTRUCT_SLOT: u8 = 5;
 
 /// One intro animation: our id, its file, its scene palette, and the
 /// screen it was painted onto.
@@ -67,6 +73,8 @@ fn main() {
     let project = args.next().map(PathBuf::from);
 
     let read = |name: &str| std::fs::read(game.join(name)).ok();
+    // The executable, for the island sequence's own frame clock.
+    let main_exe = read("MAIN.EXE");
     let screen = |name: &str| read(name).and_then(|data| cps::decode(&data).ok());
     let col = |name: &str| read(name).and_then(|data| Palette::from_vga_6bit(&data));
 
@@ -172,7 +180,7 @@ fn main() {
         } else {
             wsa::decode(&data)
         };
-        let anim = match decoded {
+        let mut anim = match decoded {
             Ok(anim) => anim,
             Err(err) => {
                 println!("{}: {err}", piece.file);
@@ -185,6 +193,32 @@ fn main() {
 
         if let (true, Some(project), Some(dir)) = (piece.bake, &project, &anim_dir) {
             let palette = col(piece.col);
+            // The lightning is a story piece pretending to be an
+            // ambient: the island sequence shows its frames out of
+            // file order, with ten calm seconds before the first
+            // strike and long holds between the others. Re-order the
+            // sheet to the played sequence and carry the holds as
+            // per-frame timing - a linear 12 fps run of the file
+            // order is a five-second morph the intro never shows.
+            let mut timing: Vec<f32> = Vec::new();
+            if piece.id == "intro1_destruct"
+                && let Some(exe) = &main_exe
+            {
+                let played = seqtime::expand(exe, ISLAND_SEQ);
+                let shows = seqtime::slot_frames(&played, DESTRUCT_SLOT, 60);
+                if !shows.is_empty() {
+                    anim.frames = shows
+                        .iter()
+                        .map(|(frame, _)| {
+                            anim.frames
+                                .get(*frame as usize)
+                                .cloned()
+                                .unwrap_or_default()
+                        })
+                        .collect();
+                    timing = shows.iter().map(|(_, ticks)| *ticks as f32 / 60.0).collect();
+                }
+            }
             let (w, h, rgba) = anim.to_sheet_rgba(palette.as_ref());
             let rel = format!("animations/{}.png", piece.id);
             match save(&project.join(&rel), w, h, &rgba) {
@@ -212,9 +246,18 @@ fn main() {
             entry.columns = anim.sheet_columns();
             entry.fps = if piece.id == "intro1_shore" { 8.0 } else { 12.0 };
             entry.looping = piece.id == "intro1_shore";
+            entry.timing = timing;
             if let Some(old) = old {
                 entry.room = old.room;
                 entry.at = old.at;
+            }
+            // The waves play the whole scene under the script's own
+            // animation, so they live on the room rather than in the
+            // script's single slot - starting the lightning must not
+            // stop the sea.
+            if piece.id == "intro1_shore" {
+                entry.room = Some("_intro".into());
+                entry.at = Some(Vec2::new(0.0, 112.0));
             }
             index.insert(entry);
             let _ = infengine_adventure::anim::save_index(&index, dir);

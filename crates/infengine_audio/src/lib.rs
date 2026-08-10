@@ -275,6 +275,22 @@ impl std::fmt::Debug for ActiveSound {
 }
 
 impl ActiveSound {
+    /// Set linear gain `[0, 1.5]`, fading over `fade_s` seconds.
+    ///
+    /// A132: speech over music needs the music out of the way; this is
+    /// the duck and the recovery both.
+    pub fn set_volume(&mut self, gain: f32, fade_s: f32) {
+        let g = gain.clamp(0.0, 1.5);
+        let db = if g <= 1e-3 { -60.0 } else { 20.0 * g.log10() };
+        self.0.set_volume(
+            kira::Decibels::from(db),
+            kira::Tween {
+                duration: std::time::Duration::from_secs_f32(fade_s.max(0.0)),
+                ..Default::default()
+            },
+        );
+    }
+
     /// Fade out over `fade_s` seconds, then stop.
     pub fn stop(&mut self, fade_s: f32) {
         self.0.stop(kira::Tween {

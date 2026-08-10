@@ -244,7 +244,28 @@ fn main() {
     for (name, content) in rooms() {
         write(&project.join("rooms").join(name), &content);
     }
-    for (name, content) in scripts(&rt) {
+    // The island storm's own clock, loops expanded: when each thunder
+    // effect really fires, and how long the whole scene runs.
+    let played = infengine_advimport::kyra::seqtime::expand(&exe, 0x2EA17);
+    let island: Vec<(f32, u8)> = played
+        .iter()
+        .filter_map(|(tick, did)| match did {
+            infengine_advimport::kyra::seqtime::Did::Effect(n) => {
+                Some((*tick as f32 / 60.0, *n))
+            }
+            _ => None,
+        })
+        .collect();
+    let island_end = played
+        .last()
+        .map(|(tick, _)| *tick as f32 / 60.0 + 1.0)
+        .unwrap_or(12.5);
+    println!(
+        "island storm: {} thunder cues over {island_end:.1}s",
+        island.len()
+    );
+
+    for (name, content) in scripts(&rt, &island, island_end) {
         write(&project.join("scripts").join(name), &content);
     }
 
@@ -333,7 +354,6 @@ impl Body {
 enum Step<'a> {
     Sfx(u32),
     Say(&'a str),
-    Anim(&'a str, bool, f32, f32),
 }
 
 fn beats(body: &mut Body, rt: &dyn Fn(&str) -> f32, steps: &[(f32, Step)], tail: f32) {
@@ -345,7 +365,6 @@ fn beats(body: &mut Body, rt: &dyn Fn(&str) -> f32, steps: &[(f32, Step)], tail:
         }
         match step {
             Step::Sfx(n) => body.sfx(*n),
-            Step::Anim(id, wait, x, y) => body.anim(id, *wait, *x, *y),
             Step::Say(line) => {
                 body.say(line);
                 clock += rt(line);
@@ -390,8 +409,12 @@ fn rooms() -> Vec<(&'static str, String)> {
     ]
 }
 
-fn scripts(rt: &dyn Fn(&str) -> f32) -> Vec<(&'static str, String)> {
-    use Step::{Anim, Say, Sfx};
+fn scripts(
+    rt: &dyn Fn(&str) -> f32,
+    island: &[(f32, u8)],
+    island_end: f32,
+) -> Vec<(&'static str, String)> {
+    use Step::{Say, Sfx};
     let mut out = Vec::new();
 
     // Logos on the strip, the pan, the island storm. Placements and
@@ -407,31 +430,28 @@ fn scripts(rt: &dyn Fn(&str) -> f32) -> Vec<(&'static str, String)> {
     b.wait(0.3);
     b.act("MoveCamera", &[("to", "Vec2(0.0, 112.0)".into()), ("seconds", "3.7".into())]);
     b.wait(0.4);
-    b.anim("intro1_shore", false, 0.0, 112.0);
-    // The storm, narrated: the CD speaks six recordings over it (there
-    // is no text for them anywhere), thunder between, the lightning
-    // strike on the shore in the middle of it.
-    beats(
-        &mut b,
-        rt,
-        &[
-            (0.9, Say("intro.isl0")),
-            (1.9, Sfx(22)),
-            (4.1, Say("intro.isl1")),
-            (4.3, Sfx(22)),
-            (5.0, Say("intro.isl2")),
-            (6.0, Sfx(37)),
-            (6.3, Say("intro.isl3")),
-            (7.0, Sfx(23)),
-            (7.0, Anim("intro1_destruct", false, 152.0, 160.0)),
-            (7.1, Sfx(37)),
-            (7.8, Sfx(24)),
-            (8.0, Say("intro.isl4")),
-            (8.9, Sfx(37)),
-            (9.8, Say("intro.isl5")),
-        ],
-        12.5,
-    );
+    // The storm, narrated. The waves are the room's own ambient; the
+    // lightning is one animation whose baked timing carries the ten
+    // calm seconds and the holds between strikes, so it starts at
+    // zero and the island stays whole until the bolts have earned the
+    // clearing. Thunder lands on the sequence's own expanded clock;
+    // the narrator (six recordings with no text anywhere) reads over
+    // the calm stretch, as on the CD.
+    b.anim("intro1_destruct", false, 152.0, 160.0);
+    let mut storm: Vec<(f32, Step)> = island
+        .iter()
+        .map(|(seconds, effect)| (*seconds, Sfx(*effect as u32)))
+        .collect();
+    storm.extend([
+        (0.9, Say("intro.isl0")),
+        (2.6, Say("intro.isl1")),
+        (4.3, Say("intro.isl2")),
+        (6.0, Say("intro.isl3")),
+        (7.7, Say("intro.isl4")),
+        (9.4, Say("intro.isl5")),
+    ]);
+    storm.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    beats(&mut b, rt, &storm, island_end);
     b.goto("_intro_tree");
     out.push(("_intro.script.ron", b.script("_intro.entry")));
 

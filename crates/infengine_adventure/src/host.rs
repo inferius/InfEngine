@@ -461,8 +461,16 @@ impl Host {
                     .locales
                     .line(&line, &self.language.voice)
                     .and_then(|line| line.voice.clone());
+                // A spoken line holds the floor for its recording, not
+                // just its reading time - otherwise the script walks on
+                // and the voices pile on top of each other.
+                let spoken = request
+                    .voice
+                    .as_deref()
+                    .and_then(|rel| wav_seconds(&self.project.resolve(rel)))
+                    .map_or(0.0, |secs| secs + 0.25);
                 self.subtitle = Some(Subtitle {
-                    remaining: reading_time(&text),
+                    remaining: reading_time(&text).max(spoken),
                     line,
                     text,
                     speaker,
@@ -559,6 +567,43 @@ impl Host {
 /// How long to leave a subtitle up.
 pub fn reading_time(text: &str) -> f32 {
     SUBTITLE_MIN + text.chars().count() as f32 / CHARS_PER_SECOND
+}
+
+/// How long a PCM WAV plays, from its header alone.
+///
+/// The voice files are WAVs this importer wrote itself, so the header
+/// walk only has to be honest, not general; anything else returns
+/// `None` and the line falls back to its reading time.
+fn wav_seconds(path: &std::path::Path) -> Option<f32> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 12];
+    use std::io::Read;
+    file.read_exact(&mut head).ok()?;
+    if &head[..4] != b"RIFF" || &head[8..12] != b"WAVE" {
+        return None;
+    }
+    let (mut rate, mut block, mut data) = (0u32, 0u32, 0u32);
+    let mut chunk = [0u8; 8];
+    while file.read_exact(&mut chunk).is_ok() {
+        let len = u32::from_le_bytes(chunk[4..8].try_into().ok()?);
+        match &chunk[..4] {
+            b"fmt " => {
+                let mut body = vec![0u8; len as usize];
+                file.read_exact(&mut body).ok()?;
+                rate = u32::from_le_bytes(body.get(4..8)?.try_into().ok()?);
+                block = u32::from(u16::from_le_bytes(body.get(12..14)?.try_into().ok()?));
+            }
+            b"data" => {
+                data = len;
+                break;
+            }
+            _ => {
+                use std::io::Seek;
+                file.seek(std::io::SeekFrom::Current(i64::from(len + (len & 1)))).ok()?;
+            }
+        }
+    }
+    (rate > 0 && block > 0 && data > 0).then(|| data as f32 / (rate * block) as f32)
 }
 
 #[cfg(test)]

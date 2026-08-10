@@ -30,6 +30,7 @@ pub mod wsa;
 pub mod regions;
 pub mod roomdat;
 pub mod scene_anim;
+pub mod seqtime;
 pub mod rooms;
 pub mod vm;
 pub mod voc;
