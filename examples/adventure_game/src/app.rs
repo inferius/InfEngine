@@ -136,6 +136,13 @@ impl Game {
         for image in images {
             self.upload(&image);
         }
+        // The viewport as the surface really is, not as it was when the
+        // view was made: a room loaded before the first resize event
+        // centred itself in a window that no longer exists.
+        if let Some(renderer) = self.renderer.as_mut() {
+            let (w, h) = renderer.camera_mut().viewport();
+            self.view.viewport = Vec2::new(w as f32, h as f32);
+        }
         self.view.room = self.host.room.size;
         self.view.visible = self.host.room.camera.view_in(self.host.room.size);
         self.view.camera = self.host.game.state.camera;
@@ -321,6 +328,9 @@ impl Game {
 
 impl AppHandler for Game {
     fn on_start(&mut self, window: &EngineWindow) {
+        // The game draws its own pointer; the system's arrow over it
+        // reads as two cursors.
+        window.raw().set_cursor_visible(false);
         // Vsync: a paced 2D game wants every frame on the display's
         // beat; unsynchronized presents made the intro judder.
         match Renderer::new_vsynced(window) {
@@ -411,7 +421,12 @@ impl AppHandler for Game {
             // Any key skips the intro - held, not tapped, so a stray
             // press cannot cost the scene. The tap leaves a hint.
             if pressed {
-                self.skip_hold = Some(0.0);
+                // Key auto-repeat delivers "pressed" again and again;
+                // restarting the hold on each one made the bar fill
+                // halfway, snap back and never finish.
+                if self.skip_hold.is_none() {
+                    self.skip_hold = Some(0.0);
+                }
                 self.skip_hint = 2.5;
             } else {
                 self.skip_hold = None;

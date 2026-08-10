@@ -62,6 +62,7 @@ impl View {
         self.scale = if fit >= 1.0 { fit.floor() } else { fit.max(0.01) };
         let drawn = visible * self.scale;
         self.origin = ((self.viewport - drawn) * 0.5).max(Vec2::ZERO);
+        tracing::debug!(viewport = ?self.viewport, ?visible, scale = self.scale, origin = ?self.origin, "view fit");
     }
 
     /// The window into the room, with zero meaning all of it.

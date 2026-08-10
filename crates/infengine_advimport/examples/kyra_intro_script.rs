@@ -110,6 +110,12 @@ const LINES: &[(&str, usize, Option<usize>)] = &[
     ("intro.mal16", 31, Some(28)),
 ];
 
+/// The forest lines in the sequence's own print order.
+const TREE_LINES: &[&str] = &[
+    "intro.tree0", "intro.tree1", "intro.tree2", "intro.tree3", "intro.tree4",
+    "intro.tree5", "intro.tree6", "intro.tree7", "intro.tree8",
+];
+
 /// The narrator over the island storm: recordings with no text
 /// anywhere in the data - the CD shows nothing and only speaks.
 const ISLAND: &[(&str, usize)] = &[
@@ -264,8 +270,39 @@ fn main() {
         "island storm: {} thunder cues over {island_end:.1}s",
         island.len()
     );
+    // The forest on the same clock: its nine lines and its effects at
+    // the ticks the loops really put them on, instead of a flat read
+    // scaled by guesswork.
+    let forest_played = infengine_advimport::kyra::seqtime::expand(&exe, 0x2E4F3);
+    let mut forest: Vec<(f32, ForestCue)> = Vec::new();
+    let mut talk = 0usize;
+    for (tick, did) in &forest_played {
+        let at = *tick as f32 / 60.0;
+        match did {
+            infengine_advimport::kyra::seqtime::Did::Effect(n) => {
+                // Effect 38 has no INTRO.ADL track; the original played
+                // silence there and so do we, by leaving it out.
+                if *n != 38 {
+                    forest.push((at, ForestCue::Sfx(*n)));
+                }
+            }
+            infengine_advimport::kyra::seqtime::Did::Talk(_) => {
+                forest.push((at, ForestCue::Say(talk)));
+                talk += 1;
+            }
+            _ => {}
+        }
+    }
+    let forest_end = forest_played
+        .last()
+        .map(|(tick, _)| *tick as f32 / 60.0 + 0.5)
+        .unwrap_or(22.0);
+    println!(
+        "forest: {} cues ({talk} lines) over {forest_end:.1}s",
+        forest.len()
+    );
 
-    for (name, content) in scripts(&rt, &island, island_end) {
+    for (name, content) in scripts(&rt, &island, island_end, &forest, forest_end) {
         write(&project.join("scripts").join(name), &content);
     }
 
@@ -409,10 +446,18 @@ fn rooms() -> Vec<(&'static str, String)> {
     ]
 }
 
+/// One forest moment: an effect track, or the n-th spoken line.
+enum ForestCue {
+    Sfx(u8),
+    Say(usize),
+}
+
 fn scripts(
     rt: &dyn Fn(&str) -> f32,
     island: &[(f32, u8)],
     island_end: f32,
+    forest: &[(f32, ForestCue)],
+    forest_end: f32,
 ) -> Vec<(&'static str, String)> {
     use Step::{Say, Sfx};
     let mut out = Vec::new();
@@ -457,47 +502,21 @@ fn scripts(
     b.goto("_intro_tree");
     out.push(("_intro.script.ron", b.script("_intro.entry")));
 
-    // The forest: Malcolm's taunts while TREE1 runs its 22.0s, then
-    // TREE2 carries straight on. The cue times are the sequence's own
-    // print and effect times, scaled 22.0/13.3 - the flat bytecode
-    // clock undercounts because the walk-in loops, and the baked
-    // animation carries the loops' real length. Effect 38 is in the
-    // bytecode but no INTRO.ADL track 38 exists; the original played
-    // silence there and so do we, by leaving it out.
+    // The forest: Malcolm's taunts and the effects at the ticks the
+    // sequence's own loops put them on, while TREE1 runs. The talk
+    // order is the sequence's print order, which is what the tree0..8
+    // ids were named after.
     let mut b = Body::new();
     b.music("intro_3");
     b.anim("intro2_tree1", false, 0.0, 16.0);
-    beats(
-        &mut b,
-        rt,
-        &[
-            (0.0, Sfx(30)),
-            (0.0, Sfx(31)),
-            (0.2, Sfx(25)),
-            (0.3, Say("intro.tree0")),
-            (0.5, Sfx(31)),
-            (1.0, Sfx(36)),
-            (1.0, Sfx(31)),
-            (1.2, Sfx(30)),
-            (1.3, Say("intro.tree1")),
-            (1.7, Sfx(30)),
-            (2.0, Sfx(31)),
-            (2.6, Sfx(30)),
-            (2.8, Sfx(26)),
-            (3.1, Sfx(26)),
-            (3.1, Say("intro.tree2")),
-            (5.0, Sfx(30)),
-            (5.8, Say("intro.tree3")),
-            (10.6, Sfx(27)),
-            (11.2, Say("intro.tree4")),
-            (12.9, Say("intro.tree5")),
-            (13.1, Say("intro.tree6")),
-            (14.9, Sfx(28)),
-            (15.0, Say("intro.tree7")),
-            (16.0, Say("intro.tree8")),
-        ],
-        22.0,
-    );
+    let cues: Vec<(f32, Step)> = forest
+        .iter()
+        .filter_map(|(at, cue)| match cue {
+            ForestCue::Sfx(n) => Some((*at, Sfx(u32::from(*n)))),
+            ForestCue::Say(index) => TREE_LINES.get(*index).map(|line| (*at, Say(line))),
+        })
+        .collect();
+    beats(&mut b, rt, &cues, forest_end.max(22.0));
     b.anim("intro2_tree2", true, 0.0, 16.0);
     b.wait(0.3);
     b.goto("_intro_kallak");

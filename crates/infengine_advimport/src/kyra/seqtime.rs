@@ -24,6 +24,8 @@ pub enum Did {
     Prev { slot: u8 },
     /// An effect track was started.
     Effect(u8),
+    /// A talk line was printed.
+    Talk(u8),
     /// A music track was started.
     Track(u8),
 }
@@ -113,6 +115,7 @@ pub fn expand(stream: &[u8], at: usize) -> Vec<(u32, Did)> {
                     q = back;
                 }
             }
+            0x10 => out.push((tick, Did::Talk(args[0] as u8))),
             0x18 => out.push((tick, Did::Effect(args[0] as u8))),
             0x19 => out.push((tick, Did::Track(args[0] as u8))),
             0x1D => break,

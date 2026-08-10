@@ -426,13 +426,15 @@ fn render_sfx(
         };
         // Effects sit against full-scale music and speech, and the OPL
         // renders peak around a tenth of scale - bring every effect up
-        // to a common loudness. Boost only: quiet by design stays
-        // quieter than a strike, just audibly so.
+        // toward a common loudness. Boost only, and never past 18 dB:
+        // amplifying a whisper-quiet render to full scale turns its
+        // quantisation floor into radio static, which is worse than
+        // quiet (the pen scratches proved it).
         let samples = {
             let mut samples = samples;
             let peak = samples.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
             if peak > 0 {
-                let gain = (0.71 * 32767.0) / peak as f32;
+                let gain = ((0.71 * 32767.0) / peak as f32).min(8.0);
                 if gain > 1.0 {
                     for sample in &mut samples {
                         *sample = ((f32::from(*sample)) * gain).clamp(-32767.0, 32767.0) as i16;
