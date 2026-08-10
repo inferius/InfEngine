@@ -62,6 +62,8 @@ const PIECES: &[Piece] = &[
 const BACKDROPS: &[(&str, &str, &str)] = &[
     ("TREE.CPS", "TREE_EXP.COL", "tree.png"),
     ("MAL-KAL.CPS", "MAL-KAL.COL", "mal_kal.png"),
+    // The story screen between the storm and the forest.
+    ("TEXT.CPS", "WW.COL", "text.png"),
 ];
 
 fn main() {

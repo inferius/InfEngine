@@ -28,6 +28,8 @@ pub enum Did {
     Talk(u8),
     /// A music track was started.
     Track(u8),
+    /// A voice recording was started (CD interpreter only).
+    Voc(u8),
 }
 
 /// Argument bytes per floppy opcode; `2` is a little-endian word.
@@ -70,7 +72,7 @@ const SIZES: [&[u8]; 30] = [
 /// `endOfScript`. Ticks are the interpreter's sixty-to-a-second.
 pub fn expand(stream: &[u8], at: usize) -> Vec<(u32, Did)> {
     let mut out = Vec::new();
-    let mut loops: [(usize, u16); 20] = [(0, 0xFFFF); 20];
+    let mut loops: [(Option<usize>, u16); 20] = [(None, 0xFFFF); 20];
     let mut p = at;
     let mut tick = 0u32;
     // A hard ceiling so a malformed stream terminates: the longest
@@ -99,20 +101,27 @@ pub fn expand(stream: &[u8], at: usize) -> Vec<(u32, Did)> {
             0x06 | 0x07 => tick += args[0] as u32,
             0x0A => {
                 let slot = (args[0] as usize).min(loops.len() - 1);
-                loops[slot] = (q, 0xFFFF);
+                loops[slot] = (Some(q), 0xFFFF);
             }
             0x0B => {
                 let slot = (args[0] as usize).min(loops.len() - 1);
                 let count = args[1] as u16;
                 let (back, left) = loops[slot];
+                // The interpreter nulls the pointer when a loop is
+                // spent; re-arming without a fresh loopInit falls
+                // through instead of jumping into the past forever.
                 if left == 0xFFFF {
-                    loops[slot] = (back, count.saturating_sub(1));
-                    q = back;
+                    if let Some(back) = back {
+                        loops[slot] = (Some(back), count.saturating_sub(1));
+                        q = back;
+                    }
                 } else if left == 0 {
-                    loops[slot] = (back, 0xFFFF);
+                    loops[slot] = (None, 0xFFFF);
                 } else {
                     loops[slot] = (back, left - 1);
-                    q = back;
+                    if let Some(back) = back {
+                        q = back;
+                    }
                 }
             }
             0x10 => out.push((tick, Did::Talk(args[0] as u8))),
@@ -158,6 +167,146 @@ pub fn slot_frames(played: &[(u32, Did)], slot: u8, hold: u32) -> Vec<(u8, u32)>
         out.push((*frame, until.saturating_sub(*tick).max(1)));
     }
     out
+}
+
+/// Argument bytes per CD opcode - a renumbered table, not an extended
+/// one (see the CD interpreter in ScummVM's seqplayer): two waits, two
+/// `loopInc`s, `endOfScript` at 0x20, speech at 0x22.
+const CD_SIZES: [&[u8]; 38] = [
+    &[1, 1],             // 00 wsaOpen
+    &[1],                // 01 wsaClose
+    &[1, 1, 2, 1],       // 02 wsaPlayFrame
+    &[1],                // 03 wsaPlayNextFrame
+    &[1],                // 04 wsaPlayPrevFrame
+    &[1, 2, 1],          // 05 drawShape
+    &[2],                // 06 waitTicks
+    &[2],                // 07 waitTicks
+    &[2],                // 08 copyWaitTicks
+    &[],                 // 09 shuffleScreen
+    &[],                 // 0A copyView
+    &[1],                // 0B loopInit
+    &[1, 2],             // 0C loopInc
+    &[1, 2],             // 0D loopInc
+    &[1],                // 0E skip
+    &[1],                // 0F loadPalette
+    &[1],                // 10 loadBitmap
+    &[],                 // 11 fadeToBlack
+    &[1],                // 12 printText
+    &[1, 2, 1, 1],       // 13 printTalkText
+    &[],                 // 14 restoreTalkText
+    &[],                 // 15 clearCurrentScreen
+    &[],                 // 16 break
+    &[],                 // 17 fadeFromBlack
+    &[1, 1],             // 18 copyRegion
+    &[1],                // 19 copyRegionSpecial
+    &[2, 1, 2, 1, 1, 1], // 1A fillRect
+    &[1],                // 1B playEffect
+    &[1],                // 1C playTrack
+    &[],                 // 1D allocTempBuffer
+    &[],                 // 1E textDisplayEnable
+    &[],                 // 1F textDisplayDisable
+    &[],                 // 20 endOfScript
+    &[],                 // 21 loadIntroVRM
+    &[1],                // 22 playVocFile
+    &[],                 // 23 miscUnk3
+    &[1],                // 24 prefetchVocFile
+    &[],                 // 25 textDisplayWait
+];
+
+/// Walk one CD sequence, loops executed - the talkie's own clock, for
+/// the recordings' places in it.
+pub fn expand_cd(stream: &[u8], at: usize) -> Vec<(u32, Did)> {
+    let mut out = Vec::new();
+    let mut loops: [(Option<usize>, u16); 20] = [(None, 0xFFFF); 20];
+    let mut p = at;
+    let mut tick = 0u32;
+    for _ in 0..1_000_000 {
+        let Some(&op) = stream.get(p) else { break };
+        let op = op as usize;
+        if op >= CD_SIZES.len() {
+            break;
+        }
+        let mut q = p + 1;
+        let mut args = [0i64; 6];
+        for (i, &size) in CD_SIZES[op].iter().enumerate() {
+            if size == 1 {
+                args[i] = stream[q] as i64;
+                q += 1;
+            } else {
+                args[i] = u16::from_le_bytes([stream[q], stream[q + 1]]) as i64;
+                q += 2;
+            }
+        }
+        match op {
+            0x06..=0x08 => tick += args[0] as u32,
+            0x0B => {
+                let slot = (args[0] as usize).min(loops.len() - 1);
+                loops[slot] = (Some(q), 0xFFFF);
+            }
+            0x0C | 0x0D => {
+                let slot = (args[0] as usize).min(loops.len() - 1);
+                let count = args[1] as u16;
+                let (back, left) = loops[slot];
+                if left == 0xFFFF {
+                    if let Some(back) = back {
+                        loops[slot] = (Some(back), count.saturating_sub(1));
+                        q = back;
+                    }
+                } else if left == 0 {
+                    loops[slot] = (None, 0xFFFF);
+                } else {
+                    loops[slot] = (back, left - 1);
+                    if let Some(back) = back {
+                        q = back;
+                    }
+                }
+            }
+            0x13 => out.push((tick, Did::Talk(args[0] as u8))),
+            0x1B => out.push((tick, Did::Effect(args[0] as u8))),
+            0x1C => out.push((tick, Did::Track(args[0] as u8))),
+            0x22 => out.push((tick, Did::Voc(args[0] as u8))),
+            0x20 => break,
+            _ => {}
+        }
+        p = q;
+    }
+    out
+}
+
+/// Carry a CD tick onto the floppy clock by the effects both scores
+/// share: piecewise linear between matching effect cues, clamped to
+/// the ends. Both lists must be the same effects in the same order,
+/// which the intro's scenes are.
+pub fn map_by_effects(cd: &[(u32, Did)], floppy: &[(u32, Did)], cd_tick: u32) -> f32 {
+    let anchors: Vec<(f32, f32)> = cd
+        .iter()
+        .filter_map(|(t, d)| match d {
+            Did::Effect(n) => Some((*t as f32, *n)),
+            _ => None,
+        })
+        .zip(floppy.iter().filter_map(|(t, d)| match d {
+            Did::Effect(n) => Some((*t as f32, *n)),
+            _ => None,
+        }))
+        .filter(|((_, a), (_, b))| a == b)
+        .map(|((ct, _), (ft, _))| (ct, ft))
+        .collect();
+    let t = cd_tick as f32;
+    if anchors.is_empty() {
+        return t;
+    }
+    if t <= anchors[0].0 {
+        return anchors[0].1 - (anchors[0].0 - t);
+    }
+    for pair in anchors.windows(2) {
+        let ((c0, f0), (c1, f1)) = (pair[0], pair[1]);
+        if t <= c1 {
+            let span = (c1 - c0).max(1.0);
+            return f0 + (t - c0) / span * (f1 - f0);
+        }
+    }
+    let (cl, fl) = *anchors.last().expect("nonempty");
+    fl + (t - cl)
 }
 
 #[cfg(test)]
