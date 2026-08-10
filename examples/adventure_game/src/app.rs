@@ -241,6 +241,14 @@ impl Game {
     fn perform(&mut self, request: Request) {
         if request.room_changed {
             self.load_room_textures();
+            // A cut is a cut: a line still ringing from the last scene
+            // does not follow the player through it.
+            if let Some(mut voice) = self.voice.take() {
+                voice.stop(0.1);
+            }
+            if let Some(music) = self.music.as_mut() {
+                music.set_volume(1.0, 0.3);
+            }
         }
         if request.quit {
             self.quit = true;
