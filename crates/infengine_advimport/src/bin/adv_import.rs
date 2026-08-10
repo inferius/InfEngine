@@ -102,6 +102,32 @@ enum Command {
         #[arg(long, default_value = "music")]
         prefix: String,
     },
+
+    /// Render the Roland sound effects and pick every effect's source.
+    ///
+    /// With a Roland attached, Kyrandia plays its effects as sequences
+    /// on the module - the same numbering as the AdLib banks, in the
+    /// same files as the music. This renders every effect sequence
+    /// through the CM-32L, falls back to the OPL render (transcoded to
+    /// ogg) for tracks the Roland score never covered, and owns every
+    /// `sfx` row of the sound index, including the per-chapter banks
+    /// the music switches between.
+    ///
+    /// Needs the `mt32` feature.
+    Sfx {
+        /// Directory of `.mid` files, as written by `kyra` (bank_n).
+        source: PathBuf,
+        /// Project root: holds `sounds/` with the OPL renders and the
+        /// index, and receives `sfx_mt32/` and `sfx_opl/`.
+        #[arg(long, short)]
+        project: PathBuf,
+        /// Directory holding CM32L control and PCM ROMs.
+        #[arg(long)]
+        roms: PathBuf,
+        /// Stop after this many sequences, for a quick look.
+        #[arg(long)]
+        limit: Option<usize>,
+    },
 }
 
 /// Give the imported rooms the exits the game's own room table lists.
@@ -280,6 +306,180 @@ fn render_music(
     Err("built without the mt32 feature; rebuild with --features mt32".into())
 }
 
+/// A PCM WAV, read back for transcoding.
+///
+/// Only what `adl_render` writes: 16-bit little-endian samples, any
+/// rate, any channel count. Returns interleaved samples.
+#[cfg(feature = "mt32")]
+fn read_wav(path: &std::path::Path) -> Option<(Vec<i16>, u32, u16)> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 12 || &data[..4] != b"RIFF" || &data[8..12] != b"WAVE" {
+        return None;
+    }
+    let (mut rate, mut channels, mut bits) = (0u32, 0u16, 0u16);
+    let mut samples = None;
+    let mut at = 12usize;
+    while at + 8 <= data.len() {
+        let id = &data[at..at + 4];
+        let len = u32::from_le_bytes(data[at + 4..at + 8].try_into().ok()?) as usize;
+        let body = data.get(at + 8..at + 8 + len)?;
+        match id {
+            b"fmt " if body.len() >= 16 => {
+                channels = u16::from_le_bytes([body[2], body[3]]);
+                rate = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+                bits = u16::from_le_bytes([body[14], body[15]]);
+            }
+            b"data" => {
+                samples = Some(
+                    body.chunks_exact(2)
+                        .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            _ => {}
+        }
+        at += 8 + len + (len & 1);
+    }
+    if bits == 16 && rate > 0 && channels > 0 {
+        samples.map(|samples| (samples, rate, channels))
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "mt32")]
+fn render_sfx(
+    source: &std::path::Path,
+    project: &std::path::Path,
+    roms: &std::path::Path,
+    limit: Option<usize>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use infengine_adventure::sound;
+    use infengine_advimport::kyra::mt32;
+    use infengine_advimport::ogg;
+
+    let (control, pcm) = mt32::Module::find(roms).ok_or_else(|| {
+        format!("no CM32L control and PCM ROMs under {}", roms.display())
+    })?;
+    let module = mt32::Module::load(&control, &pcm)?;
+
+    // Every <bank>_<n>.mid is one track's Roland score.
+    let mut sequences: Vec<(String, usize, std::path::PathBuf)> = std::fs::read_dir(source)?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter_map(|path| {
+            let stem = path.file_stem()?.to_str()?;
+            let ext = path.extension()?.to_str()?;
+            if !ext.eq_ignore_ascii_case("mid") {
+                return None;
+            }
+            let (bank, n) = stem.rsplit_once('_')?;
+            Some((bank.to_ascii_lowercase(), n.parse::<usize>().ok()?, path.clone()))
+        })
+        .collect();
+    sequences.sort();
+    if let Some(limit) = limit {
+        sequences.truncate(limit);
+    }
+
+    let index_dir = project.join(sound::SOUND_DIR);
+    let mut index = sound::load_index(&index_dir)?;
+    // This command owns every sfx row, so a rebuild starts from none:
+    // stale rows are exactly how a renamed file keeps "working".
+    index
+        .sounds
+        .retain(|id, _| !(id.starts_with("sfx.intro_") || id.contains(".sfx")));
+
+    let (mut roland, mut opl, mut silent) = (0usize, 0usize, 0usize);
+    for (bank, n, path) in &sequences {
+        let midi = std::fs::read(path)?;
+        let rendered = module.render(&midi).ok().filter(|samples| !samples.is_empty());
+
+        let (rel, samples, rate, channels) = match rendered {
+            Some(samples) => {
+                let rel = format!("sfx_mt32/{bank}/sfx{n:03}.ogg");
+                (rel, samples, mt32::RATE, 2u16)
+            }
+            None => {
+                // The Roland score never covered this track; the OPL
+                // render is the fallback, carried over as ogg.
+                let opl_rel = if bank == "intro" {
+                    format!("sounds/sfx{n:03}.wav")
+                } else {
+                    format!("sounds/{bank}/sfx{n:03}.wav")
+                };
+                let Some((samples, rate, channels)) = read_wav(&project.join(&opl_rel)) else {
+                    silent += 1;
+                    continue;
+                };
+                // An OPL track that rendered to nothing is a track the
+                // release does not have; registering it would turn
+                // "missing" into two seconds of silence.
+                if samples.iter().all(|s| s.unsigned_abs() < 16) {
+                    silent += 1;
+                    continue;
+                }
+                opl += 1;
+                (format!("sfx_opl/{bank}/sfx{n:03}.ogg"), samples, rate, channels)
+            }
+        };
+        if rel.starts_with("sfx_mt32") {
+            roland += 1;
+        }
+
+        let target = project.join(&rel);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        ogg::write(&target, &samples, rate, channels)?;
+
+        if bank == "intro" {
+            index.insert(format!("sfx.intro_{n}"), rel.clone());
+        } else {
+            index.insert(format!("{bank}.sfx{n}"), rel.clone());
+            // The unqualified id room scripts use; chapter one's bank,
+            // until the music loads another.
+            if bank == "kyra1a" {
+                index.insert(format!("kyra.sfx{n}"), rel.clone());
+            }
+        }
+    }
+
+    // Which effect bank each piece of music brings with it: the bank is
+    // the stem of the file the music id already points to.
+    let banks: Vec<(String, String)> = index
+        .sounds
+        .iter()
+        .filter(|(id, _)| id.starts_with("kyra.music"))
+        .filter_map(|(id, file)| {
+            let stem = std::path::Path::new(file).file_stem()?.to_str()?;
+            let (bank, _) = stem.rsplit_once('_')?;
+            Some((id.clone(), bank.to_string()))
+        })
+        .collect();
+    index.sfx_banks = banks.into_iter().collect();
+
+    sound::save_index(&index, &index_dir)?;
+    tracing::info!(
+        roland,
+        opl,
+        silent,
+        banks = index.sfx_banks.len(),
+        "sound effects rendered and indexed"
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "mt32"))]
+fn render_sfx(
+    _source: &std::path::Path,
+    _project: &std::path::Path,
+    _roms: &std::path::Path,
+    _limit: Option<usize>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    Err("built without the mt32 feature; rebuild with --features mt32".into())
+}
+
 fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Command::Survey { path } => {
@@ -308,6 +508,12 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             limit,
             prefix,
         } => render_music(&source, &out, &roms, limit, &prefix),
+        Command::Sfx {
+            source,
+            project,
+            roms,
+            limit,
+        } => render_sfx(&source, &project, &roms, limit),
         Command::Kyra {
             source,
             out,

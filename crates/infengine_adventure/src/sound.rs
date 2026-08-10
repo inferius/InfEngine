@@ -27,6 +27,15 @@ pub struct SoundSet {
     /// Id to project-relative file path.
     #[serde(default)]
     pub sounds: BTreeMap<String, String>,
+    /// Which effect bank each piece of music brings with it.
+    ///
+    /// Kyrandia keeps one sound file loaded for music and effects
+    /// alike, so "effect 35" means a different recording depending on
+    /// which chapter's file the last music change loaded. This maps a
+    /// music id to that bank's prefix; playing the music makes
+    /// `<bank>.sfxN` the first place an effect id is looked up.
+    #[serde(default)]
+    pub sfx_banks: BTreeMap<String, String>,
 }
 
 impl SoundSet {

@@ -43,12 +43,23 @@ to run when the index does not parse, instead of "starting fresh".
        glyph nibble 1 = dark outline, >=2 = white fill
  7. adv-import music    (MT-32 render)  -> music_mt32/*.ogg
  8. adl_render          <dir with INTRO.ADL> _assets/kyrandia/sounds
-       intro effects (OPL2)  -> sounds/sfx0NN.wav, ids sfx.intro_N
+       intro effects (OPL2)  -> sounds/sfx0NN.wav  (intermediates)
  9. adl_render          <dir with KYRAxx.ADL> _assets/kyrandia/sounds/<bank>
-       game effects, one run per bank (kyra1a..kyra5b, kyramisc) ->
-       ids kyra.sfxN (per-chapter id collisions still to untangle).
+       game effects, one run per bank (kyra1a..kyra5b, kyramisc).
        Each bank must be alone in its input dir - a track number wins
-       first-file-first, so mixing banks drops tracks.
+       first-file-first, so mixing banks drops tracks. These WAVs are
+       intermediates; step 9b picks what the game actually plays.
+ 9b. adv-import sfx     _assets/kyrandia/music --project _assets/kyrandia
+                        --roms <CM32L ROM dir>
+       the Roland effect sequences (same numbering as the ADL tracks,
+       riding in the music XMIs) rendered through the CM-32L ->
+       sfx_mt32/<bank>/sfxNNN.ogg; tracks Roland never covered fall
+       back to the OPL WAV, transcoded -> sfx_opl/<bank>/sfxNNN.ogg.
+       Owns every sfx row of sounds/index.ron: sfx.intro_N,
+       <bank>.sfxN, the kyra.sfxN compatibility rows (chapter one),
+       and the sfx_banks map that lets PlayMusic switch which bank an
+       unqualified kyra.sfxN means - exactly the original's "one
+       loaded sound file for music and effects together".
 10. kyra_voice          <GOG> _assets/kyrandia en
        .VRM -> voice/<room>/NNN.wav; NNN == line index == "<room>.NN"
 11. kyra_intro_fit      <FLOPPY> _assets/kyrandia
@@ -91,3 +102,11 @@ tests, and a smoke run of `adventure_game` reading the project.
   opens with its channel (9 = the silent control channel that starts
   the audible voices) and priority. Reading any of that differently is
   how a whole bank renders at a peak of 8.
+- The Roland effect sequences (and a few music tracks) sit on MIDI
+  channels 11..13 - AIL's driver assigned channels to parts on the
+  fly. A stock MT-32 ignores those channels entirely, so the renderer
+  remaps them onto parts 2..4; without that, 826 of 1120 sequences
+  render to pure silence.
+- `INTRO.VRM` recordings are numbered in scene order with gaps, not by
+  string index; the pairing lives in the CD executable's sequence
+  bytecode, whose opcode table is renumbered relative to the floppy's.

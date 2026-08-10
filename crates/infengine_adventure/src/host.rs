@@ -147,6 +147,9 @@ pub struct Host {
     /// How much of the log to keep.
     pub log_limit: usize,
     anim_wait: Option<(String, f32)>,
+    /// Effect bank the last music change loaded, the way the original
+    /// keeps one sound file for music and effects together.
+    sfx_bank: Option<String>,
 }
 
 impl std::fmt::Debug for Host {
@@ -189,6 +192,7 @@ impl Host {
             log: Vec::new(),
             log_limit: 200,
             anim_wait: None,
+            sfx_bank: None,
         }
     }
 
@@ -466,7 +470,16 @@ impl Host {
             }
             Event::PlaySound(id) => {
                 self.note(Note::Sound(id.clone()));
-                match self.project.sound_file(&id) {
+                // The bank the last music change loaded speaks first:
+                // "effect 35" is a different recording per chapter, and
+                // the music is what says which chapter this is.
+                let banked = self
+                    .sfx_bank
+                    .as_deref()
+                    .zip(id.split_once(".sfx"))
+                    .map(|(bank, (_, n))| format!("{bank}.sfx{n}"))
+                    .filter(|banked| self.project.sound_file(banked).is_some());
+                match banked.as_deref().or_else(|| self.project.sound_file(&id)) {
                     Some(file) => request.sound = Some(file.to_string()),
                     None => self.note(Note::Missing(format!("sound {id}"))),
                 }
@@ -474,6 +487,9 @@ impl Host {
             Event::PlayMusic(id) => {
                 self.note(Note::Music(id.clone()));
                 request.music = Some(id.and_then(|id| {
+                    if let Some(bank) = self.project.sounds.sfx_banks.get(&id).cloned() {
+                        self.sfx_bank = Some(bank);
+                    }
                     self.project
                         .sound_file(&id)
                         .map(str::to_string)

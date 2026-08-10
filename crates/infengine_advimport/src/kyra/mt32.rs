@@ -156,7 +156,7 @@ impl Module {
         for event in &events {
             match event {
                 smf::Event::Msg { time, msg } => {
-                    synth.play_msg_at(*msg, *time);
+                    synth.play_msg_at(remap_channel(*msg), *time);
                 }
                 smf::Event::Sysex { time, data } => {
                     synth.play_sysex_at(data, *time);
@@ -185,6 +185,30 @@ impl Module {
 
 fn has_size(path: &Path, expected: u64) -> bool {
     std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() == expected)
+}
+
+/// Move a channel message off the channels the module ignores.
+///
+/// Westwood scored for AIL's XMIDI driver, which hands MIDI channels
+/// to synthesiser parts on the fly - so the effect sequences (and a
+/// handful of music tracks) sit on channels 11..13, which a stock
+/// MT-32 does not listen to at all. That is what made 826 of the 1120
+/// extracted sequences render to pure silence. Every sequence here is
+/// rendered on its own, so parts on channels 2..4 are always free and
+/// the remap cannot collide: no retail sequence uses a low channel and
+/// a high one together (checked across all ten banks).
+fn remap_channel(msg: u32) -> u32 {
+    let status = msg & 0xFF;
+    if status < 0x80 {
+        return msg;
+    }
+    let channel = status & 0x0F;
+    // 0-based: 10..12 land on 1..3, one-based channels 2..4.
+    if (10..=12).contains(&channel) {
+        (msg & !0x0F) | (channel - 9)
+    } else {
+        msg
+    }
 }
 
 #[cfg(test)]
