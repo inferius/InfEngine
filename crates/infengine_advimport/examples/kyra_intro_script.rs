@@ -117,6 +117,10 @@ const LINES: &[(&str, usize, Option<usize>)] = &[
     ("intro.story2", 20, None),
 ];
 
+/// The talkie executable: every cue in this file comes off its
+/// sequences, because the voiced intro is the one being rebuilt.
+const CD_EXE: &str = "C:/tmp/The_Legend_Of_Kyrandia_1992_1.3_04022026_2013/kyrandia1-cd-gog-scummvm-cestina_v1.3/CD/EXE/MAIN.EXE";
+
 /// The window dialogue in the sequence's own print order.
 const MAL_LINES: &[&str] = &[
     "intro.mal0", "intro.mal1", "intro.mal2", "intro.mal3", "intro.mal4", "intro.mal5",
@@ -260,111 +264,119 @@ fn main() {
     for (name, content) in rooms() {
         write(&project.join("rooms").join(name), &content);
     }
-    // Every scene on its own clock. The floppy walker gives the print
-    // and effect ticks with loops executed; the CD walker gives the
-    // recordings' places on the talkie's clock, carried onto the
-    // floppy timeline by the effect cues both scores share.
+    // Every scene on the talkie's own clock, loops executed: the
+    // intro we reproduce is the voiced one, and its sequences are
+    // paced around the speech. Nothing here is carried over from the
+    // floppy or scaled - each cue is the tick the interpreter fires it
+    // on, and every animation was baked from these same streams.
     use infengine_advimport::kyra::seqtime::{self, Did};
-    let cd_exe = std::fs::read(
-        "C:/tmp/The_Legend_Of_Kyrandia_1992_1.3_04022026_2013/kyrandia1-cd-gog-scummvm-cestina_v1.3/CD/EXE/MAIN.EXE",
-    )
-    .ok();
-    let scene = |at: usize| seqtime::expand(&exe, at);
-    let cd_scene = |at: usize| cd_exe.as_deref().map(|cd| seqtime::expand_cd(cd, at)).unwrap_or_default();
-
-    let forest_played = scene(0x2E4F3);
-    let mut forest: Vec<(f32, ForestCue)> = Vec::new();
-    let mut talk = 0usize;
-    for (tick, did) in &forest_played {
-        let at = *tick as f32 / 60.0;
-        match did {
-            Did::Effect(38) => {}
-            Did::Effect(n) => forest.push((at, ForestCue::Sfx(*n))),
-            Did::Talk(_) => {
-                forest.push((at, ForestCue::Say(talk)));
-                talk += 1;
-            }
-            _ => {}
-        }
-    }
-    let ends = |played: &[(u32, Did)], pad: f32| {
-        played.last().map(|(t, _)| *t as f32 / 60.0 + pad).unwrap_or(pad)
+    let Ok(cd) = std::fs::read(CD_EXE) else {
+        println!("no talkie executable at {CD_EXE}");
+        return;
     };
-    let forest_end = ends(&forest_played, 0.5);
-    println!("forest: {} cues ({talk} lines) over {forest_end:.1}s", forest.len());
+    let secs = |tick: u32| tick as f32 / 60.0;
+    let scene = |at: usize| seqtime::expand_cd(&cd, at);
+    let ends = |played: &[(u32, Did)], pad: f32| secs(seqtime::total_ticks(played)) + pad;
+    // Where a movie slot first shows anything: when one animation
+    // hands the scene over to the next.
+    let starts_at = |played: &[(u32, Did)], slot: u8| -> Option<f32> {
+        played.iter().find_map(|(tick, did)| match did {
+            Did::Frame { slot: s, .. } | Did::Next { slot: s } | Did::Prev { slot: s }
+                if *s == slot =>
+            {
+                Some(secs(*tick))
+            }
+            _ => None,
+        })
+    };
+    // A scene's spoken lines and effects, in the order the stream
+    // fires them; the caller pairs the n-th line with its own table.
+    let cues_of = |played: &[(u32, Did)], skip_effect: &[u8]| -> Vec<(f32, ForestCue)> {
+        let mut out = Vec::new();
+        let mut line = 0usize;
+        for (tick, did) in played {
+            match did {
+                Did::Effect(n) if !skip_effect.contains(n) => {
+                    out.push((secs(*tick), ForestCue::Sfx(*n)));
+                }
+                Did::Talk(_) => {
+                    out.push((secs(*tick), ForestCue::Say(line)));
+                    line += 1;
+                }
+                _ => {}
+            }
+        }
+        out
+    };
 
-    // The island runs on the talkie's clock whole: the CD re-paced the
-    // storm around its narration (first strike at three seconds, long
-    // calm close), and the lightning's baked timing comes from the
-    // same stream - one clock for picture, thunder and voice. Mapping
-    // the narration onto the floppy's differently-shaped storm
-    // stretched the scene half a minute past its own end.
-    let island_cd = cd_scene(0x30E6D);
-    let island: Vec<(f32, u8)> = island_cd
+    // Effect 38 has no INTRO.ADL track: the original played silence
+    // there, and so do we, by leaving it out.
+    let forest_played = scene(0x30894);
+    let forest = cues_of(&forest_played, &[38]);
+    let forest_end = ends(&forest_played, 0.0);
+    let tree2_at = starts_at(&forest_played, 2).unwrap_or(forest_end);
+    println!(
+        "forest: {} cues over {forest_end:.1}s, TREE2 takes over at {tree2_at:.1}s",
+        forest.len()
+    );
+
+    let island_played = scene(0x30E6D);
+    let island: Vec<(f32, u8)> = island_played
         .iter()
         .filter_map(|(t, d)| match d {
-            Did::Effect(n) => Some((*t as f32 / 60.0, *n)),
+            Did::Effect(n) => Some((secs(*t), *n)),
             _ => None,
         })
         .collect();
-    let island_end = ends(&island_cd, 1.0);
-    let island_voc: Vec<(f32, usize)> = island_cd
+    let island_end = ends(&island_played, 1.0);
+    let island_voc: Vec<(f32, usize)> = island_played
         .iter()
         .filter_map(|(t, d)| match d {
-            Did::Voc(v @ 55..=60) => Some((*t as f32 / 60.0, (*v - 55) as usize)),
+            Did::Voc(v @ 55..=60) => Some((secs(*t), (*v - 55) as usize)),
             _ => None,
         })
         .collect();
-    println!("island: {} thunder, {} narration lines over {island_end:.1}s", island.len(), island_voc.len());
+    println!(
+        "island: {} thunder, {} narration lines over {island_end:.1}s",
+        island.len(),
+        island_voc.len()
+    );
 
-    // Kallak writing: pen scratches from the floppy clock, the letter's
-    // four spoken lines from the CD clock via those same scratches.
-    let letter_played = scene(0x2DCFE);
+    // Kallak writes: the letter has no subtitles at all - the words
+    // appear on the parchment - so its lines ride their recordings.
+    let letter_played = scene(0x3008F);
     let letter_sfx: Vec<(f32, u8)> = letter_played
         .iter()
         .filter_map(|(t, d)| match d {
-            Did::Effect(n) => Some((*t as f32 / 60.0, *n)),
+            Did::Effect(n) => Some((secs(*t), *n)),
+            _ => None,
+        })
+        .collect();
+    let letter_voc: Vec<(f32, usize)> = letter_played
+        .iter()
+        .filter_map(|(t, d)| match d {
+            Did::Voc(v @ 43..=46) => Some((secs(*t), (*v - 43) as usize)),
             _ => None,
         })
         .collect();
     let letter_end = ends(&letter_played, 0.5);
-    let letter_cd = cd_scene(0x3008F);
-    let letter_voc: Vec<(f32, usize)> = letter_cd
-        .iter()
-        .filter_map(|(t, d)| match d {
-            Did::Voc(v @ 43..=46) => Some((
-                seqtime::map_by_effects(&letter_cd, &letter_played, *t) / 60.0,
-                (*v - 43) as usize,
-            )),
-            _ => None,
-        })
-        .collect();
-    println!("letter: {} scratches, {} lines over {letter_end:.1}s", letter_sfx.len(), letter_voc.len());
+    println!(
+        "letter: {} scratches, {} lines over {letter_end:.1}s",
+        letter_sfx.len(),
+        letter_voc.len()
+    );
 
-    // Malcolm at the window: the dialogue's own print ticks, the
-    // petrification burst where the bytecode fires it, and the parting
-    // laugh where the CD puts recording 28.
-    let hut_played = scene(0x2E7B0);
-    let mut hut: Vec<(f32, ForestCue)> = Vec::new();
-    let mut hut_talk = 0usize;
-    for (tick, did) in &hut_played {
-        let at = *tick as f32 / 60.0;
-        match did {
-            Did::Effect(n) => hut.push((at, ForestCue::Sfx(*n))),
-            Did::Talk(_) => {
-                hut.push((at, ForestCue::Say(hut_talk)));
-                hut_talk += 1;
-            }
-            _ => {}
-        }
-    }
+    let hut_played = scene(0x30BB5);
+    let hut = cues_of(&hut_played, &[]);
     let hut_end = ends(&hut_played, 0.5);
-    let hut_cd = cd_scene(0x30BA9);
-    let hut_laugh: Option<f32> = hut_cd.iter().find_map(|(t, d)| match d {
-        Did::Voc(28) => Some(seqtime::map_by_effects(&hut_cd, &hut_played, *t) / 60.0),
+    let hut_laugh = hut_played.iter().find_map(|(t, d)| match d {
+        Did::Voc(28) => Some(secs(*t)),
         _ => None,
     });
-    println!("hut: {} cues ({hut_talk} lines), laugh at {hut_laugh:?}, over {hut_end:.1}s", hut.len());
+    println!(
+        "hut: {} cues over {hut_end:.1}s, laugh at {hut_laugh:?}",
+        hut.len()
+    );
 
     let cues = Cues {
         island,
@@ -372,6 +384,7 @@ fn main() {
         island_end,
         forest,
         forest_end,
+        tree2_at,
         letter_sfx,
         letter_voc,
         letter_end,
@@ -475,6 +488,8 @@ impl Body {
 enum Step<'a> {
     Sfx(u32),
     Say(&'a str),
+    /// Hand the scene to another animation, without waiting on it.
+    Anim(&'a str, f32, f32),
 }
 
 fn beats(body: &mut Body, steps: &[(f32, Step)], tail: f32) {
@@ -487,6 +502,7 @@ fn beats(body: &mut Body, steps: &[(f32, Step)], tail: f32) {
         match step {
             Step::Sfx(n) => body.sfx(*n),
             Step::Say(line) => body.say(line),
+            Step::Anim(id, x, y) => body.anim(id, false, *x, *y),
         }
     }
     if tail > clock {
@@ -540,6 +556,7 @@ struct Cues {
     island_end: f32,
     forest: Vec<(f32, ForestCue)>,
     forest_end: f32,
+    tree2_at: f32,
     letter_sfx: Vec<(f32, u8)>,
     letter_voc: Vec<(f32, usize)>,
     letter_end: f32,
@@ -608,9 +625,13 @@ fn scripts(cues: &Cues) -> Vec<(&'static str, String)> {
             ForestCue::Say(index) => TREE_LINES.get(*index).map(|line| (*at, Say(line))),
         })
         .collect();
-    beats(&mut b, &steps, cues.forest_end.max(22.0));
-    b.anim("intro2_tree2", true, 0.0, 16.0);
-    b.wait(0.3);
+    // TREE2 takes the scene over where the stream hands it across -
+    // not after TREE1 has held its last frame for the eleven seconds
+    // the rest of the dialogue takes.
+    let mut steps = steps;
+    steps.push((cues.tree2_at, Step::Anim("intro2_tree2", 0.0, 16.0)));
+    steps.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    beats(&mut b, &steps, cues.forest_end);
     b.goto("_intro_kallak");
     out.push(("_intro_tree.script.ron", b.script("_intro_tree.entry")));
 

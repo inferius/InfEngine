@@ -144,6 +144,19 @@ fn main() {
                     }
                 }
             }
+            // A probe copy without the stamp, so the two can be
+            // compared when the pan looks wrong.
+            if std::env::var("KYRA_STRIP_PROBE").is_ok() {
+                let mut bare = Vec::with_capacity(320 * 280);
+                bare.extend_from_slice(&top.indices[91 * 320..195 * 320]);
+                bare.extend_from_slice(&top.indices[..64 * 320]);
+                bare.extend_from_slice(&bottom.indices[64 * 320..176 * 320]);
+                if let Some(palette) = top.palette.as_ref().or(bottom.palette.as_ref()) {
+                    let rgba = palette.expand_rgba(&bare, None);
+                    let _ = save(&project.join("pictures/intro_sky_bare.png"), 320, 280, &rgba);
+                    println!("probe: pictures/intro_sky_bare.png");
+                }
+            }
             let rgba = top
                 .palette
                 .as_ref()

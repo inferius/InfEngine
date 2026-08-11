@@ -30,6 +30,8 @@ pub enum Did {
     Track(u8),
     /// A voice recording was started (CD interpreter only).
     Voc(u8),
+    /// A loose shape was drawn over the picture: which shape, where.
+    Shape { shape: u8, x: i32, y: i32 },
 }
 
 /// Argument bytes per floppy opcode; `2` is a little-endian word.
@@ -98,6 +100,10 @@ pub fn expand(stream: &[u8], at: usize) -> Vec<(u32, Did)> {
             0x02 => out.push((tick, Did::Frame { slot: args[0] as u8, frame: args[1] as u8 })),
             0x03 => out.push((tick, Did::Next { slot: args[0] as u8 })),
             0x04 => out.push((tick, Did::Prev { slot: args[0] as u8 })),
+            0x05 => out.push((
+                tick,
+                Did::Shape { shape: args[0] as u8, x: args[1] as i32, y: args[2] as i32 },
+            )),
             0x06 | 0x07 => tick += args[0] as u32,
             0x0A => {
                 let slot = (args[0] as usize).min(loops.len() - 1);
@@ -241,6 +247,10 @@ pub fn expand_cd(stream: &[u8], at: usize) -> Vec<(u32, Did)> {
             0x02 => out.push((tick, Did::Frame { slot: args[0] as u8, frame: args[1] as u8 })),
             0x03 => out.push((tick, Did::Next { slot: args[0] as u8 })),
             0x04 => out.push((tick, Did::Prev { slot: args[0] as u8 })),
+            0x05 => out.push((
+                tick,
+                Did::Shape { shape: args[0] as u8, x: args[1] as i32, y: args[2] as i32 },
+            )),
             0x06..=0x08 => tick += args[0] as u32,
             0x0B => {
                 let slot = (args[0] as usize).min(loops.len() - 1);
@@ -274,6 +284,11 @@ pub fn expand_cd(stream: &[u8], at: usize) -> Vec<(u32, Did)> {
         p = q;
     }
     out
+}
+
+/// Where a sequence's clock ends, in ticks.
+pub fn total_ticks(played: &[(u32, Did)]) -> u32 {
+    played.last().map_or(0, |(tick, _)| *tick)
 }
 
 /// Carry a CD tick onto the floppy clock by the effects both scores

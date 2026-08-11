@@ -33,24 +33,54 @@ const SIZES: &[&[u8]] = &[
 struct Scene {
     at: usize,
     end: usize,
+    /// The same scene in the talkie executable, whose sequences are
+    /// re-paced around the speech. That is the intro we reproduce, so
+    /// when the CD is at hand its clock wins - otherwise a scene's
+    /// animation and its voices disagree by seconds, and the picture
+    /// holds its last frame waiting for a line that is still coming.
+    cd_at: usize,
     pieces: &'static [(&'static str, usize, &'static str, &'static str)],
 }
+
+/// The talkie executable, if this machine has the CD rip.
+const CD_EXE: &str = "C:/tmp/The_Legend_Of_Kyrandia_1992_1.3_04022026_2013/kyrandia1-cd-gog-scummvm-cestina_v1.3/CD/EXE/MAIN.EXE";
 
 /// WSA list order in the executable: kallak, tree1, tree2, westwood,
 /// mal-kal, destruct, kyrandia, shore, ...
 const SCENES: &[Scene] = &[
-    Scene { at: 0x2dcfe, end: 0x2e4f3, pieces: &[("intro3_kallak", 0, "KALLAK.WSA", "KALLAK.COL")] },
+    Scene {
+        at: 0x2dcfe,
+        end: 0x2e4f3,
+        cd_at: 0x3008f,
+        pieces: &[("intro3_kallak", 0, "KALLAK.WSA", "KALLAK.COL")],
+    },
     Scene {
         at: 0x2e4f3,
         end: 0x2e709,
+        cd_at: 0x30894,
         pieces: &[
             ("intro2_tree1", 1, "TREE1.WSA", "TREE_EXP.COL"),
             ("intro2_tree2", 2, "TREE2.WSA", "TREE_EXP.COL"),
         ],
     },
-    Scene { at: 0x2e709, end: 0x2e754, pieces: &[("intro1_westwood", 3, "WESTWOOD.WSA", "WW.COL")] },
-    Scene { at: 0x2e754, end: 0x2e7b0, pieces: &[("intro1_kyrandia", 6, "KYRANDIA.WSA", "WW.COL")] },
-    Scene { at: 0x2e7b0, end: 0x2ea17, pieces: &[("intro4_mal-kal", 4, "MAL-KAL.WSA", "MAL-KAL.COL")] },
+    Scene {
+        at: 0x2e709,
+        end: 0x2e754,
+        cd_at: 0x30ac4,
+        pieces: &[("intro1_westwood", 3, "WESTWOOD.WSA", "WW.COL")],
+    },
+    Scene {
+        at: 0x2e754,
+        end: 0x2e7b0,
+        cd_at: 0x30b0f,
+        pieces: &[("intro1_kyrandia", 6, "KYRANDIA.WSA", "WW.COL")],
+    },
+    Scene {
+        at: 0x2e7b0,
+        end: 0x2ea17,
+        cd_at: 0x30bb5,
+        pieces: &[("intro4_mal-kal", 4, "MAL-KAL.WSA", "MAL-KAL.COL")],
+    },
 ];
 
 /// A drawShape riding on a shown frame: which play it followed, the
@@ -152,9 +182,17 @@ fn main() {
             forest.indices[16 * width..144 * width].to_vec()
         });
     let hands = hand_shapes(&game);
+    let cd = std::fs::read(CD_EXE).ok();
+    println!(
+        "clock: {}",
+        if cd.is_some() { "talkie" } else { "floppy (no CD rip found)" }
+    );
 
     for scene in SCENES {
-        let plays = played(&exe, scene.at, scene.end);
+        let plays = match cd.as_deref() {
+            Some(cd) => played_cd(cd, scene.cd_at),
+            None => played(&exe, scene.at, scene.end),
+        };
         for (id, wsa_at, file, col) in scene.pieces {
             let Some((order, ticks, draws)) = plays.get(wsa_at) else {
                 println!("{id}: the stream never plays it");
@@ -266,6 +304,69 @@ fn main() {
     if let Err(err) = infengine_adventure::anim::save_index(&index, &anim_dir) {
         println!("could not write the index: {err}");
     }
+}
+
+/// The same, off the talkie's stream, through the shared walker.
+///
+/// A slot's span is its own first show to its last - the forest runs
+/// TREE1 for twenty-two seconds and then hands over to TREE2, and
+/// giving each the whole scene's length would leave the first holding
+/// its last frame for the other's eleven.
+fn played_cd(data: &[u8], at: usize) -> std::collections::HashMap<usize, PlayLog> {
+    use infengine_advimport::kyra::seqtime::{Did, expand_cd};
+    use std::collections::HashMap;
+
+    let events = expand_cd(data, at);
+    let mut cursor: HashMap<usize, usize> = HashMap::new();
+    let mut order: HashMap<usize, Vec<(usize, u32)>> = HashMap::new();
+    let mut draws: HashMap<usize, Vec<Draw>> = HashMap::new();
+    let mut last_slot: Option<usize> = None;
+    for (tick, did) in &events {
+        let slot = match did {
+            Did::Frame { slot, frame } => {
+                let slot = *slot as usize;
+                cursor.insert(slot, *frame as usize);
+                Some(slot)
+            }
+            Did::Next { slot } => {
+                let slot = *slot as usize;
+                let at = cursor.entry(slot).or_insert(0);
+                *at = at.saturating_add(1);
+                Some(slot)
+            }
+            Did::Prev { slot } => {
+                let slot = *slot as usize;
+                let at = cursor.entry(slot).or_insert(0);
+                *at = at.saturating_sub(1);
+                Some(slot)
+            }
+            Did::Shape { shape, x, y } => {
+                if let Some(slot) = last_slot {
+                    let shown = order.get(&slot).map_or(0, |o| o.len().saturating_sub(1));
+                    draws
+                        .entry(slot)
+                        .or_default()
+                        .push((shown, *shape as usize, *x, *y));
+                }
+                None
+            }
+            _ => None,
+        };
+        if let Some(slot) = slot {
+            let frame = cursor.get(&slot).copied().unwrap_or(0);
+            order.entry(slot).or_default().push((frame, *tick));
+            last_slot = Some(slot);
+        }
+    }
+    order
+        .into_iter()
+        .map(|(slot, shows)| {
+            let first = shows.first().map_or(0, |(_, tick)| *tick);
+            let last = shows.last().map_or(0, |(_, tick)| *tick);
+            let span = last.saturating_sub(first).max(1);
+            (slot, (shows, span, draws.remove(&slot).unwrap_or_default()))
+        })
+        .collect()
 }
 
 /// Interpret one stream: which frames each WSA showed, and the ticks
