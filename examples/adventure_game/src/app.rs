@@ -59,6 +59,13 @@ pub struct Game {
     skip_hint: f32,
     /// Set when a screen asks to quit; the window closes next frame.
     quit: bool,
+    /// A138: seconds at which to write a screenshot, and where.
+    /// Diagnostics: what the game really draws, without a person at
+    /// the keyboard to catch the moment.
+    shots: Vec<f32>,
+    shot_dir: std::path::PathBuf,
+    /// Seconds since the window opened, for the shot schedule.
+    since_start: f32,
 }
 
 impl std::fmt::Debug for Game {
@@ -88,7 +95,18 @@ impl Game {
             cursor: Vec2::ZERO,
             status: String::new(),
             quit: false,
+            shots: Vec::new(),
+            shot_dir: std::path::PathBuf::from("."),
+            since_start: 0.0,
         }
+    }
+
+    /// Write a PNG at each of these times, then quit after the last.
+    pub fn with_shots(mut self, at: Vec<f32>, dir: std::path::PathBuf) -> Self {
+        self.shots = at;
+        self.shots.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        self.shot_dir = dir;
+        self
     }
 
     /// Upload what the current room draws, dropping the last room's.
@@ -522,6 +540,22 @@ impl AppHandler for Game {
             self.step += ctx.delta_time;
         }
         self.clock += ctx.delta_time;
+        // The shot schedule: one file per time asked for, and the run
+        // ends with the last of them.
+        if !self.shots.is_empty() {
+            self.since_start += ctx.delta_time;
+            if self.since_start >= self.shots[0] {
+                let at = self.shots.remove(0);
+                let path = self.shot_dir.join(format!("shot_{:05.1}s.png", at));
+                let _ = std::fs::create_dir_all(&self.shot_dir);
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.grab_next_frame(path);
+                }
+                if self.shots.is_empty() {
+                    self.quit = true;
+                }
+            }
+        }
 
         if let Some((_, left)) = self.still.as_mut() {
             *left -= ctx.delta_time;

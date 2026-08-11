@@ -85,6 +85,8 @@ pub enum RendererError {
 /// Constructed via [`Renderer::new`] after the engine window has been
 /// created (typically inside `AppHandler::on_start`).
 pub struct Renderer {
+    /// A file the next rendered frame should also be written to.
+    grab: Option<std::path::PathBuf>,
     surface: Surface<'static>,
     device: wgpu::Device,
     queue: Queue,
@@ -182,6 +184,15 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// Write the next frame to `path` as a PNG, once.
+    ///
+    /// For seeing what the game actually draws without a person at the
+    /// keyboard: a screenshot settles in one picture what a paragraph
+    /// of reasoning about assets cannot.
+    pub fn grab_next_frame(&mut self, path: impl Into<std::path::PathBuf>) {
+        self.grab = Some(path.into());
+    }
+
     /// Create a renderer bound to the given engine window.
     ///
     /// Performs blocking GPU initialization via `pollster`. Should be
@@ -301,7 +312,9 @@ impl Renderer {
             .ok_or(RendererError::NoSurfaceConfig)?;
 
         let config = SurfaceConfiguration {
-            usage: TextureUsages::RENDER_ATTACHMENT,
+            // COPY_SRC as well, so a frame can be read back: a game
+            // that cannot be screenshotted can only be argued about.
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
             format,
             width: width.max(1),
             height: height.max(1),
@@ -448,6 +461,7 @@ impl Renderer {
             device,
             queue,
             config,
+            grab: None,
             clear_color,
             camera,
             camera_resource,
@@ -1717,7 +1731,72 @@ impl Renderer {
             physical_size,
         );
 
+        // A138: a frame asked for is copied out before it is shown.
+        let grab = self.grab.take().map(|path| {
+            let (width, height) = (self.config.width, self.config.height);
+            let bytes_per_row = (width * 4).div_ceil(256) * 256;
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("infengine_render::screenshot"),
+                size: u64::from(bytes_per_row) * u64::from(height),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &frame.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bytes_per_row),
+                        rows_per_image: Some(height),
+                    },
+                },
+                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            );
+            (path, buffer, width, height, bytes_per_row)
+        });
+
         self.queue.submit(Some(encoder.finish()));
+        if let Some((path, buffer, width, height, bytes_per_row)) = grab {
+            let slice = buffer.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            let _ = self.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            let mapped = slice.get_mapped_range();
+            let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+            for row in 0..height {
+                let from = (row * bytes_per_row) as usize;
+                let line = &mapped[from..from + (width * 4) as usize];
+                // The surface is BGRA on this backend more often than
+                // not; swizzle by what the format says rather than by
+                // hope.
+                if matches!(
+                    self.config.format,
+                    wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+                ) {
+                    for pixel in line.chunks_exact(4) {
+                        rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+                    }
+                } else {
+                    for pixel in line.chunks_exact(4) {
+                        rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+                    }
+                }
+            }
+            drop(mapped);
+            buffer.unmap();
+            match write_png(&path, width, height, &rgba) {
+                Ok(()) => info!(path = %path.display(), width, height, "screenshot"),
+                Err(err) => warn!(path = %path.display(), %err, "screenshot failed"),
+            }
+        }
         frame.present();
         self.sprite_queue.clear();
         self.textured_queue.clear();
@@ -1766,4 +1845,68 @@ fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Te
         view_formats: &[],
     });
     texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// A minimal PNG writer for screenshots: 8-bit RGBA, one IDAT.
+fn write_png(
+    path: &std::path::Path,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> std::io::Result<()> {
+    fn crc(bytes: &[u8]) -> u32 {
+        let mut table = [0u32; 256];
+        for (n, entry) in table.iter_mut().enumerate() {
+            let mut c = n as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+            *entry = c;
+        }
+        let mut c = 0xFFFF_FFFFu32;
+        for byte in bytes {
+            c = table[((c ^ u32::from(*byte)) & 0xFF) as usize] ^ (c >> 8);
+        }
+        c ^ 0xFFFF_FFFF
+    }
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], body: &[u8]) {
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(body);
+        let mut crc_input = kind.to_vec();
+        crc_input.extend_from_slice(body);
+        out.extend_from_slice(&crc(&crc_input).to_be_bytes());
+    }
+    // Stored deflate blocks: no compressor needed, and a screenshot is
+    // written once and looked at, not shipped.
+    let mut raw = Vec::with_capacity((width * height * 4 + height) as usize);
+    for row in 0..height as usize {
+        raw.push(0);
+        let from = row * width as usize * 4;
+        raw.extend_from_slice(&rgba[from..from + width as usize * 4]);
+    }
+    let mut zlib = vec![0x78, 0x01];
+    let mut adler = (1u32, 0u32);
+    for byte in &raw {
+        adler.0 = (adler.0 + u32::from(*byte)) % 65521;
+        adler.1 = (adler.1 + adler.0) % 65521;
+    }
+    for (index, block) in raw.chunks(65535).enumerate() {
+        let last = u8::from((index + 1) * 65535 >= raw.len());
+        zlib.push(last);
+        zlib.extend_from_slice(&(block.len() as u16).to_le_bytes());
+        zlib.extend_from_slice(&(!(block.len() as u16)).to_le_bytes());
+        zlib.extend_from_slice(block);
+    }
+    zlib.extend_from_slice(&((adler.1 << 16) | adler.0).to_be_bytes());
+
+    let mut png = vec![0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut header = Vec::new();
+    header.extend_from_slice(&width.to_be_bytes());
+    header.extend_from_slice(&height.to_be_bytes());
+    header.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(&mut png, b"IHDR", &header);
+    chunk(&mut png, b"IDAT", &zlib);
+    chunk(&mut png, b"IEND", &[]);
+    std::fs::write(path, png)
 }

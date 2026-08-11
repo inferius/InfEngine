@@ -45,12 +45,32 @@ pub fn layers(
             continue;
         };
         let size = Vec2::new(w as f32, h as f32) * view.scale;
-        let centre = view.to_window(layer.offset) + size * 0.5;
-        renderer.draw_texture(
-            *handle,
-            SpriteInstance::new([centre.x, flip(view, centre.y)], [size.x, size.y]),
-        );
+        let min = view.to_window(layer.offset);
+        let Some((min, max, uv_min, uv_max)) =
+            view.clip(min, min + size, Vec2::ZERO, Vec2::ONE)
+        else {
+            continue;
+        };
+        blit(renderer, view, *handle, min, max, uv_min, uv_max);
     }
+}
+
+/// Draw a clipped quad with its texture coordinates.
+fn blit(
+    renderer: &mut Renderer,
+    view: &View,
+    handle: Texture2dHandle,
+    min: Vec2,
+    max: Vec2,
+    uv_min: Vec2,
+    uv_max: Vec2,
+) {
+    let size = max - min;
+    let centre = min + size * 0.5;
+    let mut instance = SpriteInstance::new([centre.x, flip(view, centre.y)], [size.x, size.y]);
+    instance.uv_min = [uv_min.x, uv_min.y];
+    instance.uv_max = [uv_max.x, uv_max.y];
+    renderer.draw_texture(handle, instance);
 }
 
 /// Draw one frame of an animation over the room.
@@ -68,11 +88,11 @@ pub fn animation_frame(
     let (uv_min, uv_max) =
         animation.frame_uv(frame, Vec2::new(sheet_w as f32, sheet_h as f32));
     let size = animation.frame_size * view.scale;
-    let centre = view.to_window(at) + size * 0.5;
-    let mut instance = SpriteInstance::new([centre.x, flip(view, centre.y)], [size.x, size.y]);
-    instance.uv_min = [uv_min.x, uv_min.y];
-    instance.uv_max = [uv_max.x, uv_max.y];
-    renderer.draw_texture(handle, instance);
+    let min = view.to_window(at);
+    let Some((min, max, uv_min, uv_max)) = view.clip(min, min + size, uv_min, uv_max) else {
+        return;
+    };
+    blit(renderer, view, handle, min, max, uv_min, uv_max);
 }
 
 /// One frame of the player character, ready to draw.

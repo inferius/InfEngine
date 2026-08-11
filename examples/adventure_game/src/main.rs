@@ -61,6 +61,14 @@ struct Cli {
     /// a room is audited even if nothing leads to it yet.
     #[arg(long)]
     audit: bool,
+
+    /// A138: write a PNG of the frame at each of these seconds, into
+    /// this directory, then quit. Diagnostics for "it looks wrong at
+    /// second four" that nobody has to sit and watch for.
+    #[arg(long, value_delimiter = ',')]
+    shot: Vec<f32>,
+    #[arg(long, default_value = ".")]
+    shot_dir: PathBuf,
 }
 
 /// Close whatever screens a script opened, so the world keeps moving.
@@ -462,7 +470,11 @@ fn main() {
         height: 800,
         resizable: true,
     };
-    if let Err(err) = run(config, app::Game::new(project)) {
+    let mut game = app::Game::new(project);
+    if !cli.shot.is_empty() {
+        game = game.with_shots(cli.shot.clone(), cli.shot_dir.clone());
+    }
+    if let Err(err) = run(config, game) {
         tracing::error!(%err, "the game exited with an error");
     }
 }

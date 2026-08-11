@@ -528,17 +528,22 @@ fn rooms() -> Vec<(&'static str, String)> {
             "_intro.room.ron",
             plain("_intro", Some("pictures/intro_sky.png"), (320.0, 280.0), (320.0, 168.0)),
         ),
+        // The story scenes are the original's whole 320x200 screen -
+        // it draws them at y 16 and 58 with the rest left black, and
+        // that black is part of the picture. Showing only the top 144
+        // rows cropped the scene and left a band of the backdrop's own
+        // black above it, which reads as a picture pushed off centre.
         (
             "_intro_tree.room.ron",
-            plain("_intro_tree", Some("pictures/tree.png"), (320.0, 200.0), (320.0, 144.0)),
+            plain("_intro_tree", Some("pictures/tree.png"), (320.0, 200.0), (320.0, 200.0)),
         ),
         (
             "_intro_kallak.room.ron",
-            plain("_intro_kallak", None, (320.0, 200.0), (320.0, 144.0)),
+            plain("_intro_kallak", None, (320.0, 200.0), (320.0, 200.0)),
         ),
         (
             "_intro_malcolm.room.ron",
-            plain("_intro_malcolm", Some("pictures/mal_kal.png"), (320.0, 200.0), (320.0, 144.0)),
+            plain("_intro_malcolm", Some("pictures/mal_kal.png"), (320.0, 200.0), (320.0, 200.0)),
         ),
     ]
 }

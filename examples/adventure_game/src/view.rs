@@ -82,6 +82,44 @@ impl View {
         self.origin + (room - self.camera) * self.scale
     }
 
+    /// The window rectangle the picture occupies: everything outside
+    /// it is letterbox and must stay black.
+    pub fn frame(self) -> (Vec2, Vec2) {
+        (self.origin, self.origin + self.visible() * self.scale)
+    }
+
+    /// Clip a window-space quad to the picture, carrying its texture
+    /// coordinates with it.
+    ///
+    /// A138: without this a room taller than its camera view drew
+    /// whole - the intro's 280-row scroll strip spilled straight over
+    /// the letterbox, so the island was on screen through the logos
+    /// and the pan revealed nothing.
+    pub fn clip(
+        self,
+        min: Vec2,
+        max: Vec2,
+        uv_min: Vec2,
+        uv_max: Vec2,
+    ) -> Option<(Vec2, Vec2, Vec2, Vec2)> {
+        let (view_min, view_max) = self.frame();
+        let clipped_min = min.max(view_min);
+        let clipped_max = max.min(view_max);
+        if clipped_min.x >= clipped_max.x || clipped_min.y >= clipped_max.y {
+            return None;
+        }
+        let span = (max - min).max(Vec2::splat(f32::EPSILON));
+        let t0 = (clipped_min - min) / span;
+        let t1 = (clipped_max - min) / span;
+        let uv_span = uv_max - uv_min;
+        Some((
+            clipped_min,
+            clipped_max,
+            uv_min + uv_span * t0,
+            uv_min + uv_span * t1,
+        ))
+    }
+
     /// Is this window point over the picture at all?
     pub fn contains(self, window: Vec2) -> bool {
         let p = self.to_room(window) - self.camera;
