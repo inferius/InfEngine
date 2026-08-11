@@ -386,7 +386,7 @@ fn write_params(graph: &mut Graph, id: NodeId, action: &Action) {
     };
 
     match action {
-        Action::Say { line, speaker } => {
+        Action::Say { line, speaker, .. } => {
             set("line", line.clone());
             if let Some(speaker) = speaker {
                 set("speaker", speaker.clone());
@@ -504,6 +504,7 @@ fn read_action(node: &infengine_blueprint::Node) -> Option<Action> {
         "adv_say" => Action::Say {
             line: param(node, "line"),
             speaker: optional(node, "speaker"),
+            wait: true,
         },
         "adv_walk" => Action::Walk {
             to: Vec2::new(number(node, "x"), number(node, "y")),
@@ -689,7 +690,8 @@ mod tests {
         script.push(Action::Say {
             line: "hall.00".into(),
             speaker: Some("Brandon".into()),
-        });
+            wait: true,
+            });
         script.push(Action::Walk {
             to: Vec2::new(120.0, 150.0),
         });
@@ -749,6 +751,7 @@ mod tests {
             then: vec![Action::Say {
                 line: "altar.02".into(),
                 speaker: None,
+                wait: true,
             }],
             otherwise: vec![Action::Face {
                 facing: Facing::Left,
@@ -781,7 +784,8 @@ mod tests {
                 Action::Say {
                     line: "hall.01".into(),
                     speaker: None,
-                },
+                    wait: true,
+            },
                 Action::SetFlag {
                     flag: "opened".into(),
                     value: true,
@@ -790,6 +794,7 @@ mod tests {
             otherwise: vec![Action::Say {
                 line: "hall.02".into(),
                 speaker: None,
+                wait: true,
             }],
         });
 
@@ -843,6 +848,7 @@ mod tests {
             Action::Say {
                 line: String::new(),
                 speaker: None,
+                wait: true,
             },
             Action::Walk { to: Vec2::ZERO },
             Action::Face {

@@ -24,10 +24,13 @@ use glam::Vec2;
 use infengine_advimport::kyra::palette::Palette;
 use infengine_advimport::kyra::{cps, seqtime, wsa};
 
-/// Where the island storm's bytecode sits in the floppy `MAIN.EXE`,
-/// and which movie slot in it is the lightning. Measured once, like
-/// every other sequence address in these tools.
-const ISLAND_SEQ: usize = 0x2EA17;
+/// The talkie executable: the intro we reproduce is the voiced one,
+/// so the storm's frame clock comes from the CD sequence - the floppy
+/// paces the same 48 lightning frames differently (first strike at
+/// ten seconds instead of three) and has no narration to match.
+const CD_EXE: &str = "C:/tmp/The_Legend_Of_Kyrandia_1992_1.3_04022026_2013/kyrandia1-cd-gog-scummvm-cestina_v1.3/CD/EXE/MAIN.EXE";
+/// Where the island storm sits in it, and which slot is the lightning.
+const ISLAND_SEQ_CD: usize = 0x30E6D;
 const DESTRUCT_SLOT: u8 = 5;
 
 /// One intro animation: our id, its file, its scene palette, and the
@@ -75,8 +78,8 @@ fn main() {
     let project = args.next().map(PathBuf::from);
 
     let read = |name: &str| std::fs::read(game.join(name)).ok();
-    // The executable, for the island sequence's own frame clock.
-    let main_exe = read("MAIN.EXE");
+    // The talkie executable, for the island sequence's own frame clock.
+    let cd_exe = std::fs::read(CD_EXE).ok();
     let screen = |name: &str| read(name).and_then(|data| cps::decode(&data).ok());
     let col = |name: &str| read(name).and_then(|data| Palette::from_vga_6bit(&data));
 
@@ -229,9 +232,9 @@ fn main() {
             // order is a five-second morph the intro never shows.
             let mut timing: Vec<f32> = Vec::new();
             if piece.id == "intro1_destruct"
-                && let Some(exe) = &main_exe
+                && let Some(exe) = &cd_exe
             {
-                let played = seqtime::expand(exe, ISLAND_SEQ);
+                let played = seqtime::expand_cd(exe, ISLAND_SEQ_CD);
                 let shows = seqtime::slot_frames(&played, DESTRUCT_SLOT, 60);
                 if !shows.is_empty() {
                     anim.frames = shows

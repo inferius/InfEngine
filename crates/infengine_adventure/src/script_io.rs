@@ -143,7 +143,8 @@ mod tests {
         look.push(Action::Say {
             line: "hall.00".into(),
             speaker: None,
-        });
+            wait: true,
+            });
         let mut entry = Script::new("hall.entry");
         entry.push(Action::SetFlag {
             flag: "arrived".into(),

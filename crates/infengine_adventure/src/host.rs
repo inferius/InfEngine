@@ -759,7 +759,8 @@ mod tests {
         entry.push(Action::Say {
             line: "hall.00".into(),
             speaker: None,
-        });
+            wait: true,
+            });
         crate::script_io::save_room("hall", &[entry], &root.join(crate::script_io::SCRIPT_DIR))
             .expect("script");
 

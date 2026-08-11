@@ -608,7 +608,9 @@ mod tests {
         look.push(Action::Say {
             line: "hall.00".into(),
             speaker: None,
-        });
+        
+                    wait: true,
+                });
         scripts.insert(look.id.clone(), look);
         Game::new(scripts)
     }

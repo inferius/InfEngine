@@ -232,8 +232,10 @@ impl Runner {
         events: &mut Vec<Event>,
     ) {
         match action {
-            Action::Say { line, speaker } => {
-                self.block = Some(Block::Speech);
+            Action::Say { line, speaker, wait } => {
+                if *wait {
+                    self.block = Some(Block::Speech);
+                }
                 events.push(Event::Say {
                     line: line.clone(),
                     speaker: speaker.clone(),
@@ -436,6 +438,7 @@ mod tests {
             Action::Say {
                 line: "hall.00".into(),
                 speaker: None,
+                wait: true,
             },
             Action::SetFlag {
                 flag: "after".into(),
@@ -671,6 +674,7 @@ mod tests {
             Action::Say {
                 line: "a".into(),
                 speaker: None,
+                wait: true,
             },
             Action::SetFlag {
                 flag: "old".into(),

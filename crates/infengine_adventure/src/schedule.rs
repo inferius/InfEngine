@@ -248,7 +248,8 @@ mod tests {
         script.push(Action::Say {
             line: "l".into(),
             speaker: None,
-        });
+            wait: true,
+            });
         script.push(Action::MoveCamera {
             to: Vec2::ZERO,
             seconds: 2.0,

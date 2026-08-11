@@ -182,7 +182,8 @@ mod tests {
         let say = |who: Option<&str>| Action::Say {
             line: "l".into(),
             speaker: who.map(str::to_string),
-        };
+            wait: true,
+            };
         let (line, actions) = laid_out(vec![say(Some("kallak")), say(Some("malcolm")), say(None)]);
         let tracks = assign(&line, &actions);
         let names: Vec<&str> = tracks.iter().map(|t| t.name.as_str()).collect();

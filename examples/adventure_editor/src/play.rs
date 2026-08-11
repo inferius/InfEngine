@@ -396,7 +396,8 @@ mod tests {
         let mut play = play_with(vec![Action::Say {
             line: "hall.00".into(),
             speaker: Some("Brandon".into()),
-        }]);
+            wait: true,
+            }]);
         play.begin(&room);
 
         let request = tick(
@@ -419,7 +420,8 @@ mod tests {
         let mut play = play_with(vec![Action::Say {
             line: "hall.99".into(),
             speaker: None,
-        }]);
+            wait: true,
+            }]);
         play.begin(&room);
         tick(
             &mut play,
@@ -443,6 +445,7 @@ mod tests {
             Action::Say {
                 line: "hall.00".into(),
                 speaker: None,
+                wait: true,
             },
             Action::SetFlag {
                 flag: "after".into(),
@@ -471,6 +474,7 @@ mod tests {
             Action::Say {
                 line: "hall.00".into(),
                 speaker: None,
+                wait: true,
             },
             Action::SetFlag {
                 flag: "after".into(),

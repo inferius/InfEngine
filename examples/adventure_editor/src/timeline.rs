@@ -442,6 +442,7 @@ fn add_menu(
                 Action::Say {
                     line: String::new(),
                     speaker: None,
+                    wait: true,
                 },
             ),
             (
@@ -1200,7 +1201,8 @@ mod tests {
         let mut actions = vec![Action::Say {
             line: "l".into(),
             speaker: None,
-        }];
+            wait: true,
+                }];
         assert!(!set_seconds(&mut actions, &[0], 3.0));
     }
 

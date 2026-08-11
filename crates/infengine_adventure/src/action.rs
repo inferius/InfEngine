@@ -35,6 +35,12 @@ pub enum Action {
         line: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         speaker: Option<String>,
+        /// Whether the script stands still until the line is done.
+        /// Dialogue does; the intro's narration speaks over the action
+        /// the way the original's sequences do, and its cue times are
+        /// the pacing.
+        #[serde(default = "wait_default", skip_serializing_if = "is_true")]
+        wait: bool,
     },
     /// Walk the actor to a point in the room.
     Walk { to: Vec2 },
@@ -420,6 +426,15 @@ impl Script {
     }
 }
 
+fn wait_default() -> bool {
+    true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,6 +449,7 @@ mod tests {
             .push(Action::Say {
                 line: "hall.03".into(),
                 speaker: Some("Brandon".into()),
+                wait: true,
             })
             .push(Action::Branch {
                 on: Condition::Flag("has_key".into()),
@@ -449,7 +465,8 @@ mod tests {
                 otherwise: vec![Action::Say {
                     line: "hall.04".into(),
                     speaker: None,
-                }],
+                    wait: true,
+            }],
             });
         script
     }
@@ -514,6 +531,7 @@ mod tests {
             Action::Say {
                 line: "a.00".into(),
                 speaker: None,
+                wait: true,
             },
             Action::Walk { to: Vec2::ZERO },
             Action::Face {

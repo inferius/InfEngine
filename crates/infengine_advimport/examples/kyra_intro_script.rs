@@ -24,10 +24,6 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-/// Reading speed the engine uses; a Say blocks for this long.
-const SUBTITLE_MIN: f32 = 1.2;
-const CHARS_PER_SECOND: f32 = 14.0;
-
 /// Czech for the intro lines, keyed by the EXE string index.
 const CZECH: &[(usize, &str)] = &[
     (2, "Bud zdrav, Kallaku..."),
@@ -168,6 +164,7 @@ fn main() {
     // recording number; the line tables above say which line each one
     // speaks.
     let mut voiced: std::collections::HashMap<usize, String> = Default::default();
+
     let wanted: std::collections::BTreeSet<usize> = LINES
         .iter()
         .filter_map(|(_, _, voc)| *voc)
@@ -259,35 +256,10 @@ fn main() {
         }
     }
 
-    let rt = |id: &str| -> f32 {
-        let index = LINES.iter().find(|(l, _, _)| *l == id).map(|(_, i, _)| *i);
-        let text = index.and_then(|i| english.get(i)).cloned().unwrap_or_default();
-        SUBTITLE_MIN + text.chars().count() as f32 / CHARS_PER_SECOND
-    };
 
     for (name, content) in rooms() {
         write(&project.join("rooms").join(name), &content);
     }
-    // The island storm's own clock, loops expanded: when each thunder
-    // effect really fires, and how long the whole scene runs.
-    let played = infengine_advimport::kyra::seqtime::expand(&exe, 0x2EA17);
-    let island: Vec<(f32, u8)> = played
-        .iter()
-        .filter_map(|(tick, did)| match did {
-            infengine_advimport::kyra::seqtime::Did::Effect(n) => {
-                Some((*tick as f32 / 60.0, *n))
-            }
-            _ => None,
-        })
-        .collect();
-    let island_end = played
-        .last()
-        .map(|(tick, _)| *tick as f32 / 60.0 + 1.0)
-        .unwrap_or(12.5);
-    println!(
-        "island storm: {} thunder cues over {island_end:.1}s",
-        island.len()
-    );
     // Every scene on its own clock. The floppy walker gives the print
     // and effect ticks with loops executed; the CD walker gives the
     // recordings' places on the talkie's clock, carried onto the
@@ -321,25 +293,25 @@ fn main() {
     let forest_end = ends(&forest_played, 0.5);
     println!("forest: {} cues ({talk} lines) over {forest_end:.1}s", forest.len());
 
-    // The island: effects from the floppy clock, the narrator from the
-    // CD clock carried over by the shared thunder.
-    let island_played = scene(0x2EA17);
-    let island: Vec<(f32, u8)> = island_played
+    // The island runs on the talkie's clock whole: the CD re-paced the
+    // storm around its narration (first strike at three seconds, long
+    // calm close), and the lightning's baked timing comes from the
+    // same stream - one clock for picture, thunder and voice. Mapping
+    // the narration onto the floppy's differently-shaped storm
+    // stretched the scene half a minute past its own end.
+    let island_cd = cd_scene(0x30E6D);
+    let island: Vec<(f32, u8)> = island_cd
         .iter()
         .filter_map(|(t, d)| match d {
             Did::Effect(n) => Some((*t as f32 / 60.0, *n)),
             _ => None,
         })
         .collect();
-    let island_end = ends(&island_played, 1.0);
-    let island_cd = cd_scene(0x30E6D);
+    let island_end = ends(&island_cd, 1.0);
     let island_voc: Vec<(f32, usize)> = island_cd
         .iter()
         .filter_map(|(t, d)| match d {
-            Did::Voc(v @ 55..=60) => Some((
-                seqtime::map_by_effects(&island_cd, &island_played, *t) / 60.0,
-                (*v - 55) as usize,
-            )),
+            Did::Voc(v @ 55..=60) => Some((*t as f32 / 60.0, (*v - 55) as usize)),
             _ => None,
         })
         .collect();
@@ -408,7 +380,7 @@ fn main() {
         hut_end,
     };
 
-    for (name, content) in scripts(&rt, &cues) {
+    for (name, content) in scripts(&cues) {
         write(&project.join("scripts").join(name), &content);
     }
 
@@ -474,7 +446,13 @@ impl Body {
         self.act("PlaySound", &[("sound", format!("\"sfx.intro_{n}\""))]);
     }
     fn say(&mut self, line: &str) {
-        self.act("Say", &[("line", format!("\"{line}\""))]);
+        // The intro narrates over the action the way the sequences do:
+        // speech never stands the scene still, the cue times are the
+        // pacing.
+        self.act(
+            "Say",
+            &[("line", format!("\"{line}\"")), ("wait", "false".into())],
+        );
     }
     fn goto(&mut self, room: &str) {
         self.act("GoToRoom", &[("room", format!("\"{room}\""))]);
@@ -499,7 +477,7 @@ enum Step<'a> {
     Say(&'a str),
 }
 
-fn beats(body: &mut Body, rt: &dyn Fn(&str) -> f32, steps: &[(f32, Step)], tail: f32) {
+fn beats(body: &mut Body, steps: &[(f32, Step)], tail: f32) {
     let mut clock = 0.0f32;
     for (at, step) in steps {
         if *at > clock {
@@ -508,10 +486,7 @@ fn beats(body: &mut Body, rt: &dyn Fn(&str) -> f32, steps: &[(f32, Step)], tail:
         }
         match step {
             Step::Sfx(n) => body.sfx(*n),
-            Step::Say(line) => {
-                body.say(line);
-                clock += rt(line);
-            }
+            Step::Say(line) => body.say(line),
         }
     }
     if tail > clock {
@@ -536,10 +511,6 @@ fn rooms() -> Vec<(&'static str, String)> {
         (
             "_intro.room.ron",
             plain("_intro", Some("pictures/intro_sky.png"), (320.0, 280.0), (320.0, 168.0)),
-        ),
-        (
-            "_intro_story.room.ron",
-            plain("_intro_story", Some("pictures/text.png"), (320.0, 200.0), (320.0, 168.0)),
         ),
         (
             "_intro_tree.room.ron",
@@ -577,7 +548,7 @@ struct Cues {
     hut_end: f32,
 }
 
-fn scripts(rt: &dyn Fn(&str) -> f32, cues: &Cues) -> Vec<(&'static str, String)> {
+fn scripts(cues: &Cues) -> Vec<(&'static str, String)> {
     use Step::{Say, Sfx};
     let mut out = Vec::new();
 
@@ -615,25 +586,12 @@ fn scripts(rt: &dyn Fn(&str) -> f32, cues: &Cues) -> Vec<(&'static str, String)>
         ISLAND.get(*line).map(|(id, _)| (*seconds, Say(id)))
     }));
     storm.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    beats(&mut b, rt, &storm, cues.island_end);
-    b.goto("_intro_story");
-    out.push(("_intro.script.ron", b.script("_intro.entry")));
-
-    // The story screen: the crisis in three lines over TEXT.CPS, six
-    // seconds by the code, never voiced (the recordings its numbers
-    // would take are the ones INTRO.VRM does not have). The logos'
-    // music keeps playing under it, as it does in the original.
-    let mut b = Body::new();
-    b.say("intro.story0");
-    b.say("intro.story1");
-    b.say("intro.story2");
-    let read: f32 = ["intro.story0", "intro.story1", "intro.story2"]
-        .iter()
-        .map(|id| rt(id))
-        .sum();
-    b.wait((6.0 - read).max(0.0));
+    beats(&mut b, &storm, cues.island_end);
+    // No story screen: the talkie skips TEXT.CPS whenever speech is on
+    // (the narrator over the storm tells the same story), and so do
+    // we. The lines stay in the locale for a text-only mode someday.
     b.goto("_intro_tree");
-    out.push(("_intro_story.script.ron", b.script("_intro_story.entry")));
+    out.push(("_intro.script.ron", b.script("_intro.entry")));
 
     // The forest: Malcolm's taunts and the effects at the ticks the
     // sequence's own loops put them on, while TREE1 runs. The talk
@@ -650,7 +608,7 @@ fn scripts(rt: &dyn Fn(&str) -> f32, cues: &Cues) -> Vec<(&'static str, String)>
             ForestCue::Say(index) => TREE_LINES.get(*index).map(|line| (*at, Say(line))),
         })
         .collect();
-    beats(&mut b, rt, &steps, cues.forest_end.max(22.0));
+    beats(&mut b, &steps, cues.forest_end.max(22.0));
     b.anim("intro2_tree2", true, 0.0, 16.0);
     b.wait(0.3);
     b.goto("_intro_kallak");
@@ -672,7 +630,7 @@ fn scripts(rt: &dyn Fn(&str) -> f32, cues: &Cues) -> Vec<(&'static str, String)>
         LETTER_LINES.get(*line).map(|id| (*at, Say(id)))
     }));
     letter.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    beats(&mut b, rt, &letter, cues.letter_end);
+    beats(&mut b, &letter, cues.letter_end);
     b.goto("_intro_malcolm");
     out.push(("_intro_kallak.script.ron", b.script("_intro_kallak.entry")));
 
@@ -696,7 +654,7 @@ fn scripts(rt: &dyn Fn(&str) -> f32, cues: &Cues) -> Vec<(&'static str, String)>
         window.push((at, Say("intro.mal16")));
     }
     window.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    beats(&mut b, rt, &window, cues.hut_end);
+    beats(&mut b, &window, cues.hut_end);
     b.act("OpenScreen", &[("screen", "\"title\"".into())]);
     out.push(("_intro_malcolm.script.ron", b.script("_intro_malcolm.entry")));
 

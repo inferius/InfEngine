@@ -238,6 +238,9 @@ pub fn expand_cd(stream: &[u8], at: usize) -> Vec<(u32, Did)> {
             }
         }
         match op {
+            0x02 => out.push((tick, Did::Frame { slot: args[0] as u8, frame: args[1] as u8 })),
+            0x03 => out.push((tick, Did::Next { slot: args[0] as u8 })),
+            0x04 => out.push((tick, Did::Prev { slot: args[0] as u8 })),
             0x06..=0x08 => tick += args[0] as u32,
             0x0B => {
                 let slot = (args[0] as usize).min(loops.len() - 1);

@@ -294,6 +294,8 @@ fn translate(
                 .map(|index| Action::Say {
                     line: emc::Script::line_id(room, index),
                     speaker: None,
+                
+                    wait: true,
                 })
         }
         FN_ENTER_SCENE => site.args.first().copied().filter(|s| *s >= 0).map(|scene| {
@@ -1638,7 +1640,9 @@ mod tests {
             Some(&Action::Say {
                 line: emc::Script::line_id("x", 1),
                 speaker: None,
-            })
+            
+                    wait: true,
+                })
         );
     }
 
@@ -1777,7 +1781,8 @@ mod tests {
             out.scripts[0].actions[0],
             Action::Say {
                 line: "brins.02".into(),
-                speaker: None
+                speaker: None,
+                wait: true,
             }
         );
     }
