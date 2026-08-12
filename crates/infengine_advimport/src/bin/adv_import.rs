@@ -127,6 +127,14 @@ enum Command {
         /// Stop after this many sequences, for a quick look.
         #[arg(long)]
         limit: Option<usize>,
+        /// Which score an effect comes from when both have it.
+        ///
+        /// `opl` is the default and the era's canonical pairing -
+        /// Roland for music, AdLib for effects, because Westwood only
+        /// scored real effects for the OPL. `mt32` swaps them for
+        /// anyone who wants to hear the module's own take.
+        #[arg(long, default_value = "opl")]
+        prefer: String,
     },
 }
 
@@ -353,6 +361,7 @@ fn render_sfx(
     project: &std::path::Path,
     roms: &std::path::Path,
     limit: Option<usize>,
+    prefer_mt32: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use infengine_adventure::sound;
     use infengine_advimport::kyra::mt32;
@@ -404,7 +413,8 @@ fn render_sfx(
             format!("sounds/{bank}/sfx{n:03}.wav")
         };
         let from_opl = read_wav(&project.join(&opl_rel))
-            .filter(|(samples, _, _)| samples.iter().any(|s| s.unsigned_abs() >= 16));
+            .filter(|(samples, _, _)| samples.iter().any(|s| s.unsigned_abs() >= 16))
+            .filter(|_| !prefer_mt32);
 
         let (rel, samples, rate, channels) = match from_opl {
             Some((samples, rate, channels)) => {
@@ -412,16 +422,40 @@ fn render_sfx(
                 (format!("sfx_opl/{bank}/sfx{n:03}.ogg"), samples, rate, channels)
             }
             None => {
-                let Some(samples) = module.render(&std::fs::read(path)?).ok().filter(|s| !s.is_empty())
-                else {
+                let rendered = module
+                    .render(&std::fs::read(path)?)
+                    .ok()
+                    .filter(|s| !s.is_empty());
+                // Preferring the module still falls back to the OPL
+                // for the tracks its score never covered.
+                let rendered = match (rendered, prefer_mt32) {
+                    (None, true) => {
+                        match read_wav(&project.join(&opl_rel))
+                            .filter(|(s, _, _)| s.iter().any(|s| s.unsigned_abs() >= 16))
+                        {
+                            Some((samples, rate, channels)) => {
+                                opl += 1;
+                                let rel = format!("sfx_opl/{bank}/sfx{n:03}.ogg");
+                                Some((rel, samples, rate, channels))
+                            }
+                            None => None,
+                        }
+                    }
+                    (rendered, _) => rendered.map(|samples| {
+                        (format!("sfx_mt32/{bank}/sfx{n:03}.ogg"), samples, mt32::RATE, 2u16)
+                    }),
+                };
+                let Some((rel, samples, rate, channels)) = rendered else {
                     // Silent in both scores: a track the release does
                     // not have. Registering it would turn "missing"
                     // into two seconds of silence.
                     silent += 1;
                     continue;
                 };
-                roland += 1;
-                (format!("sfx_mt32/{bank}/sfx{n:03}.ogg"), samples, mt32::RATE, 2u16)
+                if rel.starts_with("sfx_mt32") {
+                    roland += 1;
+                }
+                (rel, samples, rate, channels)
             }
         };
         // Effects sit against full-scale music and speech, and the OPL
@@ -493,6 +527,7 @@ fn render_sfx(
     _project: &std::path::Path,
     _roms: &std::path::Path,
     _limit: Option<usize>,
+    _prefer_mt32: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     Err("built without the mt32 feature; rebuild with --features mt32".into())
 }
@@ -530,7 +565,14 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             project,
             roms,
             limit,
-        } => render_sfx(&source, &project, &roms, limit),
+            prefer,
+        } => render_sfx(
+            &source,
+            &project,
+            &roms,
+            limit,
+            prefer.eq_ignore_ascii_case("mt32"),
+        ),
         Command::Kyra {
             source,
             out,

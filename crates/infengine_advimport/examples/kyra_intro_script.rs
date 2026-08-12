@@ -588,9 +588,11 @@ fn scripts(cues: &Cues) -> Vec<(&'static str, String)> {
     b.anim("intro1_kyrandia", true, 0.0, 39.0);
     b.clear_anim();
     // The scroll is one row every two ticks, 112 rows: 3.73 seconds,
-    // from the interpreter's own arithmetic.
+    // from the interpreter's own arithmetic. MoveCamera holds the
+    // script until it arrives on its own - waiting the same seconds
+    // again after it left the island sitting there for a second pan's
+    // worth of nothing before the storm began.
     b.act("MoveCamera", &[("to", "Vec2(0.0, 112.0)".into()), ("seconds", "3.73".into())]);
-    b.wait(3.73);
     // The storm, narrated. The waves are the room's own ambient; the
     // lightning is one animation whose baked timing carries the ten
     // calm seconds and the holds between strikes, so it starts at
